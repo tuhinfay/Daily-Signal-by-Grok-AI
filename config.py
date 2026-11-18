@@ -3,11 +3,10 @@ Daily Signal by Grok AI - Configuration
 """
 
 # ============== SCAN SETTINGS ==============
-TOP_N_PAIRS = 30              # How many top volume pairs to scan (lower = faster)
-MIN_VOLUME_USDT = 3_000_000   # Minimum 24h volume filter
-MIN_SCORE = 52                # Minimum confluence score (lowered for more signals)
+TOP_N_PAIRS = 25
+MIN_VOLUME_USDT = 15_000_000   # High liquidity only (15M+ USDT 24h volume)
+MIN_SCORE = 52
 
-# Timeframes used for multi-TF analysis
 TIMEFRAMES = {
     "entry": "15m",
     "momentum": "1h",
@@ -15,7 +14,6 @@ TIMEFRAMES = {
     "regime": "1d",
 }
 
-# How many candles to fetch per timeframe
 CANDLE_LIMIT = {
     "15m": 120,
     "1h": 120,
@@ -27,7 +25,7 @@ CANDLE_LIMIT = {
 ATR_SL_MULTIPLIER = 1.5
 ATR_TP1_MULTIPLIER = 2.0
 ATR_TP2_MULTIPLIER = 3.5
-MIN_RR = 1.3                  # Slightly relaxed
+MIN_RR = 1.3
 
 # ============== INDICATOR SETTINGS ==============
 RSI_PERIOD = 14
@@ -49,7 +47,6 @@ ADX_TREND_THRESHOLD = 20
 BB_PERIOD = 20
 BB_STD = 2.0
 
-# ============== OUTPUT ==============
 SHOW_NEUTRAL = False
 EXPORT_JSON = False
 JSON_FILENAME = "signals.json"
