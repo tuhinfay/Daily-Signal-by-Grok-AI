@@ -1,5 +1,5 @@
 """
-Risk management - Stop Loss & Take Profit calculator
+Risk management - Stop Loss & Take Profit (ATR based)
 """
 
 from typing import Dict, Optional
@@ -12,13 +12,6 @@ def calculate_levels(
     atr: float,
     rr_min: float = None,
 ) -> Optional[Dict]:
-    """
-    Calculate Stop Loss and Take Profit levels based on ATR.
-
-    side: "LONG" or "SHORT"
-    entry: current / entry price
-    atr: Average True Range value
-    """
     if atr is None or atr <= 0 or entry <= 0:
         return None
 
@@ -28,16 +21,13 @@ def calculate_levels(
         sl = entry - (atr * config.ATR_SL_MULTIPLIER)
         tp1 = entry + (atr * config.ATR_TP1_MULTIPLIER)
         tp2 = entry + (atr * config.ATR_TP2_MULTIPLIER)
-
         risk = entry - sl
         reward1 = tp1 - entry
         reward2 = tp2 - entry
-
     elif side.upper() == "SHORT":
         sl = entry + (atr * config.ATR_SL_MULTIPLIER)
         tp1 = entry - (atr * config.ATR_TP1_MULTIPLIER)
         tp2 = entry - (atr * config.ATR_TP2_MULTIPLIER)
-
         risk = sl - entry
         reward1 = entry - tp1
         reward2 = entry - tp2
@@ -50,15 +40,22 @@ def calculate_levels(
     rr1 = reward1 / risk
     rr2 = reward2 / risk
 
-    # Reject if RR is too low
     if rr1 < rr_min:
         return None
 
+    # Round sensibly by price magnitude
+    def rnd(x):
+        if x >= 100:
+            return round(x, 2)
+        if x >= 1:
+            return round(x, 4)
+        return round(x, 6)
+
     return {
-        "entry": round(entry, 6),
-        "stop_loss": round(sl, 6),
-        "tp1": round(tp1, 6),
-        "tp2": round(tp2, 6),
+        "entry": rnd(entry),
+        "stop_loss": rnd(sl),
+        "tp1": rnd(tp1),
+        "tp2": rnd(tp2),
         "risk_pct": round((risk / entry) * 100, 2),
         "tp1_pct": round((reward1 / entry) * 100, 2),
         "tp2_pct": round((reward2 / entry) * 100, 2),
