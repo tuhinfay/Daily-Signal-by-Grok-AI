@@ -2,128 +2,100 @@
 
 **Advanced Binance Crypto Trading Signal Scanner**
 
-Scans all USDT perpetual futures pairs on Binance, applies multi-timeframe technical analysis, and generates high-confidence **Long / Short** signals with:
-
-- Entry Price
-- Stop Loss
-- Take Profit (multiple levels)
-- Risk : Reward ratio
-- Confidence Score
-- Detailed reasoning
-
-Built with love using Grok AI.
+Scans USDT perpetual futures pairs on Binance using multi-timeframe technical analysis and generates high-confidence **Long / Short** signals with Entry, Stop Loss, Take Profit levels.
 
 ---
 
 ## Features
 
-- Scans top liquid USDT pairs (configurable)
-- Multi-timeframe analysis: 15m + 1h + 4h + 1d
-- Indicators used:
-  - EMA (9, 21, 50, 200)
-  - RSI + Stochastic RSI
-  - MACD + Histogram
-  - ADX + DI+/DI-
-  - Bollinger Bands
-  - ATR (for dynamic SL/TP)
-  - Volume analysis
-- Confluence-based scoring system
-- Automatic Stop Loss & Take Profit calculation (ATR-based)
-- Clean terminal output + JSON export
-- Ready for Telegram / Discord webhook integration
+- Multi-timeframe analysis (15m + 1h + 4h + 1d)
+- Indicators: EMA, RSI, StochRSI, MACD, ADX, Bollinger Bands, ATR, Volume
+- Automatic Stop Loss & Take Profit (ATR-based)
+- Web Dashboard + JSON API
+- Ready for Render / any cloud deployment
 
 ---
 
-## Quick Start
-
-### 1. Clone & Install
+## Quick Start (Local)
 
 ```bash
 git clone https://github.com/tuhinfay/Daily-Signal-by-Grok-AI.git
 cd Daily-Signal-by-Grok-AI
 pip install -r requirements.txt
-```
 
-### 2. Run Scanner
-
-```bash
-# Scan top 50 pairs (default)
+# CLI mode
 python main.py
 
-# Scan specific pairs
-python main.py --symbols BTCUSDT ETHUSDT SOLUSDT
-
-# Scan more pairs
-python main.py --top 100
-
-# Output as JSON
-python main.py --json
-
-# Continuous mode (every 15 minutes)
-python main.py --loop
+# Web mode
+python api.py
+# then open http://localhost:8000
 ```
 
 ---
 
-## Example Output
+## Deploy on Render (Recommended)
 
-```
-============================================================
-  DAILY SIGNAL BY GROK AI  |  2026-11-18 13:45 UTC
-============================================================
+### Method 1: Blueprint (Easiest)
 
-[STRONG LONG]  SOLUSDT   Score: 82/100
-  Entry     : 178.45
-  Stop Loss : 172.10   (-3.56%)
-  TP1       : 185.20   (+3.78%)
-  TP2       : 192.80   (+8.04%)
-  RR        : 1 : 2.25
-  Reasons   : EMA9 > EMA21 (1h) | MACD bullish cross (15m) | RSI reclaim 45 | ADX rising
+1. Go to [https://dashboard.render.com](https://dashboard.render.com)
+2. Click **New +** → **Blueprint**
+3. Connect your GitHub account and select this repository
+4. Render will detect `render.yaml` and create the service automatically
+5. Click **Apply**
 
-[STRONG SHORT] DOGEUSDT  Score: 78/100
-  Entry     : 0.3842
-  Stop Loss : 0.3975   (+3.46%)
-  TP1       : 0.3680   (-4.22%)
-  ...
-```
+### Method 2: Manual Web Service
 
----
+1. Go to [https://dashboard.render.com](https://dashboard.render.com)
+2. Click **New +** → **Web Service**
+3. Connect the repo: `tuhinfay/Daily-Signal-by-Grok-AI`
+4. Settings:
+   - **Name**: `daily-signal-by-grok-ai`
+   - **Runtime**: Python 3
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn api:app --host 0.0.0.0 --port $PORT`
+   - **Instance Type**: Free
+5. Click **Create Web Service**
 
-## Project Structure
+After deploy finishes you will get a URL like:
+`https://daily-signal-by-grok-ai.onrender.com`
 
-```
-Daily-Signal-by-Grok-AI/
-├── main.py                 # Entry point
-├── scanner/
-│   ├── __init__.py
-│   ├── binance_client.py   # Binance data fetcher
-│   ├── indicators.py       # Technical indicators
-│   ├── signal_engine.py    # Core scoring & signal logic
-│   └── risk.py             # SL / TP calculator
-├── config.py               # Settings
-├── requirements.txt
-└── README.md
-```
+### How to use after deploy
+
+- Open the URL → see the dashboard
+- Click **Run New Scan** → wait 30-60 seconds → refresh
+- JSON API: `https://your-url.onrender.com/api/signals`
+
+> **Note**: Free tier sleeps after 15 minutes of inactivity. First request after sleep takes ~30-50 seconds.
 
 ---
 
-## Configuration
+## API Endpoints
 
-Edit `config.py`:
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Web Dashboard |
+| `GET /api/signals` | Latest signals (JSON) |
+| `GET /scan?top=40` | Trigger a new scan |
+| `GET /health` | Health check |
 
-- `TOP_N_PAIRS` → how many pairs to scan
-- `MIN_SCORE` → minimum score to show signal (default 65)
-- `TIMEFRAMES` → which candles to use
-- Risk parameters (ATR multipliers for SL/TP)
+---
+
+## CLI Options
+
+```bash
+python main.py                  # Scan top 50 pairs
+python main.py --top 100        # Scan more pairs
+python main.py --symbols BTCUSDT ETHUSDT
+python main.py --json           # Export to signals.json
+python main.py --loop           # Continuous every 15 min
+```
 
 ---
 
 ## Disclaimer
 
-This is an educational / research tool.  
-**Not financial advice.**  
-Crypto trading involves substantial risk of loss.  
-Always do your own research and manage risk properly.
+This is an educational tool. **Not financial advice.**  
+Crypto trading involves substantial risk of loss. Always do your own research.
 
 ---
 
