@@ -1,4 +1,4 @@
-"""Daily Signal by Grok AI - Premium config"""
+"""Daily Signal by Grok AI"""
 
 TOP_N_PAIRS = 30
 MIN_VOLUME_USDT = 12_000_000
@@ -6,6 +6,13 @@ MIN_SCORE = 50
 
 TIMEFRAMES = {"entry": "15m", "momentum": "1h", "trend": "4h", "regime": "1d"}
 CANDLE_LIMIT = {"15m": 120, "1h": 120, "4h": 100, "1d": 90}
+
+# Style-specific entry TF preference (used by API filter)
+STYLE_ENTRY_TF = {
+    "scalp": "5m",
+    "day": "15m",
+    "swing": "1h",
+}
 
 ATR_SL_MULTIPLIER = 1.5
 ATR_TP1_MULTIPLIER = 2.0
@@ -28,19 +35,10 @@ ADX_STRONG = 25
 BB_PERIOD = 20
 BB_STD = 2.0
 
-REQUIRE_HTF_ALIGN = False
 PREFER_HTF_ALIGN = True
 MIN_ADX_FOR_SIGNAL = 12
 
-# Paper trading defaults
 DEMO_BALANCE = 10000.0
 DEFAULT_LEVERAGE = 10
-MAX_LEVERAGE = 25
-RISK_PER_TRADE_PCT = 1.0  # % of balance risked per trade
-
-SHOW_NEUTRAL = False
-EXPORT_JSON = False
-JSON_FILENAME = "signals.json"
-TELEGRAM_BOT_TOKEN = ""
-TELEGRAM_CHAT_ID = ""
-DISCORD_WEBHOOK_URL = ""
+MAX_LEVERAGE = 150
+RISK_PER_TRADE_PCT = 1.0
