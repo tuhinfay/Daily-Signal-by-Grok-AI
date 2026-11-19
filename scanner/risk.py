@@ -1,17 +1,10 @@
-"""
-Risk management - Stop Loss & Take Profit (ATR based)
-"""
+"""Risk management - ATR based SL/TP"""
 
 from typing import Dict, Optional
 import config
 
 
-def calculate_levels(
-    side: str,
-    entry: float,
-    atr: float,
-    rr_min: float = None,
-) -> Optional[Dict]:
+def calculate_levels(side: str, entry: float, atr: float, rr_min: float = None) -> Optional[Dict]:
     if atr is None or atr <= 0 or entry <= 0:
         return None
 
@@ -38,12 +31,9 @@ def calculate_levels(
         return None
 
     rr1 = reward1 / risk
-    rr2 = reward2 / risk
-
     if rr1 < rr_min:
         return None
 
-    # Round sensibly by price magnitude
     def rnd(x):
         if x >= 100:
             return round(x, 2)
@@ -60,5 +50,5 @@ def calculate_levels(
         "tp1_pct": round((reward1 / entry) * 100, 2),
         "tp2_pct": round((reward2 / entry) * 100, 2),
         "rr1": round(rr1, 2),
-        "rr2": round(rr2, 2),
+        "rr2": round(reward2 / risk, 2),
     }
