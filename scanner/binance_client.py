@@ -126,9 +126,13 @@ class BinanceClient:
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 150) -> Optional[pd.DataFrame]:
         try:
-            ccxt_symbol = symbol if "/" in symbol else (
-                symbol.replace("USDT", "/USDT") if symbol.endswith("USDT") else symbol
-            )
+            if "/" in symbol:
+                ccxt_symbol = symbol
+            elif symbol.endswith("USDT:USDT"):
+                # CCXT Binance USD-M futures unified symbols use BASE/USDT:USDT.
+                ccxt_symbol = f"{symbol[:-9]}/USDT:USDT"
+            else:
+                ccxt_symbol = symbol.replace("USDT", "/USDT") if symbol.endswith("USDT") else symbol
             ohlcv = self.exchange.fetch_ohlcv(ccxt_symbol, timeframe=timeframe, limit=limit)
             if not ohlcv or len(ohlcv) < 30:
                 return None
