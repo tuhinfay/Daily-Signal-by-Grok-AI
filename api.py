@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily Signal by Grok AI"""
+"""Daily Signal by Grok AI — auto-scan, SQLite, live trades"""
 
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -11,24 +11,22 @@ import uvicorn, os, traceback, uuid, threading, time as time_mod
 
 from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
+from scanner import db
 import config
 
-app = FastAPI(title="Daily Signal by Grok AI", version="3.5.0")
+app = FastAPI(title="Daily Signal by Grok AI", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _cache: Dict[str, Any] = {
     "signals": [], "last_updated": None, "scanning": False,
     "error": None, "scanned_count": 0,
     "gainers": [], "losers": [], "prices": {},
+    "auto_scan": True,
 }
 _trades: Dict[str, Dict] = {}
-_account = {
-    "balance": float(getattr(config, "DEMO_BALANCE", 10000)),
-    "equity": float(getattr(config, "DEMO_BALANCE", 10000)),
-    "realized_pnl": 0.0,
-    "start_balance": float(getattr(config, "DEMO_BALANCE", 10000)),
-}
+_account: Dict[str, float] = {}
 _monitor_running = False
+_scan_lock = threading.Lock()
 
 
 class TradeCreate(BaseModel):
@@ -38,34 +36,77 @@ class TradeCreate(BaseModel):
     stop_loss: float
     tp1: float
     tp2: Optional[float] = None
-    leverage: int = Field(default=10, ge=1, le=150)
+    leverage: int = Field(default=20, ge=1, le=150)
     risk_pct: Optional[float] = None
     margin_usd: Optional[float] = None
+    amount_usd: Optional[float] = None  # total notional
     quantity: Optional[float] = None
+    margin_mode: str = "CROSS"  # CROSS | ISOLATED
     note: Optional[str] = ""
+    scale_mode: Optional[str] = None  # flat | ascending
+    scale_orders: Optional[int] = None
+
+
+class TradeUpdate(BaseModel):
+    stop_loss: Optional[float] = None
+    tp1: Optional[float] = None
+    tp2: Optional[float] = None
+    trailing_pct: Optional[float] = None  # trail distance %
+
+
+class DcaBody(BaseModel):
+    amount_usd: Optional[float] = None
+    margin_usd: Optional[float] = None
+    quantity: Optional[float] = None
+    price: Optional[float] = None
 
 
 class AccountReset(BaseModel):
     balance: float = 10000
 
 
-def run_scan(top_n: int = 28, symbols: Optional[List[str]] = None):
-    global _cache
+def _persist():
+    db.save_account(_account)
+    db.save_all_trades(_trades)
+
+
+def _calc_equity():
+    u = sum((t.get("unrealized_pnl") or 0) for t in _trades.values() if t.get("status") == "OPEN")
+    _account["equity"] = round(_account["balance"] + u, 2)
+
+
+def _stats() -> Dict[str, Any]:
+    closed = [t for t in _trades.values() if t.get("status") == "CLOSED" and t.get("hit") != "RESET"]
+    wins = [t for t in closed if (t.get("realized_pnl") or 0) > 0]
+    losses = [t for t in closed if (t.get("realized_pnl") or 0) < 0]
+    total_pnl = sum(t.get("realized_pnl") or 0 for t in closed)
+    wr = (len(wins) / len(closed) * 100) if closed else 0
+    return {
+        "total_trades": len(closed),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(wr, 1),
+        "total_pnl": round(total_pnl, 2),
+        "open": sum(1 for t in _trades.values() if t.get("status") == "OPEN"),
+    }
+
+
+def run_scan(top_n: int = 28):
+    if not _scan_lock.acquire(blocking=False):
+        return
     _cache["scanning"] = True
     _cache["error"] = None
     try:
         client = BinanceClient(futures=True)
         engine = SignalEngine()
-        if symbols:
-            pairs = [(s.upper().replace("/", ""), 0) for s in symbols]
-        else:
-            pairs = client.get_top_usdt_pairs(top_n=top_n, min_volume=config.MIN_VOLUME_USDT)
+        pairs = client.get_top_usdt_pairs(top_n=top_n, min_volume=config.MIN_VOLUME_USDT)
         try:
-            mv = client.get_movers(top_n=10)
+            mv = client.get_movers(top_n=12, min_volume=3_000_000)
             _cache["gainers"] = mv.get("gainers", [])
             _cache["losers"] = mv.get("losers", [])
-        except Exception:
-            pass
+        except Exception as e:
+            print("movers", e)
+
         signals, prices = [], {}
         for symbol, vol in pairs:
             data = {}
@@ -92,11 +133,11 @@ def run_scan(top_n: int = 28, symbols: Optional[List[str]] = None):
                 if r.get("bias_1d") == r.get("bias_4h") and r.get("bias_1d") != "neutral":
                     styles.append("swing")
                 r["styles"] = styles or ["day"]
-                # short reason line only — no bulky plan box
                 r["summary"] = f"{r.get('setup','')} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
                 signals.append(r)
             except Exception:
                 continue
+
         signals.sort(key=lambda x: x["score"], reverse=True)
         _cache["signals"] = signals
         _cache["prices"] = prices
@@ -107,18 +148,30 @@ def run_scan(top_n: int = 28, symbols: Optional[List[str]] = None):
         traceback.print_exc()
     finally:
         _cache["scanning"] = False
+        _scan_lock.release()
 
 
-def _calc_equity():
-    u = sum((t.get("unrealized_pnl") or 0) for t in _trades.values() if t.get("status") == "OPEN")
-    _account["equity"] = round(_account["balance"] + u, 2)
+def auto_scan_loop():
+    while _monitor_running:
+        if _cache.get("auto_scan"):
+            try:
+                run_scan(26)
+            except Exception as e:
+                print("auto scan", e)
+            # wait ~3 min between scans
+            for _ in range(18):
+                if not _monitor_running or not _cache.get("auto_scan"):
+                    break
+                time_mod.sleep(10)
+        else:
+            time_mod.sleep(3)
 
 
 def price_monitor_loop():
-    global _monitor_running
     client = BinanceClient(futures=True)
     while _monitor_running:
         try:
+            changed = False
             for t in list(_trades.values()):
                 if t.get("status") != "OPEN":
                     continue
@@ -127,7 +180,27 @@ def price_monitor_loop():
                     continue
                 t["current_price"] = price
                 _cache["prices"][t["symbol"]] = price
-                side, entry, qty, lev = t["side"].upper(), t["entry"], t.get("qty") or 0, t.get("leverage") or 1
+                side = t["side"].upper()
+                entry, qty, lev = t["entry"], t.get("qty") or 0, t.get("leverage") or 1
+
+                # trailing stop
+                trail = t.get("trailing_pct") or 0
+                if trail and trail > 0:
+                    if side == "LONG":
+                        peak = max(t.get("peak_price") or entry, price)
+                        t["peak_price"] = peak
+                        trail_sl = peak * (1 - trail / 100)
+                        if trail_sl > t["stop_loss"]:
+                            t["stop_loss"] = round(trail_sl, 6)
+                            changed = True
+                    else:
+                        trough = min(t.get("trough_price") or entry, price)
+                        t["trough_price"] = trough
+                        trail_sl = trough * (1 + trail / 100)
+                        if trail_sl < t["stop_loss"]:
+                            t["stop_loss"] = round(trail_sl, 6)
+                            changed = True
+
                 prev_hit = t.get("hit")
                 if side == "LONG":
                     pnl = (price - entry) * qty
@@ -151,17 +224,26 @@ def price_monitor_loop():
                 if t.get("hit") and t.get("hit") != prev_hit:
                     t["needs_alert"] = True
                     t["alert_text"] = f"{t['symbol']} {t['hit']} hit. PnL {t['pnl_pct']}%"
+                    changed = True
+                    db.save_trade(t)
+
             _calc_equity()
+            if changed:
+                db.save_account(_account)
         except Exception as e:
             print("mon", e)
-        time_mod.sleep(10)
+        time_mod.sleep(8)
 
 
 @app.on_event("startup")
 def startup():
-    global _monitor_running
+    global _monitor_running, _account, _trades
+    db.init_db(getattr(config, "DEMO_BALANCE", 10000))
+    _account = db.load_account()
+    _trades = db.load_trades()
+    _cache["auto_scan"] = db.get_meta("auto_scan", "1") != "0"
     _monitor_running = True
-    threading.Thread(target=lambda: run_scan(22), daemon=True).start()
+    threading.Thread(target=auto_scan_loop, daemon=True).start()
     threading.Thread(target=price_monitor_loop, daemon=True).start()
 
 
@@ -169,6 +251,7 @@ def startup():
 def shutdown():
     global _monitor_running
     _monitor_running = False
+    _persist()
 
 
 @app.get("/api/signals")
@@ -183,13 +266,23 @@ async def api_signals(style: str = Query("all")):
         if style != "all" and style not in (s2.get("styles") or []):
             continue
         out.append(s2)
+    _calc_equity()
     return {
         "last_updated": _cache["last_updated"], "scanning": _cache["scanning"],
-        "error": _cache["error"], "scanned_count": _cache["scanned_count"],
-        "count": len(out), "signals": out,
-        "gainers": _cache.get("gainers", []), "losers": _cache.get("losers", []),
-        "account": _account,
+        "auto_scan": _cache["auto_scan"], "error": _cache["error"],
+        "scanned_count": _cache["scanned_count"], "count": len(out),
+        "signals": out, "gainers": _cache.get("gainers", []), "losers": _cache.get("losers", []),
+        "account": _account, "stats": _stats(),
     }
+
+
+@app.post("/api/auto-scan")
+async def set_auto_scan(enabled: bool = Query(True)):
+    _cache["auto_scan"] = bool(enabled)
+    db.set_meta("auto_scan", "1" if enabled else "0")
+    if enabled and not _cache["scanning"]:
+        threading.Thread(target=lambda: run_scan(26), daemon=True).start()
+    return {"ok": True, "auto_scan": _cache["auto_scan"]}
 
 
 @app.get("/api/analyze/{symbol}")
@@ -209,9 +302,11 @@ async def analyze_one(symbol: str):
     r = engine.analyze_pair(sym, data, volume_24h=0)
     px = client.get_current_price(sym)
     lev = client.get_max_leverage(sym)
+    # try volume from movers/tickers roughly
+    liq = "MED"
     if not r:
-        return {"ok": True, "signal": None, "symbol": sym, "market_price": px, "max_leverage": lev,
-                "message": "No confluence signal now"}
+        return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
+                "max_leverage": lev, "liquidity": liq, "message": "No confluence signal now"}
     r["market_price"] = px or r["entry"]
     r["max_leverage"] = lev
     r["styles"] = ["day", "scalp", "swing"]
@@ -222,7 +317,7 @@ async def analyze_one(symbol: str):
 @app.get("/api/account")
 async def api_account():
     _calc_equity()
-    return {**_account, "open_trades": sum(1 for t in _trades.values() if t["status"] == "OPEN")}
+    return {**_account, "open_trades": sum(1 for t in _trades.values() if t["status"] == "OPEN"), "stats": _stats()}
 
 
 @app.post("/api/account/reset")
@@ -230,14 +325,17 @@ async def reset_account(body: AccountReset):
     for t in list(_trades.values()):
         if t.get("status") == "OPEN":
             t["status"] = "CLOSED"; t["hit"] = "RESET"; t["needs_alert"] = False
+            db.save_trade(t)
     _account.update({"balance": float(body.balance), "equity": float(body.balance),
                      "realized_pnl": 0.0, "start_balance": float(body.balance)})
+    db.save_account(_account)
     return {"ok": True, "account": _account}
 
 
 @app.get("/api/trades")
 async def api_trades():
-    return {"trades": list(_trades.values()), "account": _account}
+    _calc_equity()
+    return {"trades": list(_trades.values()), "account": _account, "stats": _stats()}
 
 
 @app.get("/api/alerts")
@@ -252,7 +350,10 @@ async def create_trade(body: TradeCreate):
     side = body.side.upper()
     client = BinanceClient(futures=True)
     max_lev = client.get_max_leverage(sym)
-    lev = max(1, min(int(body.leverage), max_lev, 150))
+    lev = max(1, min(int(body.leverage or max_lev), max_lev, 150))
+    margin_mode = (body.margin_mode or "CROSS").upper()
+    if margin_mode not in ("CROSS", "ISOLATED"):
+        margin_mode = "CROSS"
 
     for t in _trades.values():
         if t.get("status") == "OPEN" and t["symbol"] == sym and t["side"] == side:
@@ -262,39 +363,109 @@ async def create_trade(body: TradeCreate):
     if sl_dist <= 0:
         return JSONResponse({"ok": False, "error": "invalid SL"}, status_code=400)
 
-    # Flexible sizing: quantity > margin_usd > risk_pct
+    # Priority: quantity > amount_usd (notional) > margin_usd > risk_pct
     if body.quantity and body.quantity > 0:
         qty = float(body.quantity)
-        margin = (qty * body.entry) / lev
+        notional = qty * body.entry
+        margin = notional / lev
+        risk_usd = qty * sl_dist
+    elif body.amount_usd and body.amount_usd > 0:
+        notional = float(body.amount_usd)
+        qty = notional / body.entry
+        margin = notional / lev
         risk_usd = qty * sl_dist
     elif body.margin_usd and body.margin_usd > 0:
-        margin = min(float(body.margin_usd), _account["balance"] * 0.95)
+        margin = min(float(body.margin_usd), _account["balance"] * 0.99)
         notional = margin * lev
         qty = notional / body.entry
         risk_usd = qty * sl_dist
     else:
-        risk_pct = max(0.25, min(float(body.risk_pct or 1.0), 5.0))
+        risk_pct = max(0.25, min(float(body.risk_pct or 1.0), 100.0))
         risk_usd = _account["balance"] * (risk_pct / 100.0)
         qty = risk_usd / sl_dist
-        margin = (qty * body.entry) / lev
+        notional = qty * body.entry
+        margin = notional / lev
 
-    if margin > _account["balance"] * 0.95:
+    if margin > _account["balance"] * 0.99:
         return JSONResponse({"ok": False, "error": "insufficient balance"}, status_code=400)
+
+    # optional scale metadata
+    scale_mode = body.scale_mode if body.scale_mode in ("flat", "ascending") else None
+    scale_orders = int(body.scale_orders or 0) if scale_mode else 0
+
+    # liquidity label from cache signals or movers
+    liq = "MED"
+    for s in _cache.get("signals", []):
+        if s.get("symbol") == sym:
+            liq = s.get("liquidity") or liq
+            break
 
     tid = str(uuid.uuid4())[:8]
     trade = {
         "id": tid, "symbol": sym, "side": side,
         "entry": body.entry, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
-        "leverage": lev, "max_leverage": max_lev,
-        "qty": round(qty, 6), "margin": round(margin, 2),
-        "notional": round(qty * body.entry, 2), "risk_usd": round(risk_usd, 2),
+        "leverage": lev, "max_leverage": max_lev, "margin_mode": margin_mode,
+        "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
+        "risk_usd": round(risk_usd, 2), "liquidity": liq,
+        "trailing_pct": None, "peak_price": body.entry, "trough_price": body.entry,
+        "scale_mode": scale_mode, "scale_orders": scale_orders,
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
         "current_price": body.entry, "pnl_pct": 0.0, "unrealized_pnl": 0.0,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "dca_count": 0,
     }
     _trades[tid] = trade
+    db.save_trade(trade)
     _calc_equity()
+    db.save_account(_account)
     return {"ok": True, "trade": trade, "duplicate": False, "account": _account}
+
+
+@app.post("/api/trades/{tid}/dca")
+async def dca_trade(tid: str, body: DcaBody):
+    if tid not in _trades or _trades[tid].get("status") != "OPEN":
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    t = _trades[tid]
+    price = body.price or t.get("current_price") or t["entry"]
+    lev = t.get("leverage") or 1
+    if body.quantity and body.quantity > 0:
+        add_qty = float(body.quantity)
+    elif body.amount_usd and body.amount_usd > 0:
+        add_qty = float(body.amount_usd) / price
+    elif body.margin_usd and body.margin_usd > 0:
+        add_qty = (float(body.margin_usd) * lev) / price
+    else:
+        return JSONResponse({"ok": False, "error": "need amount/margin/qty"}, status_code=400)
+
+    old_qty = t["qty"]
+    new_qty = old_qty + add_qty
+    # weighted avg entry
+    t["entry"] = round(((t["entry"] * old_qty) + (price * add_qty)) / new_qty, 6)
+    t["qty"] = round(new_qty, 6)
+    t["notional"] = round(new_qty * t["entry"], 2)
+    t["margin"] = round(t["notional"] / lev, 2)
+    t["dca_count"] = (t.get("dca_count") or 0) + 1
+    t["current_price"] = price
+    db.save_trade(t)
+    _calc_equity()
+    return {"ok": True, "trade": t, "account": _account}
+
+
+@app.patch("/api/trades/{tid}")
+async def update_trade(tid: str, body: TradeUpdate):
+    if tid not in _trades or _trades[tid].get("status") != "OPEN":
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    t = _trades[tid]
+    if body.stop_loss is not None:
+        t["stop_loss"] = body.stop_loss
+    if body.tp1 is not None:
+        t["tp1"] = body.tp1
+    if body.tp2 is not None:
+        t["tp2"] = body.tp2
+    if body.trailing_pct is not None:
+        t["trailing_pct"] = max(0.0, float(body.trailing_pct))
+    db.save_trade(t)
+    return {"ok": True, "trade": t}
 
 
 @app.post("/api/trades/{tid}/close")
@@ -310,8 +481,10 @@ async def close_trade(tid: str):
     t.update({"status": "CLOSED", "needs_alert": False,
               "closed_at": datetime.now(timezone.utc).isoformat(),
               "hit": t.get("hit") or "MANUAL", "realized_pnl": round(pnl, 2)})
+    db.save_trade(t)
     _calc_equity()
-    return {"ok": True, "trade": t, "account": _account}
+    db.save_account(_account)
+    return {"ok": True, "trade": t, "account": _account, "stats": _stats()}
 
 
 @app.get("/scan")
@@ -323,7 +496,7 @@ async def trigger_scan(background_tasks: BackgroundTasks, top: int = Query(28, g
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "scanning": _cache["scanning"]}
+    return {"status": "ok", "scanning": _cache["scanning"], "auto_scan": _cache["auto_scan"]}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -342,8 +515,8 @@ PAGE = r"""<!DOCTYPE html>
 :root{--bg:#060a12;--card:#0c1322;--line:#1a2336;--text:#eef3ff;--mut:#7f8eaa;--cyan:#22d3ee;--blue:#3b82f6;--gn:#10b981;--rd:#f43f5e;--gd:#fbbf24}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:13px}
-.top{position:sticky;top:0;z-index:40;background:#060a12ee;backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding:12px}
-.top h1{font-size:16px;font-weight:800;letter-spacing:-.02em;background:linear-gradient(90deg,var(--cyan),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.top{position:sticky;top:0;z-index:40;background:#060a12f2;backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding:12px}
+.top h1{font-size:16px;font-weight:800;background:linear-gradient(90deg,var(--cyan),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}
 .metric{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
 .metric label{display:block;font-size:9px;color:var(--mut);text-transform:uppercase;font-weight:600}
@@ -353,7 +526,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .tabs button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--mut);border-radius:9px;padding:9px 4px;font-size:11px;font-weight:700}
 .tabs button.on{color:#fff;border:0;background:linear-gradient(135deg,#1d4ed8,#0891b2)}
 .bar{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 8px}
-.bar input{flex:1;min-width:110px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 10px}
+.bar input{flex:1;min-width:100px;background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 10px}
 .btn{border:0;border-radius:9px;padding:9px 12px;font-size:11px;font-weight:700;color:#fff;background:linear-gradient(135deg,#2563eb,#0891b2);cursor:pointer}
 .btn.dim{background:var(--card);border:1px solid var(--line);color:var(--mut)}
 .btn.good{background:linear-gradient(135deg,#059669,#10b981)}
@@ -363,7 +536,6 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .filters button{border:1px solid var(--line);background:var(--card);color:var(--mut);border-radius:999px;padding:5px 11px;font-size:11px;font-weight:600}
 .filters button.on{color:var(--cyan);border-color:#164e63;background:#0b1c2e}
 .note{margin:0 12px 8px;padding:8px 10px;background:var(--card);border:1px solid var(--line);border-radius:9px;color:var(--mut);font-size:11px}
-/* clean signal card — single layer */
 .card{margin:0 10px 8px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;border-left:3px solid var(--line)}
 .card.L{border-left-color:var(--gn)}.card.S{border-left-color:var(--rd)}.card.hit{border-left-color:var(--gd)}
 .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -377,7 +549,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .vals div em{display:block;font-style:normal;font-size:9px;color:var(--mut);text-transform:uppercase}
 .vals div strong{font-size:12px;font-weight:700}
 .actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
-.actions .btn{flex:1;min-width:88px}
+.actions .btn{flex:1;min-width:80px}
 .chartbox{display:none;margin-top:8px;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
 .chartbox iframe{width:100%;height:210px;border:0;display:block}
 .empty{text-align:center;padding:30px 12px;color:var(--mut)}
@@ -399,6 +571,8 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .mv{display:flex;gap:8px;overflow-x:auto;padding:0 12px 10px}
 .mv .i{min-width:108px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
 .mv .i b{display:block;font-size:12px}.mv .up{color:var(--gn)}.mv .dn{color:var(--rd)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:0 10px 8px}
+.stats .metric{text-align:center}
 </style>
 </head>
 <body>
@@ -424,6 +598,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <input id="symIn" placeholder="BTC / ETHUSDT" />
     <button class="btn" onclick="analyzeManual()">Analyze</button>
     <button class="btn dim" onclick="runScan()">Scan</button>
+    <button class="btn dim" id="autoBtn" onclick="toggleAuto()">Auto ON</button>
     <button class="btn dim" id="soundBtn" onclick="toggleSound()">Voice ON</button>
   </div>
   <div class="filters">
@@ -437,7 +612,8 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 </section>
 
 <section id="tab-trades" style="display:none">
-  <div class="note">Hit alert speaks coin name. Close to stop alerts.</div>
+  <div class="stats" id="tradeStats"></div>
+  <div class="note">Live prices every few sec. Close to stop alerts.</div>
   <div id="tradeList"></div>
 </section>
 
@@ -447,6 +623,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 </section>
 
 <section id="tab-account" style="display:none">
+  <div class="stats" id="accStats"></div>
   <div class="card">
     <div class="vals">
       <div><em>Start</em><strong id="aStart">—</strong></div>
@@ -468,7 +645,11 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <input type="hidden" id="m_symbol">
     <div class="row2">
       <div><label>Side</label><select id="m_side"><option>LONG</option><option>SHORT</option></select></div>
-      <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="10" min="1" max="150"></div>
+      <div><label>Margin mode</label><select id="m_mm"><option value="CROSS">Cross</option><option value="ISOLATED">Isolated</option></select></div>
+    </div>
+    <div class="row2">
+      <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="20" min="1" max="150"></div>
+      <div><label>Liquidity</label><input id="m_liq" readonly style="opacity:.8"></div>
     </div>
     <div class="row2">
       <div><label>Entry</label><input type="number" id="m_entry" step="any"></div>
@@ -481,21 +662,23 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <label>TP2</label><input type="number" id="m_tp2" step="any">
     <label>Size mode</label>
     <select id="m_mode" onchange="syncSizeMode()">
-      <option value="risk">Risk % of balance</option>
+      <option value="amount" selected>Amount USDT (notional)</option>
       <option value="margin">Margin USDT</option>
+      <option value="risk">Risk % of balance</option>
       <option value="qty">Quantity</option>
     </select>
-    <div id="box_risk">
+    <div id="box_amount"><label>Amount USDT</label><input type="number" id="m_amount" step="any" placeholder="e.g. 500"></div>
+    <div id="box_margin" style="display:none"><label>Margin USDT</label><input type="number" id="m_margin" step="any"></div>
+    <div id="box_risk" style="display:none">
       <label>Risk % <span id="riskVal">1%</span></label>
-      <input type="range" id="m_risk" min="0.25" max="5" step="0.25" value="1" oninput="riskVal.textContent=this.value+'%'">
+      <input type="range" id="m_risk" min="0.25" max="100" step="0.25" value="1" oninput="riskVal.textContent=this.value+'%'">
     </div>
-    <div id="box_margin" style="display:none">
-      <label>Margin USDT</label><input type="number" id="m_margin" step="any" placeholder="e.g. 50">
+    <div id="box_qty" style="display:none"><label>Quantity</label><input type="number" id="m_qty" step="any"></div>
+    <div class="row2">
+      <div><label>Scale</label><select id="m_scale"><option value="">None</option><option value="flat">Flat</option><option value="ascending">Ascending</option></select></div>
+      <div><label>Scale orders</label><input type="number" id="m_scale_n" min="0" max="10" value="0"></div>
     </div>
-    <div id="box_qty" style="display:none">
-      <label>Quantity</label><input type="number" id="m_qty" step="any" placeholder="e.g. 0.01">
-    </div>
-    <p class="hint">Coin max leverage auto-capped. Flexible size: % · margin · qty.</p>
+    <p class="hint">Default: Amount + max leverage + Cross. Scale = split entry style.</p>
     <div class="btns">
       <button class="btn dim" onclick="closeModal()">Cancel</button>
       <button class="btn good" onclick="submitTrade()">Open Trade</button>
@@ -504,85 +687,34 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 </div>
 
 <script>
-let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set();
+let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
 if('Notification'in window && Notification.permission==='default') Notification.requestPermission();
 
-function speak(text){
-  if(!voiceOn||!('speechSynthesis'in window)) return;
-  try{
-    window.speechSynthesis.cancel();
-    const u=new SpeechSynthesisUtterance(text);
-    u.rate=1; u.lang='en-US';
-    window.speechSynthesis.speak(u);
-  }catch(e){}
-}
-function beep(n=2){
-  if(!soundOn) return;
-  try{
-    const c=new(window.AudioContext||window.webkitAudioContext);
-    for(let i=0;i<n;i++) setTimeout(()=>{
-      const o=c.createOscillator(),g=c.createGain();
-      o.connect(g); g.connect(c.destination);
-      o.type='sine'; o.frequency.value=i%2?640:880;
-      g.gain.value=.12; o.start();
-      g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.2);
-      o.stop(c.currentTime+.2);
-    }, i*220);
-  }catch(e){}
-}
+function speak(text){if(!voiceOn||!('speechSynthesis'in window))return;try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.rate=1;u.lang='en-US';speechSynthesis.speak(u);}catch(e){}}
+function beep(n=2){if(!soundOn)return;try{const c=new(window.AudioContext||window.webkitAudioContext);for(let i=0;i<n;i++)setTimeout(()=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.value=i%2?640:880;g.gain.value=.12;o.start();g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.2);o.stop(c.currentTime+.2);},i*220);}catch(e){}}
 function toast(m,ms=2800){const t=document.getElementById('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',ms);}
-function toggleSound(){
-  soundOn=!soundOn; voiceOn=soundOn;
-  document.getElementById('soundBtn').textContent=soundOn?'Voice ON':'Voice OFF';
-  if(soundOn) speak('Voice alerts on');
-}
-function showTab(n){
-  ['signals','trades','movers','account'].forEach(x=>{
-    const el=document.getElementById('tab-'+x); if(el) el.style.display=x===n?'block':'none';
-  });
-  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===n));
-  if(n==='trades') loadTrades();
-  if(n==='movers') loadMovers();
-  if(n==='account') loadAccount();
-}
-function setStyle(s){style=s;document.querySelectorAll('.filters button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));loadSignals();}
+function toggleSound(){soundOn=!soundOn;voiceOn=soundOn;soundBtn.textContent=soundOn?'Voice ON':'Voice OFF';if(soundOn)speak('Voice on');}
+async function toggleAuto(){autoScan=!autoScan;await fetch('/api/auto-scan?enabled='+(autoScan?'true':'false'),{method:'POST'});autoBtn.textContent=autoScan?'Auto ON':'Auto OFF';toast(autoScan?'Auto-scan started':'Auto-scan stopped');if(autoScan)runScan();}
+function showTab(n){['signals','trades','movers','account'].forEach(x=>{const el=document.getElementById('tab-'+x);if(el)el.style.display=x===n?'block':'none';});document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===n));if(n==='trades')loadTrades();if(n==='movers')loadMovers();if(n==='account')loadAccount();}
+function setStyle(s){style=s;pinManual=false;document.querySelectorAll('.filters button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));loadSignals();}
 function fmt(n){return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
-function setAcc(a){
-  if(!a) return;
-  sBal.textContent='$'+fmt(a.balance); sEq.textContent='$'+fmt(a.equity);
-  sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);
-  sReal.className=a.realized_pnl>=0?'up':'dn';
-  if(aStart){aStart.textContent='$'+fmt(a.start_balance); aBal.textContent='$'+fmt(a.balance);
-    aEq.textContent='$'+fmt(a.equity); aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}
-}
-function syncSizeMode(){
-  const m=m_mode.value;
-  box_risk.style.display=m==='risk'?'block':'none';
-  box_margin.style.display=m==='margin'?'block':'none';
-  box_qty.style.display=m==='qty'?'block':'none';
-}
+function setAcc(a){if(!a)return;sBal.textContent='$'+fmt(a.balance);sEq.textContent='$'+fmt(a.equity);sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);sReal.className=a.realized_pnl>=0?'up':'dn';if(window.aStart){aStart.textContent='$'+fmt(a.start_balance);aBal.textContent='$'+fmt(a.balance);aEq.textContent='$'+fmt(a.equity);aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}}
+function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
+  <div class="metric"><label>Trades</label><b>${st.total_trades||0}</b></div>
+  <div class="metric"><label>Win / Loss</label><b class="up">${st.wins||0}</b> / <b class="dn">${st.losses||0}</b></div>
+  <div class="metric"><label>Win rate</label><b>${st.win_rate||0}%</b></div>
+  <div class="metric"><label>Total PnL</label><b class="${(st.total_pnl||0)>=0?'up':'dn'}">${(st.total_pnl||0)>=0?'+':''}$${fmt(st.total_pnl||0)}</b></div>
+  <div class="metric"><label>Open</label><b>${st.open||0}</b></div>`;}
+function syncSizeMode(){const m=m_mode.value;box_amount.style.display=m==='amount'?'block':'none';box_margin.style.display=m==='margin'?'block':'none';box_risk.style.display=m==='risk'?'block':'none';box_qty.style.display=m==='qty'?'block':'none';}
 function tv(sym){return 'BINANCE:'+sym+'.P';}
-function toggleChart(id,sym){
-  const box=document.getElementById(id);
-  if(!box) return;
-  if(box.style.display==='block'){box.style.display='none'; box.innerHTML=''; return;}
-  box.style.display='block';
-  box.innerHTML=`<iframe src="https://s.tradingview.com/widgetembed/?symbol=${tv(sym)}&interval=15&hidesidetoolbar=1&hidetoptoolbar=1&theme=dark&style=1&timezone=Etc%2FUTC" loading="lazy"></iframe>`;
-}
+function toggleChart(id,sym){const box=document.getElementById(id);if(!box)return;if(box.style.display==='block'){box.style.display='none';box.innerHTML='';return;}box.style.display='block';box.innerHTML=`<iframe src="https://s.tradingview.com/widgetembed/?symbol=${tv(sym)}&interval=15&hidesidetoolbar=1&hidetoptoolbar=1&theme=dark&style=1" loading="lazy"></iframe>`;}
 function cardHTML(s){
-  const L=s.side==='LONG';
-  const mp=s.market_price??s.entry;
-  const lev=s.max_leverage||20;
-  const cid='ch_'+s.symbol;
-  const btn=s.already_added
-    ? `<button class="btn dim" disabled>Added</button>`
-    : `<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
+  const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage||20;const cid='ch_'+s.symbol;
+  const btn=s.already_added?`<button class="btn dim" disabled>Added</button>`:`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
   return `<article class="card ${L?'L':'S'}">
-    <div class="head">
-      <div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-        <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev}x</span></div>
-      <div class="score">${s.score}</div>
-    </div>
+    <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'MED'}</span><span class="tag">${lev}x</span></div>
+      <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · 1D ${s.bias_1d||'—'} · 4H ${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
       <div><em>Entry</em><strong>${s.entry}</strong></div>
@@ -594,148 +726,108 @@ function cardHTML(s){
     </div>
     <div class="sub" style="margin-top:8px">${s.summary||''}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
-    <div class="actions">
-      ${btn}
-      <button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button>
-    </div>
-    <div class="chartbox" id="${cid}"></div>
-  </article>`;
+    <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
+    <div class="chartbox" id="${cid}"></div></article>`;
 }
 async function loadSignals(){
   try{
     const d=await(await fetch('/api/signals?style='+style)).json();
-    setAcc(d.account);
-    status.textContent=d.scanning?'Scanning…':(d.error?'⚠️ '+d.error:`${d.count||0} signals · ${d.scanned_count||0} pairs · ${d.last_updated||''}`);
+    setAcc(d.account); renderStats(d.stats, tradeStats); renderStats(d.stats, accStats);
+    sOpen.textContent=(d.stats&&d.stats.open)||0;
+    autoScan=!!d.auto_scan; autoBtn.textContent=autoScan?'Auto ON':'Auto OFF';
+    status.textContent=d.scanning?'Scanning…':(d.error?'⚠️ '+d.error:`${d.count||0} signals · ${d.scanned_count||0} pairs · ${d.last_updated||''}${autoScan?' · auto':''}`);
+    window._movers={gainers:d.gainers||[],losers:d.losers||[]};
+    if(pinManual) return; // keep manual analysis visible
     const list=document.getElementById('signalList');
-    if(!d.signals||!d.signals.length){list.innerHTML='<div class="empty">No signals. Scan or Analyze.</div>';return;}
+    if(!d.signals||!d.signals.length){list.innerHTML='<div class="empty">No signals yet. Wait for auto-scan or tap Scan.</div>';return;}
     const h=d.signals.map(s=>s.symbol+s.side+s.score).join('|');
-    if(lastSig && h!==lastSig){
-      beep(2);
-      const neu=d.signals.filter(s=>!lastSig.includes(s.symbol+s.side));
-      if(neu.length) speak(neu.slice(0,3).map(s=>`${s.side} ${s.symbol.replace('USDT','')}`).join(', '));
-      else speak('Signals updated');
-    }
+    if(lastSig&&h!==lastSig){beep(2);const neu=d.signals.filter(s=>!lastSig.includes(s.symbol+s.side));if(neu.length)speak(neu.slice(0,3).map(s=>`${s.side} ${s.symbol.replace('USDT','')}`).join(', '));}
     lastSig=h;
     list.innerHTML=d.signals.map(cardHTML).join('');
-    window._movers={gainers:d.gainers||[],losers:d.losers||[]};
   }catch(e){status.textContent='Load failed';}
 }
-function runScan(){toast('Scan started');location.href='/scan?top=28';}
+function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=28').then(()=>setTimeout(loadSignals,3000));}
 async function analyzeManual(){
   let s=(symIn.value||'').trim().toUpperCase().replace('/','').replace('-','');
-  if(!s){toast('Enter symbol');return;}
-  if(!s.endsWith('USDT')) s+='USDT';
-  toast('Analyzing '+s);
+  if(!s){toast('Enter symbol');return;} if(!s.endsWith('USDT'))s+='USDT';
+  toast('Analyzing '+s); pinManual=true;
   const d=await(await fetch('/api/analyze/'+s)).json();
   const list=document.getElementById('signalList');
   if(!d.ok){list.innerHTML=`<div class="empty">${d.error||'Failed'}</div>`;return;}
   if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'—'} · max ${d.max_leverage||'—'}x</div><div class="empty">${d.message||'No signal'}</div>
-    <div class="actions"><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
-  list.innerHTML=cardHTML(d.signal);
+    <div class="actions"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
+  list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
 }
 function openModal(s){
-  mTitle.textContent=s.symbol;
-  m_symbol.value=s.symbol; m_side.value=s.side;
+  mTitle.textContent=s.symbol+' · '+(s.liquidity||'MED');
+  m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  const ml=s.max_leverage||20; m_lev.value=Math.min(10,ml); m_lev.max=ml; mLevHint.textContent='max '+ml+'x';
-  m_mode.value='risk'; syncSizeMode();
+  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent='max '+ml+'x';
+  m_liq.value=s.liquidity||'MED'; m_mode.value='amount'; syncSizeMode(); m_amount.value='';
   modalBg.style.display='flex';
 }
 function closeModal(){modalBg.style.display='none';}
 async function submitTrade(){
   const mode=m_mode.value;
-  const body={symbol:m_symbol.value,side:m_side.value,entry:+m_entry.value,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||10};
-  if(mode==='risk') body.risk_pct=+m_risk.value||1;
+  const body={symbol:m_symbol.value,side:m_side.value,entry:+m_entry.value,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
+  if(mode==='amount') body.amount_usd=+m_amount.value||0;
   if(mode==='margin') body.margin_usd=+m_margin.value||0;
+  if(mode==='risk') body.risk_pct=+m_risk.value||1;
   if(mode==='qty') body.quantity=+m_qty.value||0;
   const d=await(await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-  if(d.ok){closeModal();toast(d.duplicate?'Already open':'Trade opened');speak(m_symbol.value.replace('USDT','')+' trade opened');setAcc(d.account);loadSignals();showTab('trades');loadTrades();}
+  if(d.ok){closeModal();toast(d.duplicate?'Already open':'Trade opened');speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;loadSignals();showTab('trades');loadTrades();}
   else toast(d.error||'Failed');
 }
 async function loadTrades(){
-  const d=await(await fetch('/api/trades')).json(); setAcc(d.account);
+  const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
   const open=(d.trades||[]).filter(t=>t.status==='OPEN');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
-  sOpen.textContent=open.length;
   let h='';
-  if(open.length){
-    h+='<div class="sec">Open</div>';
-    h+=open.map(t=>{
-      const L=t.side==='LONG'; const up=(t.unrealized_pnl||0)>=0;
-      return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
-        <div class="head">
-          <div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
-            <span class="tag">${t.leverage}x</span>${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}</div>
-          <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div>
-        </div>
-        <div class="vals">
-          <div><em>Entry</em><strong>${t.entry}</strong></div>
-          <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
-          <div><em>SL</em><strong>${t.stop_loss}</strong></div>
-          <div><em>TP1</em><strong>${t.tp1}</strong></div>
-          <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
-          <div><em>Qty</em><strong>${t.qty}</strong></div>
-          <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        </div>
-        <div class="actions"><button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
-          <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button></div>
-        <div class="chartbox" id="ct_${t.id}"></div>
-      </article>`;
-    }).join('');
-  }
-  if(closed.length){
-    h+='<div class="sec">Closed</div><div class="card">';
-    h+=closed.slice(-10).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · ${t.hit||'CLOSED'}</span>
-      <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');
-    h+='</div>';
-  }
-  tradeList.innerHTML=h||'<div class="empty">No trades yet</div>';
+  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
+    const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
+    return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
+      <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
+        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
+        <span class="tag">${t.liquidity||'MED'}</span>${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
+        ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
+        <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
+      <div class="vals">
+        <div><em>Entry</em><strong>${t.entry}</strong></div>
+        <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
+        <div><em>TP1</em><strong>${t.tp1}</strong></div>
+        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
+        <div><em>Qty</em><strong>${t.qty}</strong></div>
+        <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
+        <div><em>Trail</em><strong>${t.trailing_pct?t.trailing_pct+'%':'—'}</strong></div>
+      </div>
+      <div class="actions">
+        <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
+        <button class="btn dim" onclick="dcaPrompt('${t.id}')">DCA</button>
+        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.trailing_pct||0})">Trail</button>
+        <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
+        <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
+      </div>
+      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
+  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · ${t.hit||'CLOSED'}</span>
+    <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
+  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
 }
-async function closeTrade(id){
-  if(!confirm('Close this trade?')) return;
-  const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();
-  if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}
-}
-function loadMovers(){
-  const m=window._movers||{gainers:[],losers:[]};
-  const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()">
-    <b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Scan first</div>';
-  gainers.innerHTML=mk(m.gainers||[],1); losers.innerHTML=mk(m.losers||[],0);
-}
-async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;}
-async function resetAcc(bal){
-  if(!confirm('Reset account to $'+bal+'?')) return;
-  const d0=await(await fetch('/api/trades')).json();
-  for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN')) await fetch('/api/trades/'+t.id+'/close',{method:'POST'});
-  const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();
-  if(d.ok){setAcc(d.account);toast('Reset done');}
-}
-async function checkAlerts(){
-  try{
-    const d=await(await fetch('/api/alerts')).json();
-    if(d.count>0){
-      const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');
-      alertBar.textContent='ALERT · '+msg+' · Tap for My Trades';
-      alertBar.style.display='block';
-      d.alerts.forEach(t=>{
-        const key=t.id+t.hit;
-        if(!spokenAlerts.has(key)){
-          spokenAlerts.add(key);
-          const name=t.symbol.replace('USDT','');
-          const kind=t.hit==='SL'?'stop loss':'take profit '+t.hit;
-          speak(`${name} ${kind} hit. PnL ${t.pnl_pct} percent`);
-          beep(4);
-        }
-      });
-    } else alertBar.style.display='none';
-  }catch(e){}
-}
+async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
+async function dcaPrompt(id){const v=prompt('DCA Amount USDT (notional)');if(!v)return;const d=await(await fetch('/api/trades/'+id+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:+v})})).json();if(d.ok){toast('DCA added');loadTrades();}else toast(d.error||'DCA failed');}
+async function trailPrompt(id,cur){const v=prompt('Trailing stop % (e.g. 1.5). 0 to disable',cur||'1');if(v===null)return;const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trailing_pct:+v})})).json();if(d.ok){toast('Trailing updated');loadTrades();}}
+async function editLevels(id,sl,tp1,tp2){const nsl=prompt('Stop loss',sl);if(nsl===null)return;const n1=prompt('TP1',tp1);if(n1===null)return;const n2=prompt('TP2 (optional)',tp2||'');const body={stop_loss:+nsl,tp1:+n1};if(n2)body.tp2=+n2;const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){toast('Levels updated');loadTrades();}}
+function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
+async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
+async function resetAcc(bal){if(!confirm('Reset to $'+bal+'?'))return;const d0=await(await fetch('/api/trades')).json();for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN'))await fetch('/api/trades/'+t.id+'/close',{method:'POST'});const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();if(d.ok){setAcc(d.account);toast('Reset');}}
+async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
 loadSignals();
-setInterval(loadSignals,50000);
-setInterval(checkAlerts,12000);
-setInterval(()=>{if(tab-trades.style.display!=='none')loadTrades();},12000);
+setInterval(()=>{if(!pinManual)loadSignals();},20000);
+setInterval(checkAlerts,10000);
+setInterval(()=>{loadTrades();},8000); // live trades always
+setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
 </body>
 </html>
