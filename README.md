@@ -5,7 +5,7 @@ Binance USDT-M futures multi-timeframe signal scanner + paper trading dashboard.
 - Signals: Long / Short with Entry, SL, TP1, TP2, score, liquidity
 - Paper trades: leverage, amount / margin / risk% / qty, Cross or Isolated
 - Tools: DCA, trailing stop, edit SL/TP, movers, voice alerts
-- Storage: **SQLite by default** (`daily_signal.db`)
+- Storage: **SQLite by default** · **PostgreSQL/Neon if `DATABASE_URL` is set**
 
 Repo: https://github.com/tuhinfay/Daily-Signal-by-Grok-AI
 
@@ -39,7 +39,7 @@ REM health: http://127.0.0.1:8083/health
 stop.bat
 ```
 
-### Keep VPS code up to date
+### Update VPS code
 
 ```bat
 stop.bat
@@ -48,68 +48,43 @@ git pull
 start.bat
 ```
 
-> If the VPS clone is several commits behind GitHub, always `git pull` after `stop.bat`.
+---
+
+## Render + Neon (persistent trades)
+
+| `DATABASE_URL` | Storage |
+|----------------|----------|
+| Not set | SQLite (may reset on free Render redeploy) |
+| Neon/Postgres URL | PostgreSQL — persists account + trades |
+
+### Steps
+
+1. Neon project → copy **connection string**
+2. Render Web Service → **Environment** → add:
+   ```text
+   DATABASE_URL=postgresql://USER:PASSWORD@HOST/DB?sslmode=require
+   ```
+3. Build: `pip install -r requirements.txt`
+4. Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`
+5. Redeploy
+
+Logs should show: `[db] Using PostgreSQL (DATABASE_URL)`
+
+If URL is wrong, app falls back to SQLite automatically.
 
 ---
 
-## Render
-
-### Deploy
-
-1. Render → **New** → **Web Service** (or Blueprint with `render.yaml`)
-2. Connect this GitHub repo
-3. Settings:
-   - **Build:** `pip install -r requirements.txt`
-   - **Start:** `uvicorn api:app --host 0.0.0.0 --port $PORT`
-   - **Python:** 3.12
-4. Deploy
-
-### Data persistence on Render
-
-| Setup | Result |
-|-------|--------|
-| Free web service + SQLite only | App works, but **DB can reset** on redeploy/restart (ephemeral disk) |
-| Neon Postgres + code migration | Trade history can persist |
-
-**Important:** A Neon project alone does **not** persist data until the app is switched from SQLite to Postgres (`DATABASE_URL`).
-
-Current code path: `scanner/db.py` → SQLite file `daily_signal.db`.
-
-If you already created Neon project **Daily-Signal-by-Grok-AI**:
-1. Copy the Neon `DATABASE_URL`
-2. Ask a developer to add optional Postgres support (use Postgres when `DATABASE_URL` is set, else SQLite)
-3. On Render, add env var `DATABASE_URL`
-
-Until that migration is done, Render = SQLite (may wipe on redeploy).
-
----
-
-## Local (any OS)
+## Local
 
 ```bash
 pip install -r requirements.txt
 uvicorn api:app --host 0.0.0.0 --port 8000
-# http://localhost:8000
 ```
-
----
-
-## Main API
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | Dashboard |
-| `GET /api/signals` | Signals + account + stats |
-| `GET /api/trades` | Paper trades |
-| `POST /api/trades` | Open paper trade |
-| `POST /api/auto-scan?enabled=true` | Auto-scan on/off |
-| `GET /scan?top=28` | Trigger scan |
-| `GET /health` | Health check |
 
 ---
 
 ## Disclaimer
 
-Educational / paper-trading tool only. **Not financial advice.** Crypto trading is high risk.
+Educational / paper-trading tool only. **Not financial advice.**
 
 **Daily Signal by Grok AI**
