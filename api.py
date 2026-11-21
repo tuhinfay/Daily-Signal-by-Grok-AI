@@ -605,7 +605,7 @@ async def set_auto_scan(enabled: bool = Query(True)):
 
 
 @app.get("/api/analyze/{symbol}")
-async def analyze_one(symbol: str, style: str = Query("day")):
+def analyze_one(symbol: str, style: str = Query("day")):
     if time_mod.monotonic() < _scan_retry_after:
         retry_after = max(1, int(_scan_retry_after - time_mod.monotonic()))
         return JSONResponse({"ok": False, "error": "Binance Futures IP cooldown active; manual analysis is paused."}, status_code=429, headers={"Retry-After": str(retry_after)})
@@ -699,7 +699,7 @@ async def api_trades():
 
 
 @app.get("/api/market-price/{symbol}")
-async def api_market_price(symbol: str):
+def api_market_price(symbol: str):
     sym = symbol.upper().replace("/", "").replace(":USDT", "")
     now = time_mod.time()
     cached = _modal_price_cache.get(sym)
