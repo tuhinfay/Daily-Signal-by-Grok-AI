@@ -1129,7 +1129,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .modal .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .modal .btns{display:flex;gap:8px;margin-top:12px}
 .modal .btns .btn{flex:1;padding:12px}
-.hint{font-size:11px;color:var(--mut);margin-top:4px}
+.hint{font-size:11px;color:var(--mut);margin-top:4px}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:36px repeat(3,minmax(0,1fr));gap:5px;padding:8px;border-bottom:1px solid var(--line);font-size:10px}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
 .sec{padding:10px 12px 4px;font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
 .mv{display:flex;gap:8px;overflow-x:auto;padding:0 12px 10px}
 .mv .i{min-width:108px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -1241,7 +1241,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Scaled Order</label><select id="m_scale" onchange="updateOrderPreview()"><option value="">None</option><option value="flat">Equal Split</option><option value="ascending">Ascending Size</option></select></div>
       <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="2" max="50" value="2" oninput="updateOrderPreview()"></div>
     </div>
-    <div id="order_preview"></div><div id="scale_preview" class="hint" style="display:none"></div>
+    <div id="order_preview"></div><div id="liq_preview" class="hint" aria-live="polite">Estimated liquidation preview</div><div id="scale_preview" class="scale-preview" style="display:none"></div>
     
     <div class="btns">
       <button class="btn dim" onclick="closeModal()">Cancel</button>
@@ -1282,8 +1282,32 @@ function updateOrderPreview(){
  else if(mode==='risk'){const bal=+(sBal.textContent||'').replace(/[^0-9.]/g,'')||10000;const risk=(+m_risk.value||1)/100*bal,dist=Math.abs(px-(+m_sl.value||px));notional=dist>0?risk/dist*px:0;}
  const qty=px>0?notional/px:0,margin=lev>0?notional/lev:0;
  order_preview.textContent='Position Value: $'+fmt(notional)+' USDT | Initial Margin: $'+fmt(margin)+' USDT | Quantity: '+qty.toFixed(6);
- const n=Math.max(0,Math.min(10,parseInt(m_scale_n.value||'0',10)||0)),sm=m_scale.value,sp=document.getElementById('scale_preview');
- if(sm&&n>=2&&notional>0&&px>0){const market=+(m_mkt.value||px);const rows=Array.from({length:n},(_,i)=>{const weight=sm==='ascending'?(i+1)/(n*(n+1)/2):1/n;const price=m_order_type.value==='LIMIT'?market+(px-market)*(i+1)/n:market;const amount=notional*weight;return (i+1)+'. Price '+fmt(price)+' | Amount $'+fmt(amount)+' | Qty '+(amount/price).toFixed(6);});sp.style.display='block';sp.textContent='Scaled order preview ('+n+' orders)\n'+rows.join('\n')+'\nTotal: $'+fmt(notional)+' | Qty '+qty.toFixed(6);}else{sp.style.display='none';sp.textContent='';}
+ const n=Math.max(2,Math.min(50,parseInt(m_scale_n.value||'2',10)||2)),sm=m_scale.value,sp=document.getElementById('scale_preview');
+ if(sm&&notional>0&&px>0){
+   const market=+(m_mkt.value||px),rows=[];
+   for(let i=0;i<n;i++){
+     const weight=sm==='ascending'?(i+1)/(n*(n+1)/2):1/n;
+     const price=m_order_type.value==='LIMIT'?market+(px-market)*(i+1)/n:market;
+     const amount=notional*weight;
+     rows.push('<div class="scale-row"><b>#'+(i+1)+'</b><span>'+fmt(price)+'</span><span>$'+fmt(amount)+'</span><span>'+(amount/price).toFixed(6)+'</span></div>');
+   }
+   sp.style.display='block';
+   sp.innerHTML='<div class="scale-row scale-head"><b>Order</b><span>Price</span><span>Amount</span><span>Qty</span></div>'+rows.join('')+'<div class="scale-row"><b>Total</b><span>—</span><b>$'+fmt(notional)+'</b><b>'+qty.toFixed(6)+'</b></div>';
+ }else{sp.style.display='none';sp.innerHTML='';}
+ clearTimeout(window._liqPreviewTimer);
+ window._liqPreviewTimer=setTimeout(async()=>{
+   try{
+     if(!(notional>0&&px>0&&+m_sl.value>0)){liq_preview.textContent='Enter amount and Stop Loss to preview liquidation.';return;}
+     const pb={symbol:m_symbol.value,side:m_side.value,order_type:m_order_type.value,entry:px,limit_price:m_order_type.value==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value||0,leverage:lev,margin_mode:m_mm.value};
+     if(mode==='amount')pb.amount_usd=+m_amount.value||0;
+     else if(mode==='margin')pb.margin_usd=+m_margin.value||0;
+     else if(mode==='qty')pb.quantity=+m_qty.value||0;
+     else pb.risk_pct=+m_risk.value||1;
+     const res=await fetch('/api/trade-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pb)});
+     const data=await res.json();
+     liq_preview.textContent=data.ok?'Estimated Liquidation: '+(data.liquidation_price?fmt(data.liquidation_price)+' USDT':'Unavailable')+' · '+data.liquidation_risk+' · '+(data.liquidation_distance_pct==null?'—':data.liquidation_distance_pct+'%')+' distance (estimate)':(data.error||'Liquidation preview unavailable');
+   }catch(e){liq_preview.textContent='Liquidation preview unavailable';}
+ },350);
 }
 function tv(sym){return 'BINANCE:'+String(sym).replace('/','').replace(':USDT','')+'.P';}
 function toggleChart(id,sym){
