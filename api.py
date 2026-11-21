@@ -35,6 +35,11 @@ def _pause_scans_for_rate_limit(client):
     until = float(getattr(client, "rate_limit_until", 0.0) or 0.0)
     remaining = max(300.0, until - time_mod.time())
     _scan_retry_after = max(_scan_retry_after, time_mod.monotonic() + remaining)
+    try:
+        if until > 0:
+            db.set_meta("binance_ban_until", str(max(until, time_mod.time() + remaining)))
+    except Exception as e:
+        print(f"[binance] could not persist cooldown: {e}")
 
 
 class TradeCreate(BaseModel):
@@ -428,7 +433,13 @@ def startup():
     # Restore the user's saved preference; auto-scan state must not be reset on deploy.
     try:
         _cache["auto_scan"] = db.get_meta("auto_scan", "1") == "1"
-    except Exception:
+        saved_ban_until = float(db.get_meta("binance_ban_until", "0") or 0)
+        if saved_ban_until > time_mod.time():
+            global _scan_retry_after
+            _scan_retry_after = time_mod.monotonic() + (saved_ban_until - time_mod.time())
+            print(f"[binance] persisted cooldown active for {int(saved_ban_until - time_mod.time())}s")
+    except Exception as e:
+        print(f"[startup] scan preference/cooldown restore: {e}")
         _cache["auto_scan"] = True
     _monitor_running = True
     threading.Thread(target=auto_scan_loop, daemon=True).start()
