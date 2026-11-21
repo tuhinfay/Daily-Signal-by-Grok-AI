@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
-import uvicorn, os, traceback, uuid, threading, time as time_mod
+import uvicorn, os, json, traceback, uuid, threading, time as time_mod
 
 from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
