@@ -36,7 +36,7 @@ if not exist .venv\Scripts\python.exe (
 )
 
 echo Starting Daily Signal on port 8083...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath '%~dp0.venv\Scripts\python.exe' -ArgumentList @('-m','uvicorn','api:app','--host','127.0.0.1','--port','8083') -WorkingDirectory '%~dp0' -WindowStyle Hidden -RedirectStandardOutput '%~dp0logs\server.log' -RedirectStandardError '%~dp0logs\error.log' -PassThru; Set-Content -Path '%~dp0runtime.pid' -Value $p.Id -Encoding ascii"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath '%~dp0.venv\Scripts\python.exe' -ArgumentList @('-m','uvicorn','api:app','--host','0.0.0.0','--port','8083') -WorkingDirectory '%~dp0' -WindowStyle Hidden -RedirectStandardOutput '%~dp0logs\server.log' -RedirectStandardError '%~dp0logs\error.log' -PassThru; Set-Content -Path '%~dp0runtime.pid' -Value $p.Id -Encoding ascii"
 
 REM Wait up to 30 seconds for the API to become healthy before opening the browser.
 set "READY=0"
@@ -57,6 +57,8 @@ exit /b 1
 
 :OPEN_DASHBOARD
 echo Daily Signal is ready.
-echo Dashboard: %DASHBOARD%
+echo Local dashboard: %DASHBOARD%
+echo Remote dashboard: http://YOUR-VPS-IP:8083
+echo Allow inbound TCP 8083 in the VPS firewall, restricted to your own IP.
 start "" "%DASHBOARD%"
 endlocal
