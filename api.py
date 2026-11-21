@@ -684,6 +684,15 @@ async def api_trades():
     return {"trades": list(_trades.values()), "account": _account, "stats": _stats()}
 
 
+@app.get("/api/market-price/{symbol}")
+async def api_market_price(symbol: str):
+    sym = symbol.upper().replace("/", "").replace(":USDT", "")
+    price = _cache.get("prices", {}).get(sym)
+    if not price:
+        price = next((t.get("current_price") for t in _trades.values() if t.get("symbol") == sym and t.get("current_price")), None)
+    return {"symbol": sym, "price": price}
+
+
 @app.get("/api/alerts")
 async def api_alerts():
     alerts = [t for t in _trades.values() if t.get("needs_alert") and t.get("hit")]
@@ -1278,6 +1287,7 @@ function openModal(s){
   modalBg.style.display='flex'; updateOrderPreview();
 }
 function closeModal(){modalBg.style.display='none';}
+async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
 async function submitTrade(){
   const mode=m_mode.value;
   const typ=m_order_type.value,px=+m_entry.value;
@@ -1286,6 +1296,8 @@ async function submitTrade(){
   if(mode==='margin') body.margin_usd=+m_margin.value||0;
   if(mode==='risk') body.risk_pct=+m_risk.value||1;
   if(mode==='qty') body.quantity=+m_qty.value||0;
+  if(body.scale_mode && body.scale_orders>=2 && typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
+  if(body.scale_mode && body.scale_orders>=2 && !confirm(document.getElementById('scale_preview').innerText+'\\nPlace these pending orders?'))return;
   const d=await(await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   if(d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;loadSignals();showTab('trades');loadTrades();}
   else toast(d.error||'Failed');
@@ -1349,6 +1361,7 @@ async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json(
 loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
+setInterval(refreshModalMarket,1500);
 setInterval(()=>{if(document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
