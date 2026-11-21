@@ -26,6 +26,10 @@ _cache: Dict[str, Any] = {
 _trades: Dict[str, Dict] = {}
 _account: Dict[str, float] = {}
 _monitor_running = False
+_price_monitor_status: Dict[str, Any] = {
+    "state": "starting", "connected": False, "symbols": [],
+    "last_ws_update": None, "last_rest_update": None, "last_error": None,
+}
 _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 
@@ -335,6 +339,7 @@ def _persist_live_prices(symbols):
 
 
 def price_monitor_loop():
+    """Track open trades from Binance mark-price streams, with a quiet-stream REST watchdog."""
     try:
         import websocket
     except Exception as e:
@@ -342,65 +347,103 @@ def price_monitor_loop():
         print(f"[price-ws] websocket-client unavailable; REST fallback only: {e}")
 
     client = BinanceClient(futures=True)
+    last_rest_poll = 0.0
     while _monitor_running:
         symbols = _open_trade_symbols()
+        _price_monitor_status["symbols"] = symbols
         if not symbols:
+            _price_monitor_status.update({"state": "idle", "connected": False})
             time_mod.sleep(1)
             continue
 
-        if websocket is not None:
+        dirty = set()
+        ws = None
+        ws_last_message = time_mod.monotonic()
+        last_persist = time_mod.monotonic()
+        try:
+            if websocket is None:
+                raise RuntimeError("websocket-client unavailable")
             streams = "/".join(f"{symbol.lower()}@markPrice@1s" for symbol in symbols)
             url = f"wss://fstream.binance.com/market/stream?streams={streams}"
-            ws = None
-            dirty = set()
-            last_persist = time_mod.monotonic()
-            try:
-                ws = websocket.create_connection(url, timeout=2)
-                print(f"[price-ws] connected for {len(symbols)} open symbols")
-                while _monitor_running and symbols == _open_trade_symbols():
+            ws = websocket.create_connection(url, timeout=2)
+            _price_monitor_status.update({
+                "state": "connected", "connected": True, "last_error": None,
+                "symbols": symbols,
+            })
+            print(f"[price-ws] connected for {len(symbols)} open symbols")
+            while _monitor_running and symbols == _open_trade_symbols():
+                try:
+                    raw = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    raw = None
+
+                if raw:
                     try:
-                        raw = ws.recv()
-                    except websocket.WebSocketTimeoutException:
-                        raw = None
-                    if raw:
                         message = json.loads(raw)
                         event = message.get("data", message)
-                        if event.get("e") == "markPriceUpdate":
+                        if isinstance(event, str):
+                            event = json.loads(event)
+                        if isinstance(event, dict) and event.get("e") == "markPriceUpdate":
                             symbol = event.get("s")
                             price = event.get("p")
-                            if symbol and price and _apply_trade_price(symbol, price):
-                                dirty.add(symbol)
-                    now = time_mod.monotonic()
-                    if dirty and now - last_persist >= 3:
-                        _persist_live_prices(dirty)
-                        dirty.clear()
-                        last_persist = now
-            except Exception as e:
-                print(f"[price-ws] connection/reconnect: {e}")
-            finally:
-                if ws is not None:
-                    try:
-                        ws.close()
-                    except Exception:
-                        pass
-                if dirty:
-                    _persist_live_prices(dirty)
+                            if symbol and price:
+                                ws_last_message = time_mod.monotonic()
+                                _price_monitor_status["last_ws_update"] = datetime.now(timezone.utc).isoformat()
+                                if _apply_trade_price(symbol, price):
+                                    dirty.add(str(symbol).upper())
+                    except (ValueError, TypeError, AttributeError) as parse_error:
+                        print(f"[price-ws] ignored malformed message: {parse_error}")
 
-        # Short REST fallback keeps PnL moving while the stream reconnects.
-        for _ in range(3):
-            if not _monitor_running:
-                break
+                now = time_mod.monotonic()
+                # A connected socket can go quiet without disconnecting. Do not let
+                # that suppress all price updates: use a conservative REST fallback.
+                if now - ws_last_message >= 8 and now - last_rest_poll >= 10:
+                    for symbol in symbols:
+                        price = client.get_mark_price(symbol)
+                        if price is not None and _apply_trade_price(symbol, price):
+                            dirty.add(symbol)
+                    last_rest_poll = now
+                    _price_monitor_status["last_rest_update"] = datetime.now(timezone.utc).isoformat()
+                    _price_monitor_status["state"] = "connected-rest-watchdog"
+                if dirty and now - last_persist >= 3:
+                    _persist_live_prices(dirty)
+                    dirty.clear()
+                    last_persist = now
+
+        except Exception as e:
+            _price_monitor_status.update({
+                "state": "reconnecting", "connected": False, "last_error": str(e)[:240],
+            })
+            print(f"[price-ws] connection/reconnect: {e}")
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            if dirty:
+                try:
+                    _persist_live_prices(dirty)
+                except Exception as persist_error:
+                    print(f"[price-ws] persistence failed: {persist_error}")
+
+        # If the socket cannot connect, continue a low-frequency REST fallback.
+        if _monitor_running and time_mod.monotonic() - last_rest_poll >= 10:
             current_symbols = _open_trade_symbols()
-            if not current_symbols:
-                break
-            dirty = set()
+            rest_dirty = set()
             for symbol in current_symbols:
                 price = client.get_mark_price(symbol)
                 if price is not None and _apply_trade_price(symbol, price):
-                    dirty.add(symbol)
-            if dirty:
-                _persist_live_prices(dirty)
-            time_mod.sleep(2)
+                    rest_dirty.add(symbol)
+            if rest_dirty:
+                try:
+                    _persist_live_prices(rest_dirty)
+                except Exception as persist_error:
+                    print(f"[price-ws] REST persistence failed: {persist_error}")
+            if current_symbols:
+                last_rest_poll = time_mod.monotonic()
+                _price_monitor_status["last_rest_update"] = datetime.now(timezone.utc).isoformat()
+        time_mod.sleep(2)
 
 
 @app.on_event("startup")
@@ -615,6 +658,7 @@ async def create_trade(body: TradeCreate):
     _update_trade_liquidation_fields(trade)
     _trades[tid] = trade
     db.save_trade(trade)
+    print(f"[trades] opened {tid} {sym} {side} entry={body.entry} qty={trade['qty']}")
     _calc_equity()
     db.save_account(_account)
     return {"ok": True, "trade": trade, "duplicate": False, "account": _account}
@@ -697,6 +741,10 @@ async def trigger_scan(background_tasks: BackgroundTasks, top: int = Query(28, g
 @app.get("/health")
 async def health():
     return {"status": "ok", "scanning": _cache["scanning"], "auto_scan": _cache["auto_scan"], "database": db.backend_name()}
+
+@app.get("/api/price-monitor")
+async def api_price_monitor():
+    return dict(_price_monitor_status)
 
 
 @app.get("/", response_class=HTMLResponse)
