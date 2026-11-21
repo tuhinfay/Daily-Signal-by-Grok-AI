@@ -134,7 +134,7 @@ def run_scan(top_n: int = 28):
                     data[tf] = df
             if client.rate_limited:
                 _cache["error"] = "Binance Futures rate limit active; remaining pairs paused and will retry after cooldown."
-                _scan_retry_after = time_mod.monotonic() + 300
+                _pause_scans_for_rate_limit(client)
                 break
             if len(data) < 4:
                 continue
