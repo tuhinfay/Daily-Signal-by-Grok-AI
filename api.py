@@ -287,7 +287,7 @@ def price_monitor_loop():
 
         if websocket is not None:
             streams = "/".join(f"{symbol.lower()}@aggTrade" for symbol in symbols)
-            url = f"wss://fstream.binance.com/stream?streams={streams}"
+            url = f"wss://fstream.binance.com/public/stream?streams={streams}"
             ws = None
             dirty = set()
             last_persist = time_mod.monotonic()
