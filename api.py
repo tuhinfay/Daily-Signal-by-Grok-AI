@@ -800,11 +800,11 @@ function toggleChart(id,sym){
   box.innerHTML='<div class="chart-loading">Loading '+symbol+' chart…</div><iframe title="'+symbol+' TradingView chart" src="'+url+'" loading="eager" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe><div class="chart-fallback">Chart not loading? <a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)+'">Open chart in TradingView</a></div>';
 }
 function cardHTML(s){
-  const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol;
+  const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
   const btn=s.already_added?`<button class="btn dim" disabled>Added</button>`:`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'MED'}</span><span class="tag">${lev?lev+'x':'Leverage N/A'}</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'UNKNOWN'}</span><span class="tag">${lev?lev+'x':'Leverage N/A'}</span></div>
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
