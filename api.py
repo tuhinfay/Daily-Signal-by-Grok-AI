@@ -142,8 +142,11 @@ def _update_trade_liquidation_fields(trade: Dict[str, Any]):
         trade["liquidation_distance_pct"] = round(
             abs(current - price) / current * 100, 3
         ) if current > 0 else None
+        distance = trade["liquidation_distance_pct"]
+        trade["liquidation_risk"] = "HIGH" if distance < 5 else "ELEVATED" if distance < 10 else "NORMAL"
     else:
         trade["liquidation_distance_pct"] = None
+        trade["liquidation_risk"] = "UNKNOWN"
 
 
 def _stats() -> Dict[str, Any]:
@@ -203,6 +206,10 @@ def run_scan(top_n: int = 28):
                 continue
             try:
                 px = client.get_current_price(symbol)
+                if client.rate_limited:
+                    _cache["error"] = "Binance Futures rate limit active; remaining symbols paused."
+                    _pause_scans_for_rate_limit(client)
+                    break
                 max_leverage = client.get_max_leverage(symbol)
                 if px:
                     prices[symbol] = px
@@ -464,6 +471,13 @@ async def set_auto_scan(enabled: bool = Query(True)):
 
 @app.get("/api/analyze/{symbol}")
 async def analyze_one(symbol: str, style: str = Query("day")):
+    if time_mod.monotonic() < _scan_retry_after:
+        retry_after = max(1, int(_scan_retry_after - time_mod.monotonic()))
+        return JSONResponse(
+            {"ok": False, "error": "Binance Futures IP cooldown is active; manual analysis is paused to avoid extending the ban."},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
     sym = symbol.upper().replace("/", "").replace("-", "")
     if not sym.endswith("USDT"):
         sym += "USDT"
@@ -481,6 +495,7 @@ async def analyze_one(symbol: str, style: str = Query("day")):
     for tf in required_tfs:
         df = client.fetch_ohlcv(sym, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
         if client.rate_limited:
+            _pause_scans_for_rate_limit(client)
             retry_after = max(300, int(float(getattr(client, "rate_limit_until", 0.0) or 0.0) - time_mod.time()))
             return JSONResponse(
                 {"ok": False, "error": "Binance Futures has rate-limited this Render IP. Manual analysis will work again after the ban expires; please retry later."},
@@ -496,6 +511,13 @@ async def analyze_one(symbol: str, style: str = Query("day")):
             status_code=503,
         )
     quote_volume_24h = client.get_quote_volume_24h(sym) or 0
+    if client.rate_limited:
+        _pause_scans_for_rate_limit(client)
+        return JSONResponse(
+            {"ok": False, "error": "Binance Futures IP cooldown is active; manual analysis is paused."},
+            status_code=429,
+            headers={"Retry-After": str(max(300, int(client.rate_limit_until - time_mod.time())))},
+        )
     r = engine.analyze_pair(sym, data, volume_24h=quote_volume_24h, style=selected_style)
     px = client.get_mark_price(sym)
     lev = client.get_max_leverage(sym)
