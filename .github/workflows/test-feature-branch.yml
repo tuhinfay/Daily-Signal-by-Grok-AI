@@ -1,0 +1,39 @@
+name: Test feature branch
+
+on:
+  push:
+    branches:
+      - test/feature-fixes
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile Python
+        run: python -m compileall -q .
+      - name: Check embedded frontend JavaScript syntax
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          source = Path("api.py").read_text()
+          match = re.search(r'PAGE = r"""(.*?)"""', source, re.S)
+          if not match:
+              raise SystemExit("PAGE HTML block not found")
+          scripts = re.findall(r"<script>(.*?)</script>", match.group(1), re.S)
+          if not scripts:
+              raise SystemExit("No embedded JavaScript found")
+          Path("/tmp/daily-signal.js").write_text("\n".join(scripts))
+          PY
+          node --check /tmp/daily-signal.js
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
