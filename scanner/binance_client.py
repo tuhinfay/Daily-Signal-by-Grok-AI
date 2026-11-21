@@ -187,9 +187,9 @@ class BinanceClient:
                     candidates.append((clean, volume, last))
             candidates.sort(key=lambda row: row[1], reverse=True)
 
-            # Limit daily-kline lookups to the most liquid contracts to keep API weight bounded.
+            # Check the top 26 contracts by quote volume using their current UTC daily candle (BD 06:00).
             rows = []
-            for clean, volume, last in candidates[:8]:
+            for clean, volume, last in candidates[:26]:
                 if self.rate_limited:
                     break
                 try:
