@@ -1,19 +1,25 @@
 """Binance data fetcher"""
 
 import ccxt
+import os
 import pandas as pd
 from typing import List, Optional, Tuple, Dict
 
 
 class BinanceClient:
     def __init__(self, futures: bool = True):
-        self.exchange = ccxt.binance({
+        api_key = os.environ.get("BINANCE_API_KEY", "")
+        api_secret = os.environ.get("BINANCE_API_SECRET", "")
+        exchange_config = {
             "enableRateLimit": True,
             "options": {"defaultType": "future" if futures else "spot"},
-        })
+        }
+        if api_key and api_secret:
+            exchange_config.update({"apiKey": api_key, "secret": api_secret})
+        self.exchange = ccxt.binance(exchange_config)
         self.futures = futures
         self._markets_loaded = False
-        self._lev_cache: Dict[str, int] = {}
+        self._lev_cache: Dict[str, Optional[int]] = {}
 
     def _ensure_markets(self):
         if not self._markets_loaded:
@@ -23,48 +29,64 @@ class BinanceClient:
             except Exception as e:
                 print("markets load", e)
 
-    def get_max_leverage(self, symbol: str) -> int:
-        """Best-effort max leverage for USDT-M futures symbol."""
-        clean = symbol.replace("/", "").upper()
+    @staticmethod
+    def _clean_symbol(symbol: str) -> str:
+        clean = str(symbol).upper().replace("/", "")
+        if ":USDT" in clean:
+            clean = clean.split(":")[0]
+        return clean
+
+    def _ccxt_symbol(self, symbol: str) -> str:
+        value = str(symbol).upper()
+        if "/" in value:
+            if self.futures and value.endswith("/USDT") and ":USDT" not in value:
+                return value + ":USDT"
+            return value
+        clean = self._clean_symbol(value)
+        if clean.endswith("USDT"):
+            base = clean[:-4]
+            return f"{base}/USDT:USDT" if self.futures else f"{base}/USDT"
+        return value
+
+    def get_max_leverage(self, symbol: str) -> Optional[int]:
+        """Return Binance's verified maximum leverage when leverage tiers are available."""
+        clean = self._clean_symbol(symbol)
         if clean in self._lev_cache:
             return self._lev_cache[clean]
         self._ensure_markets()
-        lev = 20  # safe default
+        maximum = None
+        ccxt_symbol = self._ccxt_symbol(clean)
         try:
-            ccxt_symbol = clean.replace("USDT", "/USDT") if clean.endswith("USDT") else clean
-            m = self.exchange.markets.get(ccxt_symbol) or self.exchange.markets.get(clean)
-            if m:
-                # limits.leverage.max if present
-                limits = (m.get("limits") or {}).get("leverage") or {}
-                if limits.get("max"):
-                    lev = int(limits["max"])
-                info = m.get("info") or {}
-                # binance sometimes exposes brackets
-                if "brackets" in info and info["brackets"]:
-                    try:
-                        lev = max(int(b.get("initialLeverage", lev)) for b in info["brackets"])
-                    except Exception:
-                        pass
-            # major coins often higher on binance futures
-            majors = {"BTCUSDT": 125, "ETHUSDT": 100, "BNBUSDT": 75, "SOLUSDT": 75,
-                      "XRPUSDT": 75, "DOGEUSDT": 75, "ADAUSDT": 75, "LINKUSDT": 75}
-            if clean in majors and majors[clean] > lev:
-                lev = majors[clean]
-            # meme / high vol often 50-75
-            if lev < 50 and any(x in clean for x in ("PEPE", "WIF", "BONK", "FLOKI", "SHIB")):
-                lev = 50
-        except Exception:
-            pass
-        lev = max(1, min(lev, 150))
-        self._lev_cache[clean] = lev
-        return lev
+            market = self.exchange.market(ccxt_symbol)
+            if self.exchange.has.get("fetchMarketLeverageTiers"):
+                tiers = self.exchange.fetch_market_leverage_tiers(ccxt_symbol)
+                values = []
+                for tier in tiers or []:
+                    value = tier.get("maxLeverage")
+                    if value is not None:
+                        values.append(int(float(value)))
+                if values:
+                    maximum = max(values)
+            if maximum is None:
+                leverage_limits = ((market.get("limits") or {}).get("leverage") or {})
+                value = leverage_limits.get("max")
+                if value is not None:
+                    maximum = int(float(value))
+        except Exception as e:
+            print(f"leverage {clean}: {e}")
+        if maximum is not None:
+            maximum = max(1, min(maximum, 150))
+        else:
+            print(f"leverage {clean}: exact maximum unavailable; configure read-only Binance API credentials")
+        self._lev_cache[clean] = maximum
+        return maximum
 
     def get_top_usdt_pairs(self, top_n: int = 30, min_volume: float = 12_000_000) -> List[Tuple[str, float]]:
         try:
             tickers = self.exchange.fetch_tickers()
             usdt_pairs = []
             for symbol, data in tickers.items():
-                clean = symbol.replace("/", "")
+                clean = self._clean_symbol(symbol)
                 if not clean.endswith("USDT"):
                     continue
                 base = clean[:-4]
@@ -91,48 +113,63 @@ class BinanceClient:
         ][:top_n]
 
     def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
-        """Top gainers / losers by 24h % change among liquid USDT pairs."""
+        """Rank liquid USDT-M contracts from the current UTC daily candle (00:00 UTC = 06:00 Bangladesh)."""
         gainers, losers = [], []
         try:
+            self._ensure_markets()
             tickers = self.exchange.fetch_tickers()
-            rows = []
+            candidates = []
             for symbol, data in tickers.items():
-                clean = symbol.replace("/", "")
+                clean = self._clean_symbol(symbol)
                 if not clean.endswith("USDT"):
                     continue
                 base = clean[:-4]
                 if any(x in base for x in ("UP", "DOWN", "BULL", "BEAR", "2L", "2S", "3L", "3S")):
                     continue
-                qv = data.get("quoteVolume") or (data.get("info") or {}).get("quoteVolume") or 0
+                qv = data.get("quoteVolume")
+                if qv is None:
+                    qv = (data.get("info") or {}).get("quoteVolume")
                 try:
-                    vol = float(qv)
-                    ch = data.get("percentage")
-                    if ch is None:
-                        ch = float((data.get("info") or {}).get("priceChangePercent") or 0)
-                    else:
-                        ch = float(ch)
+                    volume = float(qv or 0)
                     last = float(data.get("last") or 0)
                 except Exception:
                     continue
-                if vol < min_volume or last <= 0:
-                    continue
-                rows.append({"symbol": clean, "change": ch, "volume": vol, "price": last})
-            rows.sort(key=lambda x: x["change"], reverse=True)
+                if volume >= min_volume and last > 0:
+                    candidates.append((clean, volume, last))
+            candidates.sort(key=lambda row: row[1], reverse=True)
+
+            # Limit daily-kline lookups to the most liquid contracts to keep API weight bounded.
+            rows = []
+            for clean, volume, last in candidates[:150]:
+                try:
+                    candles = self.exchange.fetch_ohlcv(
+                        self._ccxt_symbol(clean), timeframe="1d", limit=1
+                    )
+                    if not candles:
+                        continue
+                    daily_open = float(candles[-1][1])
+                    if daily_open <= 0:
+                        continue
+                    change = ((last - daily_open) / daily_open) * 100
+                    rows.append({
+                        "symbol": clean,
+                        "change": round(change, 4),
+                        "volume": volume,
+                        "price": last,
+                        "period": "UTC daily candle (BD 06:00)",
+                    })
+                except Exception as e:
+                    print(f"mover daily candle {clean}: {e}")
+            rows.sort(key=lambda row: row["change"], reverse=True)
             gainers = rows[:top_n]
-            losers = list(reversed(rows[-top_n:])) if len(rows) >= top_n else sorted(rows, key=lambda x: x["change"])[:top_n]
+            losers = list(reversed(rows[-top_n:])) if rows else []
         except Exception as e:
             print("movers", e)
         return {"gainers": gainers, "losers": losers}
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 150) -> Optional[pd.DataFrame]:
         try:
-            if "/" in symbol:
-                ccxt_symbol = symbol
-            elif symbol.endswith("USDT:USDT"):
-                # CCXT Binance USD-M futures unified symbols use BASE/USDT:USDT.
-                ccxt_symbol = f"{symbol[:-9]}/USDT:USDT"
-            else:
-                ccxt_symbol = symbol.replace("USDT", "/USDT") if symbol.endswith("USDT") else symbol
+            ccxt_symbol = self._ccxt_symbol(symbol)
             ohlcv = self.exchange.fetch_ohlcv(ccxt_symbol, timeframe=timeframe, limit=limit)
             if not ohlcv or len(ohlcv) < 30:
                 return None
@@ -148,7 +185,26 @@ class BinanceClient:
 
     def get_current_price(self, symbol: str) -> Optional[float]:
         try:
-            ccxt_symbol = symbol.replace("USDT", "/USDT") if "/" not in symbol else symbol
-            return float(self.exchange.fetch_ticker(ccxt_symbol)["last"])
-        except Exception:
+            ccxt_symbol = self._ccxt_symbol(symbol)
+            value = self.exchange.fetch_ticker(ccxt_symbol).get("last")
+            return float(value) if value is not None else None
+        except Exception as e:
+            print(f"ticker {symbol}: {e}")
             return None
+
+    def get_market_liquidity(self, symbol: str) -> str:
+        """Classify liquidity from the contract's current 24h USDT quote turnover."""
+        try:
+            ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
+            quote_volume = ticker.get("quoteVolume")
+            if quote_volume is None:
+                quote_volume = (ticker.get("info") or {}).get("quoteVolume")
+            volume = float(quote_volume or 0)
+            if volume <= 0:
+                return "UNKNOWN"
+            return ("VERY HIGH" if volume >= 1e8 else
+                    "HIGH" if volume >= 4e7 else
+                    "MED" if volume >= 1.2e7 else "LOW")
+        except Exception as e:
+            print(f"liquidity {symbol}: {e}")
+            return "UNKNOWN"
