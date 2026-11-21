@@ -336,7 +336,8 @@ def startup():
     db.init_db(getattr(config, "DEMO_BALANCE", 10000))
     _account = db.load_account()
     _trades = db.load_trades()
-    _cache["auto_scan"] = db.get_meta("auto_scan", "1") != "0"
+    # Keep the isolated test service idle until the operator explicitly starts a scan.
+    _cache["auto_scan"] = db.get_meta("auto_scan", "0") != "0"
     _monitor_running = True
     threading.Thread(target=auto_scan_loop, daemon=True).start()
     threading.Thread(target=price_monitor_loop, daemon=True).start()
