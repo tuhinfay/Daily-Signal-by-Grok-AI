@@ -110,32 +110,28 @@ def run_scan(top_n: int = 28):
         signals, prices = [], {}
         for symbol, vol in pairs:
             data = {}
-            for tf in ("15m", "1h", "4h", "1d"):
+            for tf in ("5m", "15m", "1h", "4h", "1d"):
                 df = client.fetch_ohlcv(symbol, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
                 if df is not None and len(df) > 30:
                     data[tf] = df
-            if len(data) < 3:
+            if len(data) < 4:
                 continue
             try:
-                r = engine.analyze_pair(symbol, data, volume_24h=vol)
-                if not r:
-                    continue
                 px = client.get_current_price(symbol)
-                r["market_price"] = px or r["entry"]
+                max_leverage = client.get_max_leverage(symbol)
                 if px:
                     prices[symbol] = px
-                r["max_leverage"] = client.get_max_leverage(symbol)
-                styles = []
-                if r.get("adx", 0) >= 22 and r.get("score", 0) >= 58:
-                    styles.append("day")
-                if r.get("score", 0) >= 55:
-                    styles.append("scalp")
-                if r.get("bias_1d") == r.get("bias_4h") and r.get("bias_1d") != "neutral":
-                    styles.append("swing")
-                r["styles"] = styles or ["day"]
-                r["summary"] = f"{r.get('setup','')} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
-                signals.append(r)
-            except Exception:
+                for style_name in ("scalp", "day", "swing"):
+                    r = engine.analyze_pair(symbol, data, volume_24h=vol, style=style_name)
+                    if not r:
+                        continue
+                    r["market_price"] = px or r["entry"]
+                    r["max_leverage"] = max_leverage
+                    r["styles"] = [style_name]
+                    r["summary"] = f"{r.get('setup','')} · {style_name.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
+                    signals.append(r)
+            except Exception as e:
+                print(f"scan {symbol}: {e}")
                 continue
 
         signals.sort(key=lambda x: x["score"], reverse=True)
@@ -167,72 +163,162 @@ def auto_scan_loop():
             time_mod.sleep(3)
 
 
+def _open_trade_symbols():
+    return sorted({
+        str(t.get("symbol", "")).upper().replace("/", "").split(":")[0]
+        for t in _trades.values()
+        if t.get("status") == "OPEN" and t.get("symbol")
+    })
+
+
+def _apply_trade_price(symbol: str, price: float) -> bool:
+    changed = False
+    symbol = str(symbol).upper().replace("/", "").split(":")[0]
+    try:
+        price = float(price)
+    except Exception:
+        return False
+    if price <= 0:
+        return False
+
+    for t in list(_trades.values()):
+        trade_symbol = str(t.get("symbol", "")).upper().replace("/", "").split(":")[0]
+        if t.get("status") != "OPEN" or trade_symbol != symbol:
+            continue
+        if t.get("current_price") == price:
+            continue
+        t["current_price"] = price
+        side = t["side"].upper()
+        entry = float(t.get("entry") or 0)
+        qty = float(t.get("qty") or 0)
+        lev = float(t.get("leverage") or 1)
+        if entry <= 0 or qty <= 0:
+            continue
+
+        trail = float(t.get("trailing_pct") or 0)
+        if trail > 0:
+            if side == "LONG":
+                peak = max(float(t.get("peak_price") or entry), price)
+                t["peak_price"] = peak
+                trail_sl = peak * (1 - trail / 100)
+                if trail_sl > float(t.get("stop_loss") or 0):
+                    t["stop_loss"] = round(trail_sl, 8)
+            else:
+                trough = min(float(t.get("trough_price") or entry), price)
+                t["trough_price"] = trough
+                trail_sl = trough * (1 + trail / 100)
+                if trail_sl < float(t.get("stop_loss") or float("inf")):
+                    t["stop_loss"] = round(trail_sl, 8)
+
+        previous_hit = t.get("hit")
+        if side == "LONG":
+            pnl = (price - entry) * qty
+            t["pnl_pct"] = round(((price - entry) / entry) * 100 * lev, 3)
+            if price <= float(t.get("stop_loss") or 0):
+                t["hit"] = "SL"
+            elif t.get("tp2") and price >= float(t["tp2"]):
+                t["hit"] = "TP2"
+            elif t.get("tp1") and price >= float(t["tp1"]):
+                t["hit"] = "TP1"
+        else:
+            pnl = (entry - price) * qty
+            t["pnl_pct"] = round(((entry - price) / entry) * 100 * lev, 3)
+            if price >= float(t.get("stop_loss") or float("inf")):
+                t["hit"] = "SL"
+            elif t.get("tp2") and price <= float(t["tp2"]):
+                t["hit"] = "TP2"
+            elif t.get("tp1") and price <= float(t["tp1"]):
+                t["hit"] = "TP1"
+
+        t["unrealized_pnl"] = round(pnl, 4)
+        t["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if t.get("hit") and t.get("hit") != previous_hit:
+            t["needs_alert"] = True
+            t["alert_text"] = f"{t['symbol']} {t['hit']} hit. PnL {t['pnl_pct']}%"
+        _cache["prices"][symbol] = price
+        changed = True
+
+    if changed:
+        _calc_equity()
+    return changed
+
+
+def _persist_live_prices(symbols):
+    for t in list(_trades.values()):
+        trade_symbol = str(t.get("symbol", "")).upper().replace("/", "").split(":")[0]
+        if t.get("status") == "OPEN" and trade_symbol in symbols:
+            db.save_trade(t)
+    _calc_equity()
+    db.save_account(_account)
+
+
 def price_monitor_loop():
+    try:
+        import websocket
+    except Exception as e:
+        websocket = None
+        print(f"[price-ws] websocket-client unavailable; REST fallback only: {e}")
+
     client = BinanceClient(futures=True)
     while _monitor_running:
-        try:
-            changed = False
-            for t in list(_trades.values()):
-                if t.get("status") != "OPEN":
-                    continue
-                price = client.get_current_price(t["symbol"])
-                if price is None:
-                    continue
-                t["current_price"] = price
-                _cache["prices"][t["symbol"]] = price
-                side = t["side"].upper()
-                entry, qty, lev = t["entry"], t.get("qty") or 0, t.get("leverage") or 1
+        symbols = _open_trade_symbols()
+        if not symbols:
+            time_mod.sleep(1)
+            continue
 
-                # trailing stop
-                trail = t.get("trailing_pct") or 0
-                if trail and trail > 0:
-                    if side == "LONG":
-                        peak = max(t.get("peak_price") or entry, price)
-                        t["peak_price"] = peak
-                        trail_sl = peak * (1 - trail / 100)
-                        if trail_sl > t["stop_loss"]:
-                            t["stop_loss"] = round(trail_sl, 6)
-                            changed = True
-                    else:
-                        trough = min(t.get("trough_price") or entry, price)
-                        t["trough_price"] = trough
-                        trail_sl = trough * (1 + trail / 100)
-                        if trail_sl < t["stop_loss"]:
-                            t["stop_loss"] = round(trail_sl, 6)
-                            changed = True
+        if websocket is not None:
+            streams = "/".join(f"{symbol.lower()}@aggTrade" for symbol in symbols)
+            url = f"wss://fstream.binance.com/stream?streams={streams}"
+            ws = None
+            dirty = set()
+            last_persist = time_mod.monotonic()
+            try:
+                ws = websocket.create_connection(url, timeout=2)
+                print(f"[price-ws] connected for {len(symbols)} open symbols")
+                while _monitor_running and symbols == _open_trade_symbols():
+                    try:
+                        raw = ws.recv()
+                    except websocket.WebSocketTimeoutException:
+                        raw = None
+                    if raw:
+                        message = json.loads(raw)
+                        event = message.get("data", message)
+                        if event.get("e") == "aggTrade":
+                            symbol = event.get("s")
+                            price = event.get("p")
+                            if symbol and price and _apply_trade_price(symbol, price):
+                                dirty.add(symbol)
+                    now = time_mod.monotonic()
+                    if dirty and now - last_persist >= 3:
+                        _persist_live_prices(dirty)
+                        dirty.clear()
+                        last_persist = now
+            except Exception as e:
+                print(f"[price-ws] connection/reconnect: {e}")
+            finally:
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                if dirty:
+                    _persist_live_prices(dirty)
 
-                prev_hit = t.get("hit")
-                if side == "LONG":
-                    pnl = (price - entry) * qty
-                    t["pnl_pct"] = round(((price - entry) / entry) * 100 * lev, 2)
-                    if price <= t["stop_loss"]:
-                        t["hit"] = "SL"
-                    elif t.get("tp2") and price >= t["tp2"]:
-                        t["hit"] = "TP2"
-                    elif price >= t["tp1"]:
-                        t["hit"] = "TP1"
-                else:
-                    pnl = (entry - price) * qty
-                    t["pnl_pct"] = round(((entry - price) / entry) * 100 * lev, 2)
-                    if price >= t["stop_loss"]:
-                        t["hit"] = "SL"
-                    elif t.get("tp2") and price <= t["tp2"]:
-                        t["hit"] = "TP2"
-                    elif price <= t["tp1"]:
-                        t["hit"] = "TP1"
-                t["unrealized_pnl"] = round(pnl, 2)
-                if t.get("hit") and t.get("hit") != prev_hit:
-                    t["needs_alert"] = True
-                    t["alert_text"] = f"{t['symbol']} {t['hit']} hit. PnL {t['pnl_pct']}%"
-                    changed = True
-                    db.save_trade(t)
-
-            _calc_equity()
-            if changed:
-                db.save_account(_account)
-        except Exception as e:
-            print("mon", e)
-        time_mod.sleep(8)
+        # Short REST fallback keeps PnL moving while the stream reconnects.
+        for _ in range(3):
+            if not _monitor_running:
+                break
+            current_symbols = _open_trade_symbols()
+            if not current_symbols:
+                break
+            dirty = set()
+            for symbol in current_symbols:
+                price = client.get_current_price(symbol)
+                if price is not None and _apply_trade_price(symbol, price):
+                    dirty.add(symbol)
+            if dirty:
+                _persist_live_prices(dirty)
+            time_mod.sleep(2)
 
 
 @app.on_event("startup")
@@ -286,31 +372,32 @@ async def set_auto_scan(enabled: bool = Query(True)):
 
 
 @app.get("/api/analyze/{symbol}")
-async def analyze_one(symbol: str):
+async def analyze_one(symbol: str, style: str = Query("day")):
     sym = symbol.upper().replace("/", "").replace("-", "")
     if not sym.endswith("USDT"):
         sym += "USDT"
+    selected_style = style if style in ("scalp", "day", "swing") else "day"
     client = BinanceClient(futures=True)
     engine = SignalEngine()
     data = {}
-    for tf in ("15m", "1h", "4h", "1d"):
+    for tf in ("5m", "15m", "1h", "4h", "1d"):
         df = client.fetch_ohlcv(sym, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
         if df is not None and len(df) > 30:
             data[tf] = df
-    if len(data) < 3:
-        return JSONResponse({"ok": False, "error": "No data for " + sym}, status_code=404)
-    r = engine.analyze_pair(sym, data, volume_24h=0)
+    if len(data) < 4:
+        return JSONResponse({"ok": False, "error": "Insufficient Binance Futures candles for " + sym}, status_code=404)
+    r = engine.analyze_pair(sym, data, volume_24h=0, style=selected_style)
     px = client.get_current_price(sym)
     lev = client.get_max_leverage(sym)
-    # try volume from movers/tickers roughly
-    liq = "MED"
+    liq = client.get_market_liquidity(sym)
     if not r:
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
-                "max_leverage": lev, "liquidity": liq, "message": "No confluence signal now"}
+                "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
     r["market_price"] = px or r["entry"]
     r["max_leverage"] = lev
-    r["styles"] = ["day", "scalp", "swing"]
-    r["summary"] = f"{r.get('setup','')} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
+    r["liquidity"] = liq
+    r["styles"] = [selected_style]
+    r["summary"] = f"{r.get('setup','')} · {selected_style.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
     return {"ok": True, "signal": r}
 
 
@@ -350,7 +437,8 @@ async def create_trade(body: TradeCreate):
     side = body.side.upper()
     client = BinanceClient(futures=True)
     max_lev = client.get_max_leverage(sym)
-    lev = max(1, min(int(body.leverage or max_lev), max_lev, 150))
+    leverage_cap = max_lev or 20
+    lev = max(1, min(int(body.leverage or leverage_cap), leverage_cap, 150))
     margin_mode = (body.margin_mode or "CROSS").upper()
     if margin_mode not in ("CROSS", "ISOLATED"):
         margin_mode = "CROSS"
@@ -393,18 +481,14 @@ async def create_trade(body: TradeCreate):
     scale_mode = body.scale_mode if body.scale_mode in ("flat", "ascending") else None
     scale_orders = int(body.scale_orders or 0) if scale_mode else 0
 
-    # liquidity label from cache signals or movers
-    liq = "MED"
-    for s in _cache.get("signals", []):
-        if s.get("symbol") == sym:
-            liq = s.get("liquidity") or liq
-            break
+    # Always derive liquidity from this contract's current Binance Futures turnover.
+    liq = client.get_market_liquidity(sym)
 
     tid = str(uuid.uuid4())[:8]
     trade = {
         "id": tid, "symbol": sym, "side": side,
         "entry": body.entry, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
-        "leverage": lev, "max_leverage": max_lev, "margin_mode": margin_mode,
+        "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
         "trailing_pct": None, "peak_price": body.entry, "trough_price": body.entry,
@@ -551,7 +635,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
 .actions .btn{flex:1;min-width:80px}
 .chartbox{display:none;margin-top:8px;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
-.chartbox iframe{width:100%;height:210px;border:0;display:block}
+.chartbox iframe{width:100%;height:340px;border:0;display:block}.chart-loading,.chart-fallback{padding:8px 10px;color:var(--mut);font-size:11px}.chart-fallback a{color:var(--cyan)}
 .empty{text-align:center;padding:30px 12px;color:var(--mut)}
 .list-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
 .list-row:last-child{border-bottom:0}
@@ -613,7 +697,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <section id="tab-trades" style="display:none">
   <div class="stats" id="tradeStats"></div>
-  <div class="note">Live prices every few sec. Close to stop alerts.</div>
+  <div class="note">Live Binance Futures prices and PNL. Updates as trades occur.</div>
   <div id="tradeList"></div>
 </section>
 
@@ -706,14 +790,21 @@ function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
   <div class="metric"><label>Total PnL</label><b class="${(st.total_pnl||0)>=0?'up':'dn'}">${(st.total_pnl||0)>=0?'+':''}$${fmt(st.total_pnl||0)}</b></div>
   <div class="metric"><label>Open</label><b>${st.open||0}</b></div>`;}
 function syncSizeMode(){const m=m_mode.value;box_amount.style.display=m==='amount'?'block':'none';box_margin.style.display=m==='margin'?'block':'none';box_risk.style.display=m==='risk'?'block':'none';box_qty.style.display=m==='qty'?'block':'none';}
-function tv(sym){return 'BINANCE:'+sym+'.P';}
-function toggleChart(id,sym){const box=document.getElementById(id);if(!box)return;if(box.style.display==='block'){box.style.display='none';box.innerHTML='';return;}box.style.display='block';box.innerHTML=`<iframe src="https://s.tradingview.com/widgetembed/?symbol=${tv(sym)}&interval=15&hidesidetoolbar=1&hidetoptoolbar=1&theme=dark&style=1" loading="lazy"></iframe>`;}
+function tv(sym){return 'BINANCE:'+String(sym).replace('/','').replace(':USDT','')+'.P';}
+function toggleChart(id,sym){
+  const box=document.getElementById(id);if(!box)return;
+  if(box.style.display==='block'){box.style.display='none';box.innerHTML='';return;}
+  const symbol=tv(sym);
+  const url='https://www.tradingview.com/widgetembed/?symbol='+encodeURIComponent(symbol)+'&interval=15&hidesidetoolbar=1&hidetoptoolbar=1&theme=dark&style=1&withdateranges=1&allow_symbol_change=1';
+  box.style.display='block';
+  box.innerHTML='<div class="chart-loading">Loading '+symbol+' chart…</div><iframe title="'+symbol+' TradingView chart" src="'+url+'" loading="eager" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe><div class="chart-fallback">Chart not loading? <a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)+'">Open chart in TradingView</a></div>';
+}
 function cardHTML(s){
-  const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage||20;const cid='ch_'+s.symbol;
+  const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol;
   const btn=s.already_added?`<button class="btn dim" disabled>Added</button>`:`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'MED'}</span><span class="tag">${lev}x</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'MED'}</span><span class="tag">${lev?lev+'x':'Leverage N/A'}</span></div>
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · 1D ${s.bias_1d||'—'} · 4H ${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
@@ -751,7 +842,7 @@ async function analyzeManual(){
   let s=(symIn.value||'').trim().toUpperCase().replace('/','').replace('-','');
   if(!s){toast('Enter symbol');return;} if(!s.endsWith('USDT'))s+='USDT';
   toast('Analyzing '+s); pinManual=true;
-  const d=await(await fetch('/api/analyze/'+s)).json();
+  const d=await(await fetch('/api/analyze/'+s+'?style='+(style==='all'?'day':style))).json();
   const list=document.getElementById('signalList');
   if(!d.ok){list.innerHTML=`<div class="empty">${d.error||'Failed'}</div>`;return;}
   if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'—'} · max ${d.max_leverage||'—'}x</div><div class="empty">${d.message||'No signal'}</div>
@@ -760,12 +851,12 @@ async function analyzeManual(){
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
 }
 function openModal(s){
-  mTitle.textContent=s.symbol+' · '+(s.liquidity||'MED');
+  mTitle.textContent=s.symbol+' · '+(s.liquidity||'UNKNOWN');
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent='max '+ml+'x';
-  m_liq.value=s.liquidity||'MED'; m_mode.value='amount'; syncSizeMode(); m_amount.value='';
+  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=s.max_leverage?'verified max '+ml+'x':'safe 20x cap · verified max unavailable';
+  m_liq.value=s.liquidity||'UNKNOWN'; m_mode.value='amount'; syncSizeMode(); m_amount.value='';
   modalBg.style.display='flex';
 }
 function closeModal(){modalBg.style.display='none';}
@@ -790,7 +881,7 @@ async function loadTrades(){
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
         <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
-        <span class="tag">${t.liquidity||'MED'}</span>${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
+        <span class="tag">${t.liquidity||'UNKNOWN'}</span>${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
       <div class="vals">
@@ -826,7 +917,7 @@ async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json(
 loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
-setInterval(()=>{loadTrades();},8000); // live trades always
+setInterval(()=>{loadTrades();},1000); // UI follows Binance trade stream updates
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
 </body>
