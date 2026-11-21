@@ -1009,6 +1009,77 @@ function openModal(s){
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=s.max_leverage?'verified max '+ml+'x':'safe 20x cap · verified max unavailable';
   m_liq.value=s.quote_volume_24h?'
+function closeModal(){modalBg.style.display='none';}
+async function submitTrade(){
+  const mode=m_mode.value;
+  const body={symbol:m_symbol.value,side:m_side.value,entry:+m_entry.value,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
+  if(mode==='amount') body.amount_usd=+m_amount.value||0;
+  if(mode==='margin') body.margin_usd=+m_margin.value||0;
+  if(mode==='risk') body.risk_pct=+m_risk.value||1;
+  if(mode==='qty') body.quantity=+m_qty.value||0;
+  const d=await(await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(d.ok){closeModal();toast(d.duplicate?'Already open':'Trade opened');speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;loadSignals();showTab('trades');loadTrades();}
+  else toast(d.error||'Failed');
+}
+async function loadTrades(){
+  const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
+  const open=(d.trades||[]).filter(t=>t.status==='OPEN');
+  const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
+  let h='';
+  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
+    const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
+    return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
+      <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
+        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
+        <span class="tag">24h ${t.quote_volume_24h?fmt(t.quote_volume_24h):'—'}</span>${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
+        ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
+        <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
+      <div class="vals">
+        <div><em>Entry</em><strong>${t.entry}</strong></div>
+        <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
+        <div><em>TP1</em><strong>${t.tp1}</strong></div>
+        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
+        <div><em>Qty</em><strong>${t.qty}</strong></div>
+        <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
+        <div><em>Est. Liquidation</em><strong>${t.liquidation_price??'—'}</strong></div>
+        <div><em>Liq. Risk / Distance</em><strong>${t.liquidation_distance_pct!=null?t.liquidation_distance_pct+'%':'—'}</strong></div>
+        <div><em>Trail</em><strong>${t.trailing_pct?t.trailing_pct+'%':'—'}</strong></div>
+      </div>
+      <div class="actions">
+        <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
+        <button class="btn dim" onclick="dcaPrompt('${t.id}')">DCA</button>
+        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.trailing_pct||0})">Trail</button>
+        <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
+        <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
+      </div>
+      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
+  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · ${t.hit||'CLOSED'}</span>
+    <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
+  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
+}
+async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
+async function dcaPrompt(id){const v=prompt('DCA Amount USDT (notional)');if(!v)return;const d=await(await fetch('/api/trades/'+id+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:+v})})).json();if(d.ok){toast('DCA added');loadTrades();}else toast(d.error||'DCA failed');}
+async function trailPrompt(id,cur){const v=prompt('Trailing stop % (e.g. 1.5). 0 to disable',cur||'1');if(v===null)return;const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trailing_pct:+v})})).json();if(d.ok){toast('Trailing updated');loadTrades();}}
+async function editLevels(id,sl,tp1,tp2){const nsl=prompt('Stop loss',sl);if(nsl===null)return;const n1=prompt('TP1',tp1);if(n1===null)return;const n2=prompt('TP2 (optional)',tp2||'');const body={stop_loss:+nsl,tp1:+n1};if(n2)body.tp2=+n2;const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){toast('Levels updated');loadTrades();}}
+function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
+async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
+async function resetAcc(bal){if(!confirm('Reset to $'+bal+'?'))return;const d0=await(await fetch('/api/trades')).json();for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN'))await fetch('/api/trades/'+t.id+'/close',{method:'POST'});const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();if(d.ok){setAcc(d.account);toast('Reset');}}
+async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
+loadSignals();
+setInterval(()=>{if(!pinManual)loadSignals();},20000);
+setInterval(checkAlerts,10000);
+setInterval(()=>{loadTrades();},1000); // UI follows Binance trade stream updates
+setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
+</script>
+</body>
+</html>
+"""
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)
++fmt(s.quote_volume_24h):'Unavailable'; m_mode.value='amount'; syncSizeMode(); m_amount.value='';
 }
 function closeModal(){modalBg.style.display='none';}
 async function submitTrade(){
