@@ -975,7 +975,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <section id="tab-trades" style="display:none">
   <div class="stats" id="tradeStats"></div>
-  <div class="note">Live Binance Futures prices and PNL. Updates as trades occur.</div>
+  <div class="note">HEDGE MODE · SIMULATED — একই symbol-এ LONG ও SHORT আলাদা position. Live mark price, estimated liquidation ও PnL. <button class="btn dim" style="float:right;padding:4px 8px" onclick="clearTradeHistory()">Clear History</button></div>
   <div id="tradeList"></div>
 </section>
 
@@ -1006,7 +1006,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <h3 id="mTitle">Open Trade</h3>
     <input type="hidden" id="m_symbol">
     <div class="row2">
-      <div><label>Side</label><select id="m_side"><option value="LONG">LONG / BUY</option><option value="SHORT">SHORT / SELL</option></select></div>
+      <div><label>Side</label><select id="m_side"><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select></div>
       <div><label>Margin mode</label><select id="m_mm"><option value="CROSS">Cross</option><option value="ISOLATED">Isolated</option></select></div>
     </div>
     <div class="row2">
@@ -1095,10 +1095,10 @@ function toggleChart(id,sym){
 }
 function cardHTML(s){
   const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
-  const btn=s.already_added?`<button class="btn dim" disabled>Added</button>`:`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
+  const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>${s.already_added?"Add / DCA":"Add Trade"}</button>`;
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'UNKNOWN'}</span><span class="tag">${lev?lev+'x':'Leverage N/A'}</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'UNKNOWN'}</span><span class="tag">${lev?lev+'x':'Max leverage unavailable'}</span></div>
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
@@ -1183,19 +1183,21 @@ async function loadTrades(){
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
       <div class="vals">
-        <div><em>Entry</em><strong>${t.entry}</strong></div>
-        <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>Average Entry</em><strong>${fmt(t.entry)}</strong></div>
+        <div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
+        <div><em>Est. Liq. Price</em><strong>${t.liquidation_price?("~"+fmt(t.liquidation_price)):"—"}</strong></div>
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
         <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        <div><em>Trail</em><strong>${trail}</strong></div>
+        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"—":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
+        <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
       </div>
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
-        <button class="btn dim" onclick="dcaPrompt('${t.id}')">DCA</button>
-        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0})">Trail</button>
+        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
         <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
