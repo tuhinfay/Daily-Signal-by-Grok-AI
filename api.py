@@ -748,12 +748,15 @@ async def api_trade_preview(body: TradeCreate):
     current = float(market or entry)
     distance = abs(current-liq)/current*100 if liq and current > 0 else None
     risk = ("HIGH" if distance <= 5 else "MEDIUM" if distance <= 10 else "LOW") if distance is not None else "UNKNOWN"
+    no_liquidation_price = liq is None and str(body.margin_mode or "CROSS").upper() == "CROSS"
+    if no_liquidation_price:
+        risk = "SAFE"
     return {"ok": True, "entry": round(entry, 8), "market_price": market,
             "quantity": round(qty, 8), "notional": round(qty*entry, 2),
             "margin": round(qty*entry/lev, 2), "leverage": lev,
             "liquidation_price": round(liq, 8) if liq else None,
             "liquidation_distance_pct": round(distance, 2) if distance is not None else None,
-            "liquidation_risk": risk, "estimate": True}
+            "liquidation_risk": risk, "no_liquidation_price": no_liquidation_price, "estimate": True}
 
 
 @app.get("/api/alerts")
@@ -842,7 +845,10 @@ async def create_trade(body: TradeCreate):
         "dca_count": 0,
     }
     if order_type == "LIMIT" and scale_mode and scale_orders >= 2:
-        market_price = float(_cache.get("prices", {}).get(sym) or entry_price)
+        live_scale_price = client.get_current_price(sym)
+        market_price = float(live_scale_price or _cache.get("prices", {}).get(sym) or 0)
+        if market_price <= 0:
+            return JSONResponse({"ok": False, "error": "Live market price unavailable; cannot calculate distinct scaled limit prices"}, status_code=503)
         if market_price > 0 and ((side == "LONG" and entry_price >= market_price) or (side == "SHORT" and entry_price <= market_price)):
             return JSONResponse({"ok": False, "error": "Scaled LONG limit must be below market; SHORT limit must be above market"}, status_code=400)
         weights = [1.0 / scale_orders] * scale_orders
@@ -1239,7 +1245,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <div id="box_qty" style="display:none"><label>Quantity</label><input type="number" id="m_qty" step="any" oninput="updateOrderPreview()"></div>
     <div class="row2">
       <div><label>Scaled Order</label><select id="m_scale" onchange="updateOrderPreview()"><option value="">None</option><option value="flat">Equal Split</option><option value="ascending">Ascending Size</option></select></div>
-      <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="2" max="50" value="2" oninput="updateOrderPreview()"></div>
+      <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="2" max="50" placeholder="Set manually" oninput="updateOrderPreview()"></div>
     </div>
     <div id="order_preview"></div><div id="liq_preview" class="hint" aria-live="polite">Estimated liquidation preview</div><div id="scale_preview" class="scale-preview" style="display:none"></div>
     
@@ -1282,8 +1288,8 @@ function updateOrderPreview(){
  else if(mode==='risk'){const bal=+(sBal.textContent||'').replace(/[^0-9.]/g,'')||10000;const risk=(+m_risk.value||1)/100*bal,dist=Math.abs(px-(+m_sl.value||px));notional=dist>0?risk/dist*px:0;}
  const qty=px>0?notional/px:0,margin=lev>0?notional/lev:0;
  order_preview.textContent='Position Value: $'+fmt(notional)+' USDT | Initial Margin: $'+fmt(margin)+' USDT | Quantity: '+qty.toFixed(6);
- const n=Math.max(2,Math.min(50,parseInt(m_scale_n.value||'2',10)||2)),sm=m_scale.value,sp=document.getElementById('scale_preview');
- if(sm&&notional>0&&px>0){
+ const n=parseInt(m_scale_n.value||'',10),sm=m_scale.value,sp=document.getElementById('scale_preview');
+ if(sm&&Number.isInteger(n)&&n>=2&&n<=50&&notional>0&&px>0){
    const market=+(m_mkt.value||px),rows=[];
    for(let i=0;i<n;i++){
      const weight=sm==='ascending'?(i+1)/(n*(n+1)/2):1/n;
@@ -1305,7 +1311,7 @@ function updateOrderPreview(){
      else pb.risk_pct=+m_risk.value||1;
      const res=await fetch('/api/trade-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pb)});
      const data=await res.json();
-     liq_preview.textContent=data.ok?'Estimated Liquidation: '+(data.liquidation_price?fmt(data.liquidation_price)+' USDT':'Unavailable')+' · '+data.liquidation_risk+' · '+(data.liquidation_distance_pct==null?'—':data.liquidation_distance_pct+'%')+' distance (estimate)':(data.error||'Liquidation preview unavailable');
+     liq_preview.textContent=data.ok?(data.liquidation_price?'Estimated Liquidation: '+fmt(data.liquidation_price)+' USDT · '+data.liquidation_risk+' · '+(data.liquidation_distance_pct==null?'—':data.liquidation_distance_pct+'%')+' distance (estimate)':(data.no_liquidation_price?'No liquidation price at current cross equity · SAFE':'Liquidation estimate unavailable · check margin/size')):(data.error||'Liquidation preview unavailable');
    }catch(e){liq_preview.textContent='Liquidation preview unavailable';}
  },350);
 }
@@ -1374,7 +1380,7 @@ function openModal(s){
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=''; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; toggleOrderType(); syncSizeMode();
+  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=''; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
 function closeModal(){modalBg.style.display='none';}
@@ -1394,8 +1400,8 @@ async function submitTrade(){
   if(mode==='margin')body.margin_usd=+m_margin.value;
   if(mode==='risk')body.risk_pct=+m_risk.value||1;
   if(mode==='qty')body.quantity=+m_qty.value;
-  if(body.scale_mode&&body.scale_orders>=2&&typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
-  if(body.scale_mode&&body.scale_orders>50){toast('Maximum 50 scaled orders');return;}
+  if(body.scale_mode&&typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
+  if(body.scale_mode&&(!Number.isInteger(body.scale_orders)||body.scale_orders<2||body.scale_orders>50)){toast('Set number of scaled orders (2–50)');return;}
   if(body.scale_mode&&body.scale_orders>=2&&!confirm('Place '+body.scale_orders+' separate pending orders?'))return;
   submitBtn.disabled=true;submitBtn.textContent='Placing…';
   try{
