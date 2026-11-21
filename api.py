@@ -422,6 +422,9 @@ def startup():
     db.init_db(getattr(config, "DEMO_BALANCE", 10000))
     _account = db.load_account()
     _trades = db.load_trades()
+    for existing_trade in _trades.values():
+        if existing_trade.get("status") == "OPEN":
+            _update_trade_liquidation_fields(existing_trade)
     # Restore the user's saved preference; auto-scan state must not be reset on deploy.
     try:
         _cache["auto_scan"] = db.get_meta("auto_scan", "1") == "1"
