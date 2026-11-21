@@ -35,6 +35,11 @@ def _pause_scans_for_rate_limit(client):
     until = float(getattr(client, "rate_limit_until", 0.0) or 0.0)
     remaining = max(300.0, until - time_mod.time())
     _scan_retry_after = max(_scan_retry_after, time_mod.monotonic() + remaining)
+    try:
+        if until > 0:
+            db.set_meta("binance_ban_until", str(max(until, time_mod.time() + remaining)))
+    except Exception as e:
+        print(f"[binance] cooldown persistence failed: {e}")
 
 
 class TradeCreate(BaseModel):
@@ -289,8 +294,8 @@ def price_monitor_loop():
             continue
 
         if websocket is not None:
-            streams = "/".join(f"{symbol.lower()}@aggTrade" for symbol in symbols)
-            url = f"wss://fstream.binance.com/public/stream?streams={streams}"
+            streams = "/".join(f"{symbol.lower()}@markPrice@1s" for symbol in symbols)
+            url = f"wss://fstream.binance.com/market/stream?streams={streams}"
             ws = None
             dirty = set()
             last_persist = time_mod.monotonic()
@@ -305,7 +310,7 @@ def price_monitor_loop():
                     if raw:
                         message = json.loads(raw)
                         event = message.get("data", message)
-                        if event.get("e") == "aggTrade":
+                        if event.get("e") == "markPriceUpdate":
                             symbol = event.get("s")
                             price = event.get("p")
                             if symbol and price and _apply_trade_price(symbol, price):
@@ -335,7 +340,7 @@ def price_monitor_loop():
                 break
             dirty = set()
             for symbol in current_symbols:
-                price = client.get_current_price(symbol)
+                price = client.get_mark_price(symbol)
                 if price is not None and _apply_trade_price(symbol, price):
                     dirty.add(symbol)
             if dirty:
@@ -352,7 +357,13 @@ def startup():
     # Restore the user's saved preference; auto-scan state must not be reset on deploy.
     try:
         _cache["auto_scan"] = db.get_meta("auto_scan", "1") == "1"
-    except Exception:
+        saved_ban_until = float(db.get_meta("binance_ban_until", "0") or 0)
+        if saved_ban_until > time_mod.time():
+            global _scan_retry_after
+            _scan_retry_after = time_mod.monotonic() + (saved_ban_until - time_mod.time())
+            print(f"[binance] persisted cooldown active for {int(saved_ban_until - time_mod.time())}s")
+    except Exception as e:
+        print(f"[startup] preference/cooldown restore failed: {e}")
         _cache["auto_scan"] = True
     _monitor_running = True
     threading.Thread(target=auto_scan_loop, daemon=True).start()
@@ -399,6 +410,9 @@ async def set_auto_scan(enabled: bool = Query(True)):
 
 @app.get("/api/analyze/{symbol}")
 async def analyze_one(symbol: str, style: str = Query("day")):
+    if time_mod.monotonic() < _scan_retry_after:
+        retry_after = max(1, int(_scan_retry_after - time_mod.monotonic()))
+        return JSONResponse({"ok": False, "error": "Binance Futures IP cooldown active; manual analysis is paused."}, status_code=429, headers={"Retry-After": str(retry_after)})
     sym = symbol.upper().replace("/", "").replace("-", "")
     if not sym.endswith("USDT"):
         sym += "USDT"
@@ -416,6 +430,7 @@ async def analyze_one(symbol: str, style: str = Query("day")):
     for tf in required_tfs:
         df = client.fetch_ohlcv(sym, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
         if client.rate_limited:
+            _pause_scans_for_rate_limit(client)
             retry_after = max(300, int(float(getattr(client, "rate_limit_until", 0.0) or 0.0) - time_mod.time()))
             return JSONResponse(
                 {"ok": False, "error": "Binance Futures has rate-limited this Render IP. Manual analysis will work again after the ban expires; please retry later."},
