@@ -996,7 +996,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     </div>
     <div id="limit_hint" class="hint" style="display:none">Limit order stays Pending until mark price reaches the limit. Buy/Long fills at or below limit; Sell/Short fills at or above limit.</div>
     <div class="row2">
-      <div><label>Stop Loss</label><input type="number" id="m_sl" step="any"></div>
+      <div><label>Stop Loss</label><input type="number" id="m_sl" step="any" oninput="updateOrderPreview()"></div>
       <div><label>TP1</label><input type="number" id="m_tp1" step="any"></div>
     </div>
     <label>TP2</label><input type="number" id="m_tp2" step="any">
@@ -1007,13 +1007,13 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <option value="risk">Risk % of balance</option>
       <option value="qty">Quantity</option>
     </select>
-    <div id="box_amount"><label>Amount USDT</label><input type="number" id="m_amount" step="any" placeholder="e.g. 500"></div>
-    <div id="box_margin" style="display:none"><label>Margin USDT</label><input type="number" id="m_margin" step="any"></div>
+    <div id="box_amount"><label>Amount USDT</label><input type="number" id="m_amount" step="any" placeholder="e.g. 500" oninput="updateOrderPreview()"></div>
+    <div id="box_margin" style="display:none"><label>Margin USDT</label><input type="number" id="m_margin" step="any" oninput="updateOrderPreview()"></div>
     <div id="box_risk" style="display:none">
       <label>Risk % <span id="riskVal">1%</span></label>
-      <input type="range" id="m_risk" min="0.25" max="100" step="0.25" value="1" oninput="riskVal.textContent=this.value+'%'">
+      <input type="range" id="m_risk" min="0.25" max="100" step="0.25" value="1" oninput="riskVal.textContent=this.value+'%';updateOrderPreview()">
     </div>
-    <div id="box_qty" style="display:none"><label>Quantity</label><input type="number" id="m_qty" step="any"></div>
+    <div id="box_qty" style="display:none"><label>Quantity</label><input type="number" id="m_qty" step="any" oninput="updateOrderPreview()"></div>
     <div class="row2">
       <div><label>Scale</label><select id="m_scale"><option value="">None</option><option value="flat">Flat</option><option value="ascending">Ascending</option></select></div>
       <div><label>Scale orders</label><input type="number" id="m_scale_n" min="0" max="10" value="0"></div>
@@ -1147,9 +1147,11 @@ async function submitTrade(){
 async function loadTrades(){
   const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
   const open=(d.trades||[]).filter(t=>t.status==='OPEN');
+  const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
-  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
+  if(pending.length){h+='<div class="sec">Pending Orders</div><div class="card">';h+=pending.map(t=>'<div class="list-row"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> '+t.symbol+' · LIMIT '+t.limit_price+' · '+t.leverage+'x</span><button class="btn dim" onclick="cancelPending(\''+t.id+'\')">Cancel</button></div>').join('');h+='</div>';}
+  if(open.length){h+='<div class="sec">Open Positions</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
@@ -1167,8 +1169,12 @@ async function loadTrades(){
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
         <div><em>Est. Liq. (approx.)</em><strong>${t.liquidation_price??'—'}</strong></div>
+        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct??'—'}%</strong></div>
         <div><em>Liq. Risk</em><strong>${t.liquidation_risk||'UNKNOWN'}</strong></div>
-        <div><em>Trail</em><strong>${t.trailing_pct?t.trailing_pct+'%':'—'}</strong></div>
+        <div><em>Maintenance Est.</em><strong>${fmt(t.cross_maintenance_est||0)} USDT</strong></div>
+        <div><em>Cross Wallet Est.</em><strong>${t.margin_mode==='CROSS'?fmt(t.cross_wallet_equity_est)+' USDT':'—'}</strong></div>
+        <div><em>Order Type</em><strong>${t.order_type||'MARKET'}</strong></div>
+        <div><em>Trail</em><strong>${t.callback_rate?t.callback_rate+'%':'—'}</strong></div>
       </div>
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
@@ -1182,6 +1188,7 @@ async function loadTrades(){
     <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
 }
+async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
 async function dcaPrompt(id){const v=prompt('DCA Amount USDT (notional)');if(!v)return;const d=await(await fetch('/api/trades/'+id+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:+v})})).json();if(d.ok){toast('DCA added');loadTrades();}else toast(d.error||'DCA failed');}
 async function trailPrompt(id,cur){const a=prompt('Activation Price (blank = activate from entry)','');if(a===null)return;const v=prompt('Callback Rate % (0–5; 0 disables)',cur||'1');if(v===null)return;const rate=+v;if(!Number.isFinite(rate)||rate<0||rate>5){toast('Callback must be 0–5%');return;}const body={callback_rate:rate};if(a.trim()){const p=+a;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){toast('Trailing configured');loadTrades();}}
