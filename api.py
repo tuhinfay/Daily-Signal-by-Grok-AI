@@ -838,7 +838,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <section id="tab-trades" style="display:none">
   <div class="stats" id="tradeStats"></div>
-  <div class="note">Live Binance Futures prices and PNL. Updates as trades occur.</div>
+  <div class="note">Live Binance Futures mark prices and PNL. Liquidation price is an estimate using a base-tier maintenance-margin assumption; actual Binance symbol brackets and cross-wallet positions can differ.. Updates as trades occur.</div>
   <div id="tradeList"></div>
 </section>
 
@@ -1032,8 +1032,8 @@ async function loadTrades(){
         <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        <div><em>Liquidation</em><strong>${t.liquidation_price??'—'}</strong></div>
-        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct!=null?t.liquidation_distance_pct+'%':'—'}</strong></div>
+        <div><em>Est. Liquidation</em><strong>${t.liquidation_price??'—'}</strong></div>
+        <div><em>Liq. Risk / Distance</em><strong>${t.liquidation_distance_pct!=null?t.liquidation_distance_pct+'%':'—'}</strong></div>
         <div><em>Trail</em><strong>${t.trailing_pct?t.trailing_pct+'%':'—'}</strong></div>
       </div>
       <div class="actions">
