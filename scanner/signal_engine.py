@@ -171,11 +171,29 @@ class SignalEngine:
             short_p += 4
         return long_p, short_p, lr, sr, atr, entry
 
-    def analyze_pair(self, symbol: str, data: Dict[str, pd.DataFrame], volume_24h: float = 0) -> Optional[Dict]:
-        l1, s1, lr1, sr1, bias_1d = self._score_1d(data.get("1d"))
-        l4, s4, lr4, sr4, adx_val, bias_4h = self._score_4h(data.get("4h"))
-        lh, sh, lrh, srh, rsi_val = self._score_1h(data.get("1h"))
-        l15, s15, lr15, sr15, atr, entry = self._score_15m(data.get("15m"))
+    def analyze_pair(self, symbol: str, data: Dict[str, pd.DataFrame], volume_24h: float = 0,
+                     style: str = "day") -> Optional[Dict]:
+        style = style if style in ("scalp", "day", "swing") else "day"
+        if style == "scalp":
+            # 5m entry, 15m momentum, 1h structure, 4h regime.
+            l1, s1, lr1, sr1, bias_1d = self._score_1d(data.get("4h"))
+            l4, s4, lr4, sr4, adx_val, bias_4h = self._score_4h(data.get("1h"))
+            lh, sh, lrh, srh, rsi_val = self._score_1h(data.get("15m"))
+            l15, s15, lr15, sr15, atr, entry = self._score_15m(data.get("5m"))
+            timeframe = "5m entry · 15m · 1h · 4h"
+        elif style == "swing":
+            # 1h entry, 4h momentum/structure, 1d regime.
+            l1, s1, lr1, sr1, bias_1d = self._score_1d(data.get("1d"))
+            l4, s4, lr4, sr4, adx_val, bias_4h = self._score_4h(data.get("4h"))
+            lh, sh, lrh, srh, rsi_val = self._score_1h(data.get("4h"))
+            l15, s15, lr15, sr15, atr, entry = self._score_15m(data.get("1h"))
+            timeframe = "1h entry · 4h · 1d"
+        else:
+            l1, s1, lr1, sr1, bias_1d = self._score_1d(data.get("1d"))
+            l4, s4, lr4, sr4, adx_val, bias_4h = self._score_4h(data.get("4h"))
+            lh, sh, lrh, srh, rsi_val = self._score_1h(data.get("1h"))
+            l15, s15, lr15, sr15, atr, entry = self._score_15m(data.get("15m"))
+            timeframe = "15m entry · 1h · 4h · 1d"
 
         if adx_val > 0 and adx_val < config.MIN_ADX_FOR_SIGNAL:
             return None
@@ -270,5 +288,6 @@ class SignalEngine:
             "bias_4h": bias_4h,
             "liquidity": liq,
             "volume_24h": round(vol),
-            "timeframe": "15m entry · 1H · 4H · 1D",
+            "style": style,
+            "timeframe": timeframe,
         }
