@@ -995,6 +995,7 @@ async def update_trade(tid: str, body: TradeUpdate):
         t["stop_loss"] = body.stop_loss
     if body.tp1 is not None:
         t["tp1"] = body.tp1
+        t["tp1_filled"] = False
     if "tp2" in body.model_fields_set:
         t["tp2"] = body.tp2
     if body.trailing_pct is not None or body.callback_rate is not None:
