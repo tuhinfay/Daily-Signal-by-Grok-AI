@@ -332,23 +332,46 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
         if side == "LONG":
             pnl = (price - entry) * qty
             t["pnl_pct"] = round(((price - entry) / entry) * 100 * lev, 3)
-            if price <= float(t.get("stop_loss") or 0):
-                t["hit"] = "SL"
-            elif t.get("tp2") and price >= float(t["tp2"]):
-                t["hit"] = "TP2"
-            elif t.get("tp1") and price >= float(t["tp1"]):
-                t["hit"] = "TP1"
+            trigger = "SL" if price <= float(t.get("stop_loss") or 0) else (
+                "TP2" if t.get("tp2") and price >= float(t["tp2"]) else (
+                    "TP1" if t.get("tp1") and price >= float(t["tp1"]) and not t.get("tp1_filled") else None
+                )
+            )
         else:
             pnl = (entry - price) * qty
             t["pnl_pct"] = round(((entry - price) / entry) * 100 * lev, 3)
-            if price >= float(t.get("stop_loss") or float("inf")):
-                t["hit"] = "SL"
-            elif t.get("tp2") and price <= float(t["tp2"]):
-                t["hit"] = "TP2"
-            elif t.get("tp1") and price <= float(t["tp1"]):
-                t["hit"] = "TP1"
+            trigger = "SL" if price >= float(t.get("stop_loss") or float("inf")) else (
+                "TP2" if t.get("tp2") and price <= float(t["tp2"]) else (
+                    "TP1" if t.get("tp1") and price <= float(t["tp1"]) and not t.get("tp1_filled") else None
+                )
+            )
 
-        t["unrealized_pnl"] = round(pnl, 4)
+        if trigger == "TP1":
+            close_pct = max(1.0, min(float(t.get("tp1_close_pct") or 50.0), 99.0))
+            close_qty = qty * close_pct / 100.0
+            realized_partial = (price - entry) * close_qty if side == "LONG" else (entry - price) * close_qty
+            remaining_qty = max(0.0, qty - close_qty)
+            _account["balance"] = round(float(_account.get("balance", 0)) + realized_partial, 2)
+            _account["realized_pnl"] = round(float(_account.get("realized_pnl", 0)) + realized_partial, 2)
+            t["realized_pnl"] = round(float(t.get("realized_pnl") or 0) + realized_partial, 4)
+            t["qty"] = round(remaining_qty, 8)
+            t["margin"] = round(float(t.get("margin") or 0) * (remaining_qty / qty), 2)
+            t["notional"] = round(entry * remaining_qty, 2)
+            t["tp1_filled"] = True
+            t["hit"] = "TP1"
+            pnl = (price - entry) * remaining_qty if side == "LONG" else (entry - price) * remaining_qty
+            t["unrealized_pnl"] = round(pnl, 4)
+        elif trigger in ("SL", "TP2"):
+            _account["balance"] = round(float(_account.get("balance", 0)) + pnl, 2)
+            _account["realized_pnl"] = round(float(_account.get("realized_pnl", 0)) + pnl, 2)
+            t["realized_pnl"] = round(float(t.get("realized_pnl") or 0) + pnl, 4)
+            t.update({
+                "status": "CLOSED", "hit": trigger, "unrealized_pnl": 0.0,
+                "needs_alert": True, "closed_at": datetime.now(timezone.utc).isoformat(),
+            })
+        else:
+            t["unrealized_pnl"] = round(pnl, 4)
+
         _update_trade_liquidation_fields(t)
         t["updated_at"] = datetime.now(timezone.utc).isoformat()
         if t.get("hit") and t.get("hit") != previous_hit:
@@ -367,7 +390,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
 def _persist_live_prices(symbols):
     for t in list(_trades.values()):
         trade_symbol = str(t.get("symbol", "")).upper().replace("/", "").split(":")[0]
-        if t.get("status") == "OPEN" and trade_symbol in symbols:
+        if t.get("status") in ("OPEN", "CLOSED") and trade_symbol in symbols:
             db.save_trade(t)
     _calc_equity()
     db.save_account(_account)
@@ -637,7 +660,10 @@ async def api_trades():
 
 @app.get("/api/alerts")
 async def api_alerts():
-    alerts = [t for t in _trades.values() if t.get("status") == "OPEN" and t.get("needs_alert") and t.get("hit")]
+    alerts = [t for t in _trades.values() if t.get("needs_alert") and t.get("hit")]
+    for trade in alerts:
+        trade["needs_alert"] = False
+        db.save_trade(trade)
     return {"alerts": alerts, "count": len(alerts)}
 
 
@@ -856,9 +882,10 @@ async def close_trade(tid: str):
     pnl = t.get("unrealized_pnl") or 0.0
     _account["balance"] = round(_account["balance"] + pnl, 2)
     _account["realized_pnl"] = round(_account["realized_pnl"] + pnl, 2)
+    total_realized = round(float(t.get("realized_pnl") or 0) + pnl, 2)
     t.update({"status": "CLOSED", "needs_alert": False,
               "closed_at": datetime.now(timezone.utc).isoformat(),
-              "hit": t.get("hit") or "MANUAL", "realized_pnl": round(pnl, 2)})
+              "hit": t.get("hit") or "MANUAL", "realized_pnl": total_realized, "unrealized_pnl": 0.0})
     for position in _trades.values():
         if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
     db.save_trade(t)
