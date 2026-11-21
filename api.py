@@ -26,6 +26,7 @@ _cache: Dict[str, Any] = {
 _trades: Dict[str, Dict] = {}
 _account: Dict[str, float] = {}
 _monitor_running = False
+_modal_price_cache: Dict[str, Dict[str, Any]] = {}
 _price_monitor_status: Dict[str, Any] = {
     "state": "starting", "connected": False, "symbols": [],
     "last_ws_update": None, "last_rest_update": None, "last_error": None,
@@ -687,9 +688,22 @@ async def api_trades():
 @app.get("/api/market-price/{symbol}")
 async def api_market_price(symbol: str):
     sym = symbol.upper().replace("/", "").replace(":USDT", "")
+    now = time_mod.time()
+    cached = _modal_price_cache.get(sym)
+    if cached and now - cached.get("ts", 0) < 3:
+        return {"symbol": sym, "price": cached.get("price")}
     price = _cache.get("prices", {}).get(sym)
+    try:
+        client = BinanceClient(futures=True)
+        fresh = client.get_current_price(sym)
+        if fresh:
+            price = fresh
+            _cache.setdefault("prices", {})[sym] = fresh
+    except Exception as e:
+        print(f"[market-price] {sym}: {e}")
     if not price:
         price = next((t.get("current_price") for t in _trades.values() if t.get("symbol") == sym and t.get("current_price")), None)
+    _modal_price_cache[sym] = {"price": price, "ts": now}
     return {"symbol": sym, "price": price}
 
 
