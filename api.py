@@ -346,8 +346,12 @@ def startup():
     db.init_db(getattr(config, "DEMO_BALANCE", 10000))
     _account = db.load_account()
     _trades = db.load_trades()
-    # Keep the isolated test service idle until the operator explicitly starts a scan.
-    _cache["auto_scan"] = db.get_meta("auto_scan", "0") != "0"
+    # Testing service must never start REST-heavy auto scans until manually enabled.
+    _cache["auto_scan"] = False
+    try:
+        db.set_meta("auto_scan", "0")
+    except Exception:
+        pass
     _monitor_running = True
     threading.Thread(target=auto_scan_loop, daemon=True).start()
     threading.Thread(target=price_monitor_loop, daemon=True).start()
