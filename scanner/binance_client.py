@@ -198,7 +198,10 @@ class BinanceClient:
                         "period": "UTC daily candle (BD 06:00)",
                     })
                 except Exception as e:
+                    self._mark_rate_limit(e)
                     print(f"mover daily candle {clean}: {e}")
+                    if self.rate_limited:
+                        break
             rows.sort(key=lambda row: row["change"], reverse=True)
             gainers = rows[:top_n]
             losers = list(reversed(rows[-top_n:])) if rows else []
@@ -238,6 +241,46 @@ class BinanceClient:
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"ticker {symbol}: {e}")
+            return None
+
+    def get_quote_volume_24h(self, symbol: str) -> Optional[float]:
+        """Return 24h quote turnover in USDT, when present in the cached ticker."""
+        ticker = self._cached_ticker(symbol)
+        if ticker is None:
+            if self.rate_limited:
+                return None
+            try:
+                ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
+            except Exception as e:
+                self._mark_rate_limit(e)
+                print(f"quote volume {symbol}: {e}")
+                return None
+        value = ticker.get("quoteVolume")
+        if value is None:
+            value = (ticker.get("info") or {}).get("quoteVolume")
+        try:
+            volume = float(value or 0)
+            return volume if volume > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def get_mark_price(self, symbol: str) -> Optional[float]:
+        """Return Futures mark price; last traded price is only a fallback."""
+        if self.rate_limited:
+            return None
+        try:
+            ticker = self._cached_ticker(symbol)
+            if ticker is None:
+                ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
+            info = ticker.get("info") or {}
+            value = info.get("markPrice") or ticker.get("mark")
+            if value is None:
+                value = ticker.get("last")
+            price = float(value) if value is not None else None
+            return price if price and price > 0 else None
+        except Exception as e:
+            self._mark_rate_limit(e)
+            print(f"mark price {symbol}: {e}")
             return None
 
     def get_market_liquidity(self, symbol: str) -> str:
