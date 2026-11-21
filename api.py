@@ -53,6 +53,8 @@ class TradeCreate(BaseModel):
     stop_loss: float
     tp1: float
     tp2: Optional[float] = None
+    order_type: str = "MARKET"
+    limit_price: Optional[float] = None
     leverage: int = Field(default=20, ge=1, le=150)
     risk_pct: Optional[float] = None
     margin_usd: Optional[float] = None
@@ -112,29 +114,37 @@ def _stats() -> Dict[str, Any]:
 
 
 def _estimate_liquidation_price(trade: Dict[str, Any]) -> Optional[float]:
-    """Rough estimate only; Binance maintenance tiers and fees are not available here."""
+    """Portfolio-aware paper estimate; exchange tiers and fees are approximated."""
     try:
         side = str(trade.get("side", "")).upper()
         qty = float(trade.get("qty") or trade.get("quantity") or 0)
         entry = float(trade.get("entry") or 0)
         mmr = float(trade.get("maintenance_margin_rate") or 0.005)
-        maintenance = float(trade.get("maintenance_amount") or 0)
+        maintenance_amount = float(trade.get("maintenance_amount") or 0)
         if side not in ("LONG", "SHORT") or qty <= 0 or entry <= 0 or not (0 <= mmr < 1):
             return None
-        notional = entry * qty
         if str(trade.get("margin_mode", "CROSS")).upper() == "ISOLATED":
-            margin = float(trade.get("margin") or 0)
+            wallet_equity = float(trade.get("margin") or 0)
+            other_maintenance = 0.0
         else:
-            margin = float(trade.get("wallet_balance", _account.get("balance", 0)) or 0)
+            isolated_locked = sum(float(x.get("margin") or 0) for x in _trades.values() if x.get("status") == "OPEN" and str(x.get("margin_mode", "CROSS")).upper() == "ISOLATED")
+            wallet_equity = float(_account.get("balance", 0) or 0) - isolated_locked
+            other_maintenance = 0.0
+            for other in _trades.values():
+                if other is trade or other.get("status") != "OPEN" or str(other.get("margin_mode", "CROSS")).upper() != "CROSS":
+                    continue
+                oq=float(other.get("qty") or 0); oe=float(other.get("entry") or 0); op=float(other.get("current_price") or oe)
+                if oq <= 0 or oe <= 0: continue
+                oside=str(other.get("side", "")).upper()
+                wallet_equity += ((op-oe)*oq) if oside == "LONG" else ((oe-op)*oq)
+                other_maintenance += max(0.0, op*oq*float(other.get("maintenance_margin_rate") or 0.005)-float(other.get("maintenance_amount") or 0))
         if side == "LONG":
-            denominator = qty * (1 - mmr)
-            price = (notional - margin + maintenance) / denominator
+            denominator=qty*(1-mmr)
+            price=(entry*qty+other_maintenance-maintenance_amount-wallet_equity)/denominator
         else:
-            denominator = qty * (1 + mmr)
-            price = (notional + margin - maintenance) / denominator
-        if denominator <= 0 or price <= 0:
-            return None
-        return float(price)
+            denominator=qty*(1+mmr)
+            price=(entry*qty+wallet_equity-other_maintenance+maintenance_amount)/denominator
+        return float(price) if denominator > 0 and price > 0 else None
     except (TypeError, ValueError, ZeroDivisionError):
         return None
 
@@ -143,7 +153,13 @@ def _update_trade_liquidation_fields(trade: Dict[str, Any]) -> None:
     """Attach an explicitly estimated price and a distance-based risk warning."""
     price = _estimate_liquidation_price(trade)
     trade["liquidation_price"] = round(price, 8) if price is not None else None
-    trade["liquidation_price_type"] = "ESTIMATED" if price is not None else None
+    trade["liquidation_price_type"] = ("PORTFOLIO_ESTIMATE" if str(trade.get("margin_mode", "CROSS")).upper() == "CROSS" else "ISOLATED_ESTIMATE") if price is not None else None
+    if str(trade.get("margin_mode", "CROSS")).upper() == "CROSS":
+        trade["cross_wallet_equity_est"] = round(float(_account.get("balance", 0) or 0) + sum(float(x.get("unrealized_pnl") or 0) for x in _trades.values() if x.get("status") == "OPEN" and str(x.get("margin_mode", "CROSS")).upper() == "CROSS"), 2)
+        trade["cross_maintenance_est"] = round(sum(max(0.0, float(x.get("current_price") or x.get("entry") or 0)*float(x.get("qty") or 0)*float(x.get("maintenance_margin_rate") or 0.005)-float(x.get("maintenance_amount") or 0)) for x in _trades.values() if x.get("status") == "OPEN" and str(x.get("margin_mode", "CROSS")).upper() == "CROSS"), 2)
+    else:
+        trade["cross_wallet_equity_est"] = None
+        trade["cross_maintenance_est"] = None
     if price is None:
         trade["liquidation_risk"] = "UNKNOWN"
         trade["liquidation_distance_pct"] = None
@@ -270,12 +286,19 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
 
     for t in list(_trades.values()):
         trade_symbol = str(t.get("symbol", "")).upper().replace("/", "").split(":")[0]
-        if t.get("status") != "OPEN" or trade_symbol != symbol:
+        if trade_symbol != symbol:
             continue
-        if t.get("current_price") == price:
-            continue
+        if t.get("status") == "PENDING":
+            limit_px=float(t.get("limit_price") or t.get("entry") or 0)
+            pending_side=str(t.get("side", "")).upper()
+            crossed=(price <= limit_px) if pending_side == "LONG" else (price >= limit_px)
+            if not crossed: continue
+            t["status"]="OPEN"; t["entry"]=limit_px; t["current_price"]=None
+            t["filled_at"]=datetime.now(timezone.utc).isoformat(); t["unrealized_pnl"]=0.0
+            print(f"[orders] limit filled {t.get('id')} {symbol} @ {limit_px}")
+        if t.get("status") != "OPEN": continue
+        if t.get("current_price") == price: continue
         t["current_price"] = price
-        _update_trade_liquidation_fields(t)
         side = t["side"].upper()
         entry = float(t.get("entry") or 0)
         qty = float(t.get("qty") or 0)
@@ -326,6 +349,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
                 t["hit"] = "TP1"
 
         t["unrealized_pnl"] = round(pnl, 4)
+        _update_trade_liquidation_fields(t)
         t["updated_at"] = datetime.now(timezone.utc).isoformat()
         if t.get("hit") and t.get("hit") != previous_hit:
             t["needs_alert"] = True
@@ -335,6 +359,8 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
 
     if changed:
         _calc_equity()
+        for position in _trades.values():
+            if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
     return changed
 
 
