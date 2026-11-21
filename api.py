@@ -1042,6 +1042,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Scaled Order</label><select id="m_scale"><option value="">None</option><option value="flat">Equal Split</option><option value="ascending">Ascending Size</option></select></div>
       <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="0" max="10" value="0"></div>
     </div>
+    <div id="order_preview" style="display:none"></div>
     <p class="hint">Default: Amount + Cross margin. Scaled Order splits your entry into multiple orders.</p>
     <div class="btns">
       <button class="btn dim" onclick="closeModal()">Cancel</button>
