@@ -17,6 +17,16 @@ import config
 app = FastAPI(title="Daily Signal by Tuhinfay", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
+@app.middleware("http")
+async def order_request_timing(request, call_next):
+    started = time_mod.perf_counter()
+    response = await call_next(request)
+    if request.method == "POST" and request.url.path == "/api/trades":
+        elapsed_ms = (time_mod.perf_counter() - started) * 1000
+        print(f"[order-timing] POST /api/trades status={response.status_code} elapsed_ms={elapsed_ms:.1f}")
+    return response
+
 _cache: Dict[str, Any] = {
     "signals": [], "last_updated": None, "scanning": False,
     "error": None, "scanned_count": 0,
@@ -693,7 +703,7 @@ async def api_market_price(symbol: str):
     sym = symbol.upper().replace("/", "").replace(":USDT", "")
     now = time_mod.time()
     cached = _modal_price_cache.get(sym)
-    if cached and now - cached.get("ts", 0) < 3:
+    if cached and now - cached.get("ts", 0) < 8:
         return {"symbol": sym, "price": cached.get("price")}
     price = _cache.get("prices", {}).get(sym)
     try:
@@ -716,13 +726,13 @@ async def api_trade_preview(body: TradeCreate):
     side = body.side.upper()
     if side not in ("LONG", "SHORT"):
         return JSONResponse({"ok": False, "error": "Choose LONG or SHORT"}, status_code=400)
-    client = BinanceClient(futures=True)
-    market = client.get_current_price(sym) or _cache.get("prices", {}).get(sym)
+    cached = _modal_price_cache.get(sym) or {}
+    market = cached.get("price") or _cache.get("prices", {}).get(sym)
     entry = float((body.limit_price or body.entry) if body.order_type == "LIMIT" else (market or body.entry or 0))
     if entry <= 0:
         return {"ok": False, "error": "Live price unavailable"}
-    max_lev = client.get_max_leverage(sym)
-    lev = max(1, min(int(body.leverage or 20), max_lev or 20, 150))
+    # Preview must be local and fast; verified leverage metadata is optional here.
+    lev = max(1, min(int(body.leverage or 20), 20, 150))
     sl_dist = abs(entry - float(body.stop_loss or 0))
     if body.quantity and body.quantity > 0:
         qty = float(body.quantity)
@@ -1325,7 +1335,7 @@ function updateOrderPreview(){
    }else if(!(rangeLow>0&&rangeHigh>rangeLow)){
      sp.style.display='block';sp.innerHTML='<div class="hint">Enter a valid Lower Range and Upper Range to preview the order ladder.</div>';
    }else if(!(market>0)||((m_side.value==='LONG'&&rangeHigh>=market)||(m_side.value==='SHORT'&&rangeLow<=market))){
-     sp.style.display='block';sp.innerHTML='<div class="hint">Waiting for a distinct live market price. Set a Limit Price away from the current market to preview separate order prices.</div>';
+     sp.style.display='block';sp.innerHTML='<div class="hint">'+(market>0?'LONG range must be below market; SHORT range must be above market.':'Waiting for live market price.')+'</div>';
    }else{
      let cumulativeQty=0,cumulativeCost=0;
      for(let i=0;i<n;i++){
