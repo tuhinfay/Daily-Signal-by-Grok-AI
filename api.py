@@ -219,6 +219,7 @@ def run_scan(top_n: int = 28):
                         continue
                     r["market_price"] = px or r["entry"]
                     r["max_leverage"] = max_leverage
+                    r["quote_volume_24h"] = vol
                     r["styles"] = [style_name]
                     r["summary"] = f"{r.get('setup','')} · {style_name.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
                     signals.append(r)
@@ -665,6 +666,7 @@ async def dca_trade(tid: str, body: DcaBody):
     t["margin"] = round(t["notional"] / lev, 2)
     t["dca_count"] = (t.get("dca_count") or 0) + 1
     t["current_price"] = price
+    _update_trade_liquidation_fields(t)
     db.save_trade(t)
     _calc_equity()
     return {"ok": True, "trade": t, "account": _account}
@@ -683,6 +685,7 @@ async def update_trade(tid: str, body: TradeUpdate):
         t["tp2"] = body.tp2
     if body.trailing_pct is not None:
         t["trailing_pct"] = max(0.0, float(body.trailing_pct))
+    _update_trade_liquidation_fields(t)
     db.save_trade(t)
     return {"ok": True, "trade": t}
 
