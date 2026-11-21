@@ -1054,7 +1054,7 @@ function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
   <div class="metric"><label>Open</label><b>${st.open||0}</b></div>`;}
 function syncSizeMode(){const m=m_mode.value;box_amount.style.display=m==='amount'?'block':'none';box_margin.style.display=m==='margin'?'block':'none';box_risk.style.display=m==='risk'?'block':'none';box_qty.style.display=m==='qty'?'block':'none';updateOrderPreview();}
 function setSide(side){m_side.value=side;updateOrderPreview();}
-function toggleOrderType(){const lim=m_order_type.value==='LIMIT';m_entry_label.textContent=lim?'Limit Price':'Market Entry';limit_hint.style.display=lim?'block':'none';if(!lim)m_entry.value=m_mkt.value||m_entry.value;updateOrderPreview();}
+function toggleOrderType(){const lim=m_order_type.value==='LIMIT';m_entry_label.textContent=lim?'Limit Price':'Market Entry';limit_hint.style.display=lim?'block':'none';m_entry.readOnly=!lim;if(!lim)m_entry.value=m_mkt.value||m_entry.value;updateOrderPreview();}
 function updateOrderPreview(){
  const px=+(m_entry.value||m_mkt.value||0),lev=+m_lev.value||1,mode=m_mode.value;
  let notional=0;
@@ -1167,7 +1167,7 @@ async function loadTrades(){
         <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>Margin</em><strong>${fmt(t.margin)} USDT</strong></div>
+        <div><em>Initial Margin</em><strong>${fmt(t.margin)} USDT</strong></div>
         <div><em>Position Value</em><strong>${fmt(t.notional||((t.entry||0)*(t.qty||0)))} USDT</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
