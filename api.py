@@ -1233,7 +1233,7 @@ function updateOrderPreview(){
  const qty=px>0?notional/px:0,margin=lev>0?notional/lev:0;
  order_preview.textContent='Position Value: $'+fmt(notional)+' USDT | Initial Margin: $'+fmt(margin)+' USDT | Quantity: '+qty.toFixed(6);
  const n=Math.max(0,Math.min(10,parseInt(m_scale_n.value||'0',10)||0)),sm=m_scale.value,sp=document.getElementById('scale_preview');
- if(sm&&n>=2&&notional>0&&px>0){const market=+(m_mkt.value||px);const rows=Array.from({length:n},(_,i)=>{const weight=sm==='ascending'?(i+1)/(n*(n+1)/2):1/n;const price=m_order_type.value==='LIMIT'?market+(px-market)*(i+1)/n:market;const amount=notional*weight;return (i+1)+'. Price '+fmt(price)+' | Amount $'+fmt(amount)+' | Qty '+(amount/price).toFixed(6);});sp.style.display='block';sp.textContent='Scaled order preview ('+n+' orders)\\n'+rows.join('\\n')+'\\nTotal: $'+fmt(notional)+' | Qty '+qty.toFixed(6);}else{sp.style.display='none';sp.textContent='';}
+ if(sm&&n>=2&&notional>0&&px>0){const market=+(m_mkt.value||px);const rows=Array.from({length:n},(_,i)=>{const weight=sm==='ascending'?(i+1)/(n*(n+1)/2):1/n;const price=m_order_type.value==='LIMIT'?market+(px-market)*(i+1)/n:market;const amount=notional*weight;return (i+1)+'. Price '+fmt(price)+' | Amount $'+fmt(amount)+' | Qty '+(amount/price).toFixed(6);});sp.style.display='block';sp.textContent='Scaled order preview ('+n+' orders)\n'+rows.join('\n')+'\nTotal: $'+fmt(notional)+' | Qty '+qty.toFixed(6);}else{sp.style.display='none';sp.textContent='';}
 }
 function tv(sym){return 'BINANCE:'+String(sym).replace('/','').replace(':USDT','')+'.P';}
 function toggleChart(id,sym){
@@ -1327,7 +1327,7 @@ async function loadTrades(){
   const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
-  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+')</summary>';h+=pending.map(t=>'<div class="list-row"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> '+t.symbol+' · LIMIT '+t.limit_price+' · <button class="btn dim" onclick="cancelPending(\''+t.id+'\')">Cancel</button></div>').join('');h+='</details>';}
+  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+')</summary>';h+=pending.map(t=>'<div class="list-row"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> '+t.symbol+' · LIMIT '+t.limit_price+' · $'+fmt(t.notional)+' · Qty '+t.qty+' · '+t.leverage+'x</span><button class="btn dim" onclick="cancelPending(\''+t.id+'\')">Cancel</button></div>').join('');h+='</details>';}
   if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
@@ -1380,64 +1380,6 @@ setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
 setInterval(refreshModalMarket,1500);
 setInterval(()=>{if(document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
-setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
-</script>
-</body>
-</html>
-"""
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)+fmt(t.notional)+' · Qty '+t.qty+' · '+t.leverage+'x</span><button class="btn dim" onclick="cancelPending(\''+t.id+'\')">Cancel</button></div>').join('');h+='</div>';}
-  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
-    const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
-    const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
-    return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
-      <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
-        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
-        ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
-        ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
-        <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
-      <div class="vals">
-        <div><em>Average Entry</em><strong>${fmt(t.entry)}</strong></div>
-        <div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
-        <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
-        <div><em>Est. Liq. Price</em><strong>${t.liquidation_price?("~"+fmt(t.liquidation_price)):"—"}</strong></div>
-        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
-        <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
-        <div><em>Qty</em><strong>${t.qty}</strong></div>
-        <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"—":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
-        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||"UNKNOWN"}</strong></div>
-        <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
-      </div>
-      <div class="actions">
-        <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
-        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
-        <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
-        <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
-      </div>
-      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · ${t.hit||'CLOSED'}</span>
-    <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
-  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
-}
-async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
-async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
-function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
-function closeManage(){manageBg.style.display='none';}
-async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null;if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}body={stop_loss:sl,tp1:tp1,tp2:tp2};}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1–5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}
-async function editLevels(id,sl,tp1,tp2){manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';manageBg.style.display='flex';}
-async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
-function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
-async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
-async function resetAcc(bal){if(!confirm('Reset to $'+bal+'?'))return;const d0=await(await fetch('/api/trades')).json();for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN'))await fetch('/api/trades/'+t.id+'/close',{method:'POST'});const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();if(d.ok){setAcc(d.account);toast('Reset');}}
-async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
-loadSignals();
-setInterval(()=>{if(!pinManual)loadSignals();},20000);
-setInterval(checkAlerts,10000);
-setInterval(()=>{loadTrades();},1000); // UI follows Binance trade stream updates
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
 </body>
