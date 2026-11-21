@@ -620,7 +620,7 @@ async def api_position_mode():
 async def clear_trade_history():
     removed = []
     for tid, trade in list(_trades.items()):
-        if trade.get("status") != "OPEN":
+        if trade.get("status") not in ("OPEN", "PENDING"):
             removed.append(tid)
             _trades.pop(tid, None)
             db.delete_trade(tid)
@@ -727,6 +727,9 @@ async def create_trade(body: TradeCreate):
         db.save_account(_account)
         return {"ok": True, "trade": trade, "pending": True, "duplicate": False, "account": _account}
     if existing_trade:
+        # Same-side entries merge into one hedge-side position and retain its leverage.
+        lev = int(existing_trade.get("leverage") or lev)
+        margin = notional / lev
         old_qty = float(existing_trade.get("qty") or 0)
         combined_qty = old_qty + qty
         old_entry = float(existing_trade.get("entry") or entry_price)
@@ -811,6 +814,15 @@ async def update_trade(tid: str, body: TradeUpdate):
     if tid not in _trades or _trades[tid].get("status") != "OPEN":
         return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
     t = _trades[tid]
+    new_sl = body.stop_loss if body.stop_loss is not None else t.get("stop_loss")
+    new_tp1 = body.tp1 if body.tp1 is not None else t.get("tp1")
+    new_tp2 = body.tp2 if body.tp2 is not None else t.get("tp2")
+    entry = float(t.get("current_price") or t.get("entry") or 0)
+    side = str(t.get("side", "")).upper()
+    if new_sl is not None and entry > 0 and ((side == "LONG" and float(new_sl) >= entry) or (side == "SHORT" and float(new_sl) <= entry)):
+        return JSONResponse({"ok": False, "error": "Stop Loss must be below LONG / above SHORT mark price"}, status_code=400)
+    if new_tp1 is not None and entry > 0 and ((side == "LONG" and float(new_tp1) <= entry) or (side == "SHORT" and float(new_tp1) >= entry)):
+        return JSONResponse({"ok": False, "error": "Take Profit must be above LONG / below SHORT mark price"}, status_code=400)
     if body.stop_loss is not None:
         t["stop_loss"] = body.stop_loss
     if body.tp1 is not None:
@@ -820,6 +832,8 @@ async def update_trade(tid: str, body: TradeUpdate):
     if body.trailing_pct is not None or body.callback_rate is not None:
         rate = body.callback_rate if body.callback_rate is not None else body.trailing_pct
         rate = max(0.0, min(float(rate), 5.0))
+        if 0 < rate < 0.1:
+            return JSONResponse({"ok": False, "error": "Callback rate must be 0 or between 0.1% and 5%"}, status_code=400)
         t["callback_rate"] = rate or None
         t["trailing_pct"] = rate or None
         t["trailing_active"] = False
@@ -827,6 +841,7 @@ async def update_trade(tid: str, body: TradeUpdate):
         t["trough_price"] = float(t.get("current_price") or t.get("entry") or 0)
     if body.trailing_activation_price is not None:
         t["trailing_activation_price"] = max(0.0, float(body.trailing_activation_price)) or None
+    _update_trade_liquidation_fields(t)
     db.save_trade(t)
     return {"ok": True, "trade": t}
 
