@@ -691,7 +691,7 @@ async def create_trade(body: TradeCreate):
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
         "trailing_pct": None, "callback_rate": None, "trailing_activation_price": None,
-        "trailing_active": False, "peak_price": entry_price, "trough_price": entry_price
+        "trailing_active": False, "peak_price": entry_price, "trough_price": entry_price,
         "scale_mode": scale_mode, "scale_orders": scale_orders,
         "dca_history": [{"price": entry_price, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()}],
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
