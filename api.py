@@ -777,9 +777,11 @@ async def create_trade(body: TradeCreate):
     if order_type not in ("MARKET", "LIMIT"): return JSONResponse({"ok": False, "error": "order_type must be MARKET or LIMIT"}, status_code=400)
     entry_price = float((body.limit_price or body.entry) if order_type == "LIMIT" else body.entry)
     if entry_price <= 0: return JSONResponse({"ok": False, "error": "invalid entry price"}, status_code=400)
+    # Keep order placement local/fast: leverage metadata is loaded by the scanner,
+    # not fetched synchronously on every manual order submission.
     client = BinanceClient(futures=True)
-    max_lev = client.get_max_leverage(sym)
-    leverage_cap = max_lev or 20
+    max_lev = None
+    leverage_cap = 20
     lev = max(1, min(int(body.leverage or leverage_cap), leverage_cap, 150))
     margin_mode = (body.margin_mode or "CROSS").upper()
     if margin_mode not in ("CROSS", "ISOLATED"):
@@ -825,8 +827,9 @@ async def create_trade(body: TradeCreate):
     scale_mode = body.scale_mode if body.scale_mode in ("flat", "ascending") else None
     scale_orders = int(body.scale_orders or 0) if scale_mode else 0
 
-    # Always derive liquidity from this contract's current Binance Futures turnover.
-    liq = client.get_market_liquidity(sym)
+    # Liquidity is not used by order execution or the trade card; avoid a
+    # blocking Binance ticker request during order placement.
+    liq = None
 
     tid = str(uuid.uuid4())[:8]
     trade = {
