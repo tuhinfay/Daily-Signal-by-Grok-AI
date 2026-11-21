@@ -18,7 +18,7 @@ class LiquidationEstimateTests(unittest.TestCase):
         expected = (100.0 - 10.0) / (1.0 - 0.005)
         self.assertAlmostEqual(api._estimate_liquidation_price(trade), expected, places=8)
         api._update_trade_liquidation_fields(trade)
-        self.assertEqual(trade["liquidation_price_type"], "ESTIMATED")
+        self.assertEqual(trade["liquidation_price_type"], "ISOLATED_ESTIMATE")
         self.assertEqual(trade["liquidation_risk"], "HIGH")
 
     def test_isolated_short_formula(self):
