@@ -12,6 +12,7 @@ class BinanceClient:
         api_secret = os.environ.get("BINANCE_API_SECRET", "")
         exchange_config = {
             "enableRateLimit": True,
+            "rateLimit": 250,
             "options": {"defaultType": "future" if futures else "spot"},
         }
         if api_key and api_secret:
@@ -20,6 +21,21 @@ class BinanceClient:
         self.futures = futures
         self._markets_loaded = False
         self._lev_cache: Dict[str, Optional[int]] = {}
+        self._tickers_cache: Dict[str, dict] = {}
+        self.rate_limited = False
+
+    def _mark_rate_limit(self, error):
+        message = str(error)
+        if "418" in message or "-1003" in message or "Too many requests" in message:
+            self.rate_limited = True
+            print("[binance] rate limit detected; pausing further REST requests for this scan")
+
+    def _cached_ticker(self, symbol: str):
+        clean = self._clean_symbol(symbol)
+        for key, ticker in self._tickers_cache.items():
+            if self._clean_symbol(key) == clean:
+                return ticker
+        return None
 
     def _ensure_markets(self):
         if not self._markets_loaded:
@@ -84,6 +100,7 @@ class BinanceClient:
     def get_top_usdt_pairs(self, top_n: int = 30, min_volume: float = 12_000_000) -> List[Tuple[str, float]]:
         try:
             tickers = self.exchange.fetch_tickers()
+            self._tickers_cache = tickers or {}
             usdt_pairs = []
             for symbol, data in tickers.items():
                 clean = self._clean_symbol(symbol)
@@ -105,6 +122,7 @@ class BinanceClient:
             if usdt_pairs:
                 return usdt_pairs[:top_n]
         except Exception as e:
+            self._mark_rate_limit(e)
             print("top pairs", e)
         return [
             ("BTCUSDT", 2e9), ("ETHUSDT", 8e8), ("SOLUSDT", 3e8), ("BNBUSDT", 1e8),
@@ -117,7 +135,8 @@ class BinanceClient:
         gainers, losers = [], []
         try:
             self._ensure_markets()
-            tickers = self.exchange.fetch_tickers()
+            tickers = self._tickers_cache or self.exchange.fetch_tickers()
+            self._tickers_cache = tickers or {}
             candidates = []
             for symbol, data in tickers.items():
                 clean = self._clean_symbol(symbol)
@@ -140,7 +159,9 @@ class BinanceClient:
 
             # Limit daily-kline lookups to the most liquid contracts to keep API weight bounded.
             rows = []
-            for clean, volume, last in candidates[:150]:
+            for clean, volume, last in candidates[:40]:
+                if self.rate_limited:
+                    break
                 try:
                     candles = self.exchange.fetch_ohlcv(
                         self._ccxt_symbol(clean), timeframe="1d", limit=1
@@ -164,11 +185,14 @@ class BinanceClient:
             gainers = rows[:top_n]
             losers = list(reversed(rows[-top_n:])) if rows else []
         except Exception as e:
+            self._mark_rate_limit(e)
             print("movers", e)
         return {"gainers": gainers, "losers": losers}
 
     def fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 150) -> Optional[pd.DataFrame]:
         try:
+            if self.rate_limited:
+                return None
             ccxt_symbol = self._ccxt_symbol(symbol)
             ohlcv = self.exchange.fetch_ohlcv(ccxt_symbol, timeframe=timeframe, limit=limit)
             if not ohlcv or len(ohlcv) < 30:
@@ -180,22 +204,32 @@ class BinanceClient:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
             return df.dropna()
         except Exception as e:
+            self._mark_rate_limit(e)
             print(f"ohlcv {symbol} {timeframe}: {e}")
             return None
 
     def get_current_price(self, symbol: str) -> Optional[float]:
+        if self.rate_limited:
+            return None
         try:
-            ccxt_symbol = self._ccxt_symbol(symbol)
-            value = self.exchange.fetch_ticker(ccxt_symbol).get("last")
+            ticker = self._cached_ticker(symbol)
+            if ticker is None:
+                ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
+            value = ticker.get("last")
             return float(value) if value is not None else None
         except Exception as e:
+            self._mark_rate_limit(e)
             print(f"ticker {symbol}: {e}")
             return None
 
     def get_market_liquidity(self, symbol: str) -> str:
         """Classify liquidity from the contract's current 24h USDT quote turnover."""
         try:
-            ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
+            ticker = self._cached_ticker(symbol)
+            if ticker is None:
+                if self.rate_limited:
+                    return "UNKNOWN"
+                ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
             quote_volume = ticker.get("quoteVolume")
             if quote_volume is None:
                 quote_volume = (ticker.get("info") or {}).get("quoteVolume")
@@ -206,5 +240,6 @@ class BinanceClient:
                     "HIGH" if volume >= 4e7 else
                     "MED" if volume >= 1.2e7 else "LOW")
         except Exception as e:
+            self._mark_rate_limit(e)
             print(f"liquidity {symbol}: {e}")
             return "UNKNOWN"
