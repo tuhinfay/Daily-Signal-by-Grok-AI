@@ -2,6 +2,8 @@
 
 import ccxt
 import os
+import re
+import time
 import pandas as pd
 from typing import List, Optional, Tuple, Dict
 
@@ -24,12 +26,23 @@ class BinanceClient:
         self._lev_cache: Dict[str, Optional[int]] = {}
         self._tickers_cache: Dict[str, dict] = {}
         self.rate_limited = False
+        self.rate_limit_until = 0.0
 
     def _mark_rate_limit(self, error):
         message = str(error)
         if "418" in message or "-1003" in message or "Too many requests" in message:
             self.rate_limited = True
-            print("[binance] rate limit detected; pausing further REST requests for this scan")
+            match = re.search(r"banned until\\s+(\\d{10,})", message, re.IGNORECASE)
+            if match:
+                try:
+                    self.rate_limit_until = max(self.rate_limit_until, int(match.group(1)) / 1000.0)
+                except (TypeError, ValueError):
+                    pass
+            if self.rate_limit_until > time.time():
+                until = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(self.rate_limit_until))
+                print(f"[binance] IP ban active until {until}; pausing REST requests")
+            else:
+                print("[binance] rate limit detected; pausing further REST requests for this scan")
 
     def _cached_ticker(self, symbol: str):
         clean = self._clean_symbol(symbol)
