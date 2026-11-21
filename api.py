@@ -769,6 +769,42 @@ async def create_trade(body: TradeCreate):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dca_count": 0,
     }
+    if order_type == "LIMIT" and scale_mode and scale_orders >= 2:
+        market_price = float(_cache.get("prices", {}).get(sym) or entry_price)
+        if market_price > 0 and ((side == "LONG" and entry_price >= market_price) or (side == "SHORT" and entry_price <= market_price)):
+            return JSONResponse({"ok": False, "error": "Scaled LONG limit must be below market; SHORT limit must be above market"}, status_code=400)
+        weights = [1.0 / scale_orders] * scale_orders
+        if scale_mode == "ascending":
+            total_weight = scale_orders * (scale_orders + 1) / 2
+            weights = [(i + 1) / total_weight for i in range(scale_orders)]
+        child_prices = [market_price + (entry_price - market_price) * (i + 1) / scale_orders for i in range(scale_orders)]
+        if any((side == "LONG" and body.stop_loss >= p) or (side == "SHORT" and body.stop_loss <= p) for p in child_prices):
+            return JSONResponse({"ok": False, "error": "Stop Loss conflicts with a scaled entry price"}, status_code=400)
+        created = []
+        for i, weight in enumerate(weights):
+            child_price = child_prices[i]
+            child_qty = round(qty * weight, 6)
+            if child_qty <= 0:
+                continue
+            child = dict(trade)
+            child_id = str(uuid.uuid4())[:8]
+            child_margin = round(margin * weight, 2)
+            child.update({
+                "id": child_id, "entry": round(child_price, 8),
+                "order_price": round(child_price, 8), "limit_price": round(child_price, 8),
+                "qty": child_qty, "margin": child_margin,
+                "notional": round(child_qty * child_price, 2),
+                "risk_usd": round(child_qty * abs(child_price - body.stop_loss), 2),
+                "current_price": None, "status": "PENDING",
+                "scale_order_index": i + 1, "scale_orders": scale_orders,
+                "dca_history": [], "pending_created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            _trades[child_id] = child
+            db.save_trade(child)
+            created.append(child)
+        _calc_equity()
+        db.save_account(_account)
+        return {"ok": True, "trades": created, "pending": True, "scaled": True, "account": _account}
     if order_type == "LIMIT":
         trade["status"] = "PENDING"
         trade["pending_created_at"] = datetime.now(timezone.utc).isoformat()
