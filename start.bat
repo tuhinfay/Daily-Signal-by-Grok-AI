@@ -60,5 +60,6 @@ echo Daily Signal is ready.
 echo Local dashboard: %DASHBOARD%
 echo Remote dashboard: http://YOUR-VPS-IP:8083
 echo Allow inbound TCP 8083 in the VPS firewall, restricted to your own IP.
+echo WARNING: Dashboard has no login protection; do NOT expose port 8083 to everyone.
 start "" "%DASHBOARD%"
 endlocal
