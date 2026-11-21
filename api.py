@@ -83,6 +83,69 @@ def _calc_equity():
     _account["equity"] = round(_account["balance"] + u, 2)
 
 
+def _estimate_liquidation_price(trade: Dict[str, Any]) -> Optional[float]:
+    """Paper-trade estimate using Binance USDT-M maintenance-margin mechanics.
+
+    The exact Binance result depends on the live symbol/position bracket and,
+    for cross margin, the real Futures wallet and all account positions. This
+    simulator uses a conservative base-tier MMR estimate and labels it as such.
+    """
+    try:
+        qty = abs(float(trade.get("qty") or 0))
+        entry = float(trade.get("entry") or 0)
+        margin = max(0.0, float(trade.get("margin") or 0))
+        if qty <= 0 or entry <= 0 or margin <= 0:
+            return None
+        mmr = float(trade.get("maintenance_margin_rate") or 0.005)
+        cum = float(trade.get("maintenance_amount") or 0.0)
+        side = str(trade.get("side") or "").upper()
+        if side == "LONG":
+            if str(trade.get("margin_mode") or "CROSS").upper() == "ISOLATED":
+                wallet = margin
+                price = (qty * entry - wallet - cum) / (qty * (1 - mmr))
+            else:
+                wallet = float(_account.get("balance") or 0)
+                other = [x for x in _trades.values()
+                         if x.get("status") == "OPEN" and x.get("id") != trade.get("id")]
+                other_upnl = sum(float(x.get("unrealized_pnl") or 0) for x in other)
+                other_mm = sum(max(0.0, abs(float(x.get("qty") or 0)) *
+                                   float(x.get("current_price") or x.get("entry") or 0) * mmr)
+                               for x in other)
+                price = (qty * entry - wallet + other_mm - other_upnl - cum) / (qty * (1 - mmr))
+        elif side == "SHORT":
+            if str(trade.get("margin_mode") or "CROSS").upper() == "ISOLATED":
+                wallet = margin
+                price = (qty * entry + wallet + cum) / (qty * (1 + mmr))
+            else:
+                wallet = float(_account.get("balance") or 0)
+                other = [x for x in _trades.values()
+                         if x.get("status") == "OPEN" and x.get("id") != trade.get("id")]
+                other_upnl = sum(float(x.get("unrealized_pnl") or 0) for x in other)
+                other_mm = sum(max(0.0, abs(float(x.get("qty") or 0)) *
+                                   float(x.get("current_price") or x.get("entry") or 0) * mmr)
+                               for x in other)
+                price = (qty * entry + wallet - other_mm + other_upnl + cum) / (qty * (1 + mmr))
+        else:
+            return None
+        return round(price, 10) if price > 0 else None
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _update_trade_liquidation_fields(trade: Dict[str, Any]):
+    price = _estimate_liquidation_price(trade)
+    trade["liquidation_price"] = price
+    trade["liquidation_price_type"] = "ESTIMATED"
+    trade["maintenance_margin_rate"] = float(trade.get("maintenance_margin_rate") or 0.005)
+    if price and trade.get("current_price"):
+        current = float(trade["current_price"])
+        trade["liquidation_distance_pct"] = round(
+            abs(current - price) / current * 100, 3
+        ) if current > 0 else None
+    else:
+        trade["liquidation_distance_pct"] = None
+
+
 def _stats() -> Dict[str, Any]:
     closed = [t for t in _trades.values() if t.get("status") == "CLOSED" and t.get("hit") != "RESET"]
     wins = [t for t in closed if (t.get("realized_pnl") or 0) > 0]
@@ -253,6 +316,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
                 t["hit"] = "TP1"
 
         t["unrealized_pnl"] = round(pnl, 4)
+        _update_trade_liquidation_fields(t)
         t["updated_at"] = datetime.now(timezone.utc).isoformat()
         if t.get("hit") and t.get("hit") != previous_hit:
             t["needs_alert"] = True
@@ -289,7 +353,8 @@ def price_monitor_loop():
             continue
 
         if websocket is not None:
-            streams = "/".join(f"{symbol.lower()}@aggTrade" for symbol in symbols)
+            # Binance mark-price stream is the price used by the Futures risk engine.
+            streams = "/".join(f"{symbol.lower()}@markPrice@1s" for symbol in symbols)
             url = f"wss://fstream.binance.com/public/stream?streams={streams}"
             ws = None
             dirty = set()
@@ -305,7 +370,7 @@ def price_monitor_loop():
                     if raw:
                         message = json.loads(raw)
                         event = message.get("data", message)
-                        if event.get("e") == "aggTrade":
+                        if event.get("e") == "markPriceUpdate":
                             symbol = event.get("s")
                             price = event.get("p")
                             if symbol and price and _apply_trade_price(symbol, price):
@@ -335,7 +400,7 @@ def price_monitor_loop():
                 break
             dirty = set()
             for symbol in current_symbols:
-                price = client.get_current_price(symbol)
+                price = client.get_mark_price(symbol)
                 if price is not None and _apply_trade_price(symbol, price):
                     dirty.add(symbol)
             if dirty:
@@ -430,8 +495,9 @@ async def analyze_one(symbol: str, style: str = Query("day")):
             {"ok": False, "error": f"Insufficient Binance Futures candles for {sym}; missing: {', '.join(missing)}. Auto Scan does not control manual analysis."},
             status_code=503,
         )
-    r = engine.analyze_pair(sym, data, volume_24h=0, style=selected_style)
-    px = client.get_current_price(sym)
+    quote_volume_24h = client.get_quote_volume_24h(sym) or 0
+    r = engine.analyze_pair(sym, data, volume_24h=quote_volume_24h, style=selected_style)
+    px = client.get_mark_price(sym)
     lev = client.get_max_leverage(sym)
     liq = client.get_market_liquidity(sym)
     if not r:
@@ -439,6 +505,7 @@ async def analyze_one(symbol: str, style: str = Query("day")):
                 "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
     r["market_price"] = px or r["entry"]
     r["max_leverage"] = lev
+    r["quote_volume_24h"] = quote_volume_24h or None
     r["liquidity"] = liq
     r["styles"] = [selected_style]
     r["summary"] = f"{r.get('setup','')} · {selected_style.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
@@ -525,8 +592,8 @@ async def create_trade(body: TradeCreate):
     scale_mode = body.scale_mode if body.scale_mode in ("flat", "ascending") else None
     scale_orders = int(body.scale_orders or 0) if scale_mode else 0
 
-    # Always derive liquidity from this contract's current Binance Futures turnover.
-    liq = client.get_market_liquidity(sym)
+    # Keep 24h quote turnover separate from liquidation risk.
+    quote_volume_24h = client.get_quote_volume_24h(sym)
 
     tid = str(uuid.uuid4())[:8]
     trade = {
@@ -534,7 +601,8 @@ async def create_trade(body: TradeCreate):
         "entry": body.entry, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
-        "risk_usd": round(risk_usd, 2), "liquidity": liq,
+        "risk_usd": round(risk_usd, 2), "quote_volume_24h": quote_volume_24h,
+        "maintenance_margin_rate": 0.005, "maintenance_amount": 0.0,
         "trailing_pct": None, "peak_price": body.entry, "trough_price": body.entry,
         "scale_mode": scale_mode, "scale_orders": scale_orders,
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
@@ -542,6 +610,7 @@ async def create_trade(body: TradeCreate):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dca_count": 0,
     }
+    _update_trade_liquidation_fields(trade)
     _trades[tid] = trade
     db.save_trade(trade)
     _calc_equity()
