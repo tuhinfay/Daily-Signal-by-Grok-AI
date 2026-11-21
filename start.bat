@@ -3,25 +3,27 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 if not exist logs mkdir logs
+set "DASHBOARD=http://127.0.0.1:8083"
 
-REM If PID file exists but process is dead, clear it.
+REM If a recorded server process is already alive, open its dashboard.
 if exist runtime.pid (
   set /p OLD_PID=<runtime.pid
   powershell -NoProfile -Command "if (Get-Process -Id !OLD_PID! -ErrorAction SilentlyContinue) { exit 10 } else { exit 0 }"
   if errorlevel 10 (
-    echo Daily Signal already running ^(PID !OLD_PID!^).
-    echo Health: http://127.0.0.1:8083/health
+    echo Daily Signal is already running ^(PID !OLD_PID!^).
+    start "" "%DASHBOARD%"
     exit /b 0
   ) else (
     del runtime.pid >nul 2>&1
   )
 )
 
-REM Also block if something already listens on 8083.
+REM If another process owns port 8083, open the existing local dashboard.
 powershell -NoProfile -Command "$c=Get-NetTCPConnection -LocalPort 8083 -State Listen -ErrorAction SilentlyContinue; if ($c) { exit 10 } else { exit 0 }"
 if errorlevel 10 (
-  echo Port 8083 already in use. Run stop.bat first.
-  exit /b 1
+  echo Port 8083 is already in use. Opening the existing dashboard...
+  start "" "%DASHBOARD%"
+  exit /b 0
 )
 
 if not exist .venv\Scripts\python.exe (
@@ -29,14 +31,32 @@ if not exist .venv\Scripts\python.exe (
   echo Run once:
   echo   python -m venv .venv
   echo   .venv\Scripts\pip install -r requirements.txt
+  pause
   exit /b 1
 )
 
 echo Starting Daily Signal on port 8083...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath '%~dp0.venv\Scripts\python.exe' -ArgumentList @('-m','uvicorn','api:app','--host','0.0.0.0','--port','8083') -WorkingDirectory '%~dp0' -WindowStyle Hidden -RedirectStandardOutput '%~dp0logs\server.log' -RedirectStandardError '%~dp0logs\error.log' -PassThru; Set-Content -Path '%~dp0runtime.pid' -Value $p.Id -Encoding ascii"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath '%~dp0.venv\Scripts\python.exe' -ArgumentList @('-m','uvicorn','api:app','--host','127.0.0.1','--port','8083') -WorkingDirectory '%~dp0' -WindowStyle Hidden -RedirectStandardOutput '%~dp0logs\server.log' -RedirectStandardError '%~dp0logs\error.log' -PassThru; Set-Content -Path '%~dp0runtime.pid' -Value $p.Id -Encoding ascii"
 
-timeout /t 3 /nobreak >nul
-powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8083/health -TimeoutSec 5).Content } catch { Write-Output 'Started in background. If health fails, check logs\error.log' }"
-echo.
-echo Dashboard: http://127.0.0.1:8083
+REM Wait up to 30 seconds for the API to become healthy before opening the browser.
+set "READY=0"
+for /L %%i in (1,1,30) do (
+  powershell -NoProfile -Command "try { $r=Invoke-WebRequest -UseBasicParsing '%DASHBOARD%/health' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+  if not errorlevel 1 (
+    set "READY=1"
+    goto :OPEN_DASHBOARD
+  )
+  timeout /t 1 /nobreak >nul
+)
+
+echo Daily Signal did not become healthy within 30 seconds.
+echo Check logs\error.log and logs\server.log for the startup error.
+if exist logs\error.log type logs\error.log
+pause
+exit /b 1
+
+:OPEN_DASHBOARD
+echo Daily Signal is ready.
+echo Dashboard: %DASHBOARD%
+start "" "%DASHBOARD%"
 endlocal
