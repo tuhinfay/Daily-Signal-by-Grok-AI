@@ -30,6 +30,13 @@ _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 
 
+def _pause_scans_for_rate_limit(client):
+    global _scan_retry_after
+    until = float(getattr(client, "rate_limit_until", 0.0) or 0.0)
+    remaining = max(300.0, until - time_mod.time())
+    _scan_retry_after = max(_scan_retry_after, time_mod.monotonic() + remaining)
+
+
 class TradeCreate(BaseModel):
     symbol: str
     side: str
@@ -113,7 +120,7 @@ def run_scan(top_n: int = 28):
 
         if client.rate_limited:
             _cache["error"] = "Binance Futures rate limit active; scans will retry automatically after a cooldown."
-            _scan_retry_after = time_mod.monotonic() + 300
+            _pause_scans_for_rate_limit(client)
             return
 
         signals, prices = [], {}
@@ -409,10 +416,11 @@ async def analyze_one(symbol: str, style: str = Query("day")):
     for tf in required_tfs:
         df = client.fetch_ohlcv(sym, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
         if client.rate_limited:
+            retry_after = max(300, int(float(getattr(client, "rate_limit_until", 0.0) or 0.0) - time_mod.time()))
             return JSONResponse(
-                {"ok": False, "error": "Binance Futures is temporarily rate-limiting this server. Please retry in a few minutes."},
+                {"ok": False, "error": "Binance Futures has rate-limited this Render IP. Manual analysis will work again after the ban expires; please retry later."},
                 status_code=429,
-                headers={"Retry-After": "300"},
+                headers={"Retry-After": str(retry_after)},
             )
         if df is not None and len(df) > 30:
             data[tf] = df
