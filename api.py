@@ -1067,7 +1067,6 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <section id="tab-trades" style="display:none">
   <div class="stats" id="tradeStats"></div>
-  <div class="note">HEDGE MODE · SIMULATED — একই symbol-এ LONG ও SHORT আলাদা position. Live mark price, estimated liquidation ও PnL. <button class="btn dim" style="float:right;padding:4px 8px" onclick="clearTradeHistory()">Clear History</button></div>
   <div id="tradeList"></div>
 </section>
 
@@ -1105,7 +1104,6 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Order Type</label><select id="m_order_type" onchange="toggleOrderType()"><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></div>
       <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="20" min="1" max="150" oninput="updateOrderPreview()"></div>
     </div>
-    <div><label>Liquidity</label><input id="m_liq" readonly style="opacity:.8"></div>
     <div class="row2">
       <div><label id="m_entry_label">Entry</label><input type="number" id="m_entry" step="any" oninput="updateOrderPreview()"></div>
       <div><label>Market</label><input type="number" id="m_mkt" step="any" readonly style="opacity:.7"></div>
@@ -1190,7 +1188,7 @@ function cardHTML(s){
   const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>${s.already_added?"Add / DCA":"Add Trade"}</button>`;
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'UNKNOWN'}</span><span class="tag">${lev?lev+'x':'Max leverage unavailable'}</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x cap'}</span></div>
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
@@ -1237,12 +1235,11 @@ async function analyzeManual(){
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
 }
 function openModal(s){
-  mTitle.textContent=s.symbol+' · '+(s.liquidity||'UNKNOWN');
+  mTitle.textContent=s.symbol;
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=s.max_leverage?'verified max '+ml+'x':'safe 20x cap · verified max unavailable';
-  m_liq.value=s.liquidity||'UNKNOWN'; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; toggleOrderType(); syncSizeMode();
+  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=''; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
 function closeModal(){modalBg.style.display='none';}
@@ -1313,7 +1310,7 @@ async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json(
 loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
-setInterval(()=>{loadTrades();},1000); // UI follows Binance trade stream updates
+setInterval(()=>{if(document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
 </body>
