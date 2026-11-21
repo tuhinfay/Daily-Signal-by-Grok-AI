@@ -1256,12 +1256,14 @@ async function submitTrade(){
   else toast(d.error||'Failed');
 }
 async function loadTrades(){
+  if(window._loadingTrades)return;window._loadingTrades=true;
+  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
   const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
   const open=(d.trades||[]).filter(t=>t.status==='OPEN');
   const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
-  if(pending.length){h+='<div class="sec">Pending Orders</div><div class="card">';h+=pending.map(t=>'<div class="list-row"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> '+t.symbol+' · LIMIT '+t.limit_price+' · '+t.leverage+'x</span><button class="btn dim" onclick="cancelPending(\''+t.id+'\')">Cancel</button></div>').join('');h+='</div>';}
+  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+')</summary>';h+=pending.map(t=>'<div class="list-row"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> '+t.symbol+' · LIMIT '+t.limit_price+' · '+t.leverage+'x</span><button class="btn dim" onclick="cancelPending(\''+t.id+'\')">Cancel</button></div>').join('');h+='</details>';}
   if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
@@ -1295,6 +1297,8 @@ async function loadTrades(){
   if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · ${t.hit||'CLOSED'}</span>
     <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
+  for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
+  }catch(e){console.error('loadTrades',e);}finally{window._loadingTrades=false;}
 }
 async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
