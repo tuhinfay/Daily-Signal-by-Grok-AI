@@ -355,7 +355,7 @@ def price_monitor_loop():
         if websocket is not None:
             # Binance mark-price stream is the price used by the Futures risk engine.
             streams = "/".join(f"{symbol.lower()}@markPrice@1s" for symbol in symbols)
-            url = f"wss://fstream.binance.com/public/stream?streams={streams}"
+            url = f"wss://fstream.binance.com/market/stream?streams={streams}"
             ws = None
             dirty = set()
             last_persist = time_mod.monotonic()
