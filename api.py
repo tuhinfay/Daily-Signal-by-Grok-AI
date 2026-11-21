@@ -842,7 +842,7 @@ async def update_trade(tid: str, body: TradeUpdate):
     t = _trades[tid]
     new_sl = body.stop_loss if body.stop_loss is not None else t.get("stop_loss")
     new_tp1 = body.tp1 if body.tp1 is not None else t.get("tp1")
-    new_tp2 = body.tp2 if body.tp2 is not None else t.get("tp2")
+    new_tp2 = body.tp2 if "tp2" in body.model_fields_set else t.get("tp2")
     entry = float(t.get("current_price") or t.get("entry") or 0)
     side = str(t.get("side", "")).upper()
     if new_sl is not None and entry > 0 and ((side == "LONG" and float(new_sl) >= entry) or (side == "SHORT" and float(new_sl) <= entry)):
@@ -853,7 +853,7 @@ async def update_trade(tid: str, body: TradeUpdate):
         t["stop_loss"] = body.stop_loss
     if body.tp1 is not None:
         t["tp1"] = body.tp1
-    if body.tp2 is not None:
+    if "tp2" in body.model_fields_set:
         t["tp2"] = body.tp2
     if body.trailing_pct is not None or body.callback_rate is not None:
         rate = body.callback_rate if body.callback_rate is not None else body.trailing_pct
@@ -1259,6 +1259,7 @@ async function loadTrades(){
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
         <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"—":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
+        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||"UNKNOWN"}</strong></div>
         <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
       </div>
       <div class="actions">
@@ -1277,7 +1278,7 @@ async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(a
 function dcaPrompt(id){manageTradeId.value=id;manageTitle.textContent='Add to Position · DCA';manageDcaFields.style.display='block';manageTrailFields.style.display='none';manageDcaAmount.value='';manageBg.style.display='flex';}
 function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
 function closeManage(){manageBg.style.display='none';}
-async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null;if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}body={stop_loss:sl,tp1:tp1,tp2:tp2};}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1–5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}
+async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null;if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}body={stop_loss:sl,tp1:tp1,tp2:tp2};}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1–5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}
 async function editLevels(id,sl,tp1,tp2){manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';manageBg.style.display='flex';}
 async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
 function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
