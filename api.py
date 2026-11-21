@@ -27,6 +27,7 @@ _trades: Dict[str, Dict] = {}
 _account: Dict[str, float] = {}
 _monitor_running = False
 _scan_lock = threading.Lock()
+_scan_retry_after = 0.0
 
 
 class TradeCreate(BaseModel):
@@ -92,6 +93,9 @@ def _stats() -> Dict[str, Any]:
 
 
 def run_scan(top_n: int = 28):
+    global _scan_retry_after
+    if time_mod.monotonic() < _scan_retry_after:
+        return
     if not _scan_lock.acquire(blocking=False):
         return
     _cache["scanning"] = True
@@ -108,12 +112,8 @@ def run_scan(top_n: int = 28):
             print("movers", e)
 
         if client.rate_limited:
-            _cache["error"] = "Binance Futures rate limit active; scan paused to avoid extending the ban."
-            _cache["auto_scan"] = False
-            try:
-                db.set_meta("auto_scan", "0")
-            except Exception:
-                pass
+            _cache["error"] = "Binance Futures rate limit active; scans will retry automatically after a cooldown."
+            _scan_retry_after = time_mod.monotonic() + 300
             return
 
         signals, prices = [], {}
@@ -126,12 +126,8 @@ def run_scan(top_n: int = 28):
                 if df is not None and len(df) > 30:
                     data[tf] = df
             if client.rate_limited:
-                _cache["error"] = "Binance Futures rate limit active; remaining pairs skipped."
-                _cache["auto_scan"] = False
-                try:
-                    db.set_meta("auto_scan", "0")
-                except Exception:
-                    pass
+                _cache["error"] = "Binance Futures rate limit active; remaining pairs paused and will retry after cooldown."
+                _scan_retry_after = time_mod.monotonic() + 300
                 break
             if len(data) < 4:
                 continue
@@ -346,12 +342,11 @@ def startup():
     db.init_db(getattr(config, "DEMO_BALANCE", 10000))
     _account = db.load_account()
     _trades = db.load_trades()
-    # Testing service must never start REST-heavy auto scans until manually enabled.
-    _cache["auto_scan"] = False
+    # Restore the user's saved preference; auto-scan state must not be reset on deploy.
     try:
-        db.set_meta("auto_scan", "0")
+        _cache["auto_scan"] = db.get_meta("auto_scan", "1") == "1"
     except Exception:
-        pass
+        _cache["auto_scan"] = True
     _monitor_running = True
     threading.Thread(target=auto_scan_loop, daemon=True).start()
     threading.Thread(target=price_monitor_loop, daemon=True).start()
@@ -403,13 +398,30 @@ async def analyze_one(symbol: str, style: str = Query("day")):
     selected_style = style if style in ("scalp", "day", "swing") else "day"
     client = BinanceClient(futures=True)
     engine = SignalEngine()
+    # Fetch only the timeframes required by the selected strategy. This keeps
+    # manual analysis independent of Auto Scan and reduces Binance request weight.
+    required_tfs = {
+        "scalp": ("5m", "15m", "1h", "4h"),
+        "day": ("15m", "1h", "4h", "1d"),
+        "swing": ("1h", "4h", "1d"),
+    }[selected_style]
     data = {}
-    for tf in ("5m", "15m", "1h", "4h", "1d"):
+    for tf in required_tfs:
         df = client.fetch_ohlcv(sym, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
+        if client.rate_limited:
+            return JSONResponse(
+                {"ok": False, "error": "Binance Futures is temporarily rate-limiting this server. Please retry in a few minutes."},
+                status_code=429,
+                headers={"Retry-After": "300"},
+            )
         if df is not None and len(df) > 30:
             data[tf] = df
-    if len(data) < 4:
-        return JSONResponse({"ok": False, "error": "Insufficient Binance Futures candles for " + sym}, status_code=404)
+    if len(data) != len(required_tfs):
+        missing = [tf for tf in required_tfs if tf not in data]
+        return JSONResponse(
+            {"ok": False, "error": f"Insufficient Binance Futures candles for {sym}; missing: {', '.join(missing)}. Auto Scan does not control manual analysis."},
+            status_code=503,
+        )
     r = engine.analyze_pair(sym, data, volume_24h=0, style=selected_style)
     px = client.get_current_price(sym)
     lev = client.get_max_leverage(sym)
