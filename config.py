@@ -42,3 +42,7 @@ DEMO_BALANCE = 10000.0
 DEFAULT_LEVERAGE = 10
 MAX_LEVERAGE = 150
 RISK_PER_TRADE_PCT = 1.0
+
+# CLI export settings (used by main.py)
+EXPORT_JSON = False
+JSON_FILENAME = "signals.json"
