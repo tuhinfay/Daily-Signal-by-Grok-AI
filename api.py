@@ -580,7 +580,7 @@ async def trigger_scan(background_tasks: BackgroundTasks, top: int = Query(28, g
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "scanning": _cache["scanning"], "auto_scan": _cache["auto_scan"]}
+    return {"status": "ok", "scanning": _cache["scanning"], "auto_scan": _cache["auto_scan"], "database": db.backend_name()}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -806,7 +806,7 @@ function cardHTML(s){
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
       <span class="tag q">${s.quality||'B'}</span><span class="tag">${s.liquidity||'MED'}</span><span class="tag">${lev?lev+'x':'Leverage N/A'}</span></div>
       <div class="score">${s.score}</div></div>
-    <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · 1D ${s.bias_1d||'—'} · 4H ${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
+    <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
       <div><em>Entry</em><strong>${s.entry}</strong></div>
       <div><em>Market</em><strong>${mp}</strong></div>
