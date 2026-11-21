@@ -65,6 +65,8 @@ class TradeCreate(BaseModel):
     note: Optional[str] = ""
     scale_mode: Optional[str] = None  # flat | ascending
     scale_orders: Optional[int] = None
+    scale_lower_price: Optional[float] = None
+    scale_upper_price: Optional[float] = None
 
 
 class TradeUpdate(BaseModel):
@@ -177,8 +179,9 @@ def _update_trade_liquidation_fields(trade: Dict[str, Any]) -> None:
         trade["liquidation_risk"] = "UNKNOWN"
 
 
-def run_scan(top_n: int = 28):
+def run_scan(top_n: int = 12):
     global _scan_retry_after
+    top_n = max(5, min(int(top_n or 12), 12))
     cooldown_remaining = int(_scan_retry_after - time_mod.monotonic())
     if cooldown_remaining > 0:
         minutes, seconds = divmod(cooldown_remaining, 60)
@@ -194,7 +197,7 @@ def run_scan(top_n: int = 28):
         engine = SignalEngine()
         pairs = client.get_top_usdt_pairs(top_n=top_n, min_volume=config.MIN_VOLUME_USDT)
         try:
-            mv = client.get_movers(top_n=12, min_volume=3_000_000)
+            mv = client.get_movers(top_n=6, min_volume=5_000_000)
             _cache["gainers"] = mv.get("gainers", [])
             _cache["losers"] = mv.get("losers", [])
         except Exception as e:
@@ -258,8 +261,8 @@ def auto_scan_loop():
                 run_scan(26)
             except Exception as e:
                 print("auto scan", e)
-            # wait ~3 min between scans
-            for _ in range(18):
+            # Wait five minutes between scans to stay below public API rate limits.
+            for _ in range(30):
                 if not _monitor_running or not _cache.get("auto_scan"):
                     break
                 time_mod.sleep(10)
@@ -769,17 +772,24 @@ async def api_alerts():
 
 
 @app.post("/api/trades")
-async def create_trade(body: TradeCreate):
+def create_trade(body: TradeCreate):
     sym = body.symbol.upper().replace("/", "")
     side = body.side.upper()
     order_type = (body.order_type or "MARKET").upper()
     if side not in ("LONG", "SHORT"): return JSONResponse({"ok": False, "error": "side must be LONG or SHORT"}, status_code=400)
     if order_type not in ("MARKET", "LIMIT"): return JSONResponse({"ok": False, "error": "order_type must be MARKET or LIMIT"}, status_code=400)
-    entry_price = float((body.limit_price or body.entry) if order_type == "LIMIT" else body.entry)
+    scale_low = float(body.scale_lower_price or 0)
+    scale_high = float(body.scale_upper_price or 0)
+    has_scale_range = bool(scale_low or scale_high)
+    if has_scale_range:
+        if not (scale_low > 0 and scale_high > scale_low):
+            return JSONResponse({"ok": False, "error": "Set a valid Lower Range and Upper Range"}, status_code=400)
+        entry_price = (scale_low + scale_high) / 2
+    else:
+        entry_price = float((body.limit_price or body.entry) if order_type == "LIMIT" else body.entry)
     if entry_price <= 0: return JSONResponse({"ok": False, "error": "invalid entry price"}, status_code=400)
-    # Keep order placement local/fast: leverage metadata is loaded by the scanner,
-    # not fetched synchronously on every manual order submission.
-    client = BinanceClient(futures=True)
+    # No Binance client/network I/O in the order-submit path.
+    # The modal/scanner refreshes market prices in the background.
     max_lev = None
     leverage_cap = 20
     lev = max(1, min(int(body.leverage or leverage_cap), leverage_cap, 150))
@@ -792,10 +802,12 @@ async def create_trade(body: TradeCreate):
     sl_dist = abs(entry_price - body.stop_loss)
     if sl_dist <= 0:
         return JSONResponse({"ok": False, "error": "invalid SL"}, status_code=400)
-    if (side == "LONG" and body.stop_loss >= entry_price) or (side == "SHORT" and body.stop_loss <= entry_price):
-        return JSONResponse({"ok": False, "error": "Stop Loss is on the wrong side of entry"}, status_code=400)
-    if body.tp1 and ((side == "LONG" and body.tp1 <= entry_price) or (side == "SHORT" and body.tp1 >= entry_price)):
-        return JSONResponse({"ok": False, "error": "Take Profit is on the wrong side of entry"}, status_code=400)
+    check_low = scale_low if has_scale_range else entry_price
+    check_high = scale_high if has_scale_range else entry_price
+    if (side == "LONG" and body.stop_loss >= check_low) or (side == "SHORT" and body.stop_loss <= check_high):
+        return JSONResponse({"ok": False, "error": "Stop Loss is on the wrong side of the entry range"}, status_code=400)
+    if body.tp1 and ((side == "LONG" and body.tp1 <= check_high) or (side == "SHORT" and body.tp1 >= check_low)):
+        return JSONResponse({"ok": False, "error": "Take Profit is on the wrong side of the entry range"}, status_code=400)
 
     # Priority: quantity > amount_usd (notional) > margin_usd > risk_pct
     if body.quantity and body.quantity > 0:
@@ -848,17 +860,22 @@ async def create_trade(body: TradeCreate):
         "dca_count": 0,
     }
     if order_type == "LIMIT" and scale_mode and scale_orders >= 2:
-        live_scale_price = client.get_current_price(sym)
-        market_price = float(live_scale_price or _cache.get("prices", {}).get(sym) or 0)
+        cached = _modal_price_cache.get(sym) or {}
+        market_price = float(cached.get("price") or _cache.get("prices", {}).get(sym) or 0)
         if market_price <= 0:
-            return JSONResponse({"ok": False, "error": "Live market price unavailable; cannot calculate distinct scaled limit prices"}, status_code=503)
-        if market_price > 0 and ((side == "LONG" and entry_price >= market_price) or (side == "SHORT" and entry_price <= market_price)):
-            return JSONResponse({"ok": False, "error": "Scaled LONG limit must be below market; SHORT limit must be above market"}, status_code=400)
+            return JSONResponse({"ok": False, "error": "Live market price unavailable; wait for the market price to load and retry"}, status_code=503)
+        if has_scale_range:
+            if (side == "LONG" and scale_high >= market_price) or (side == "SHORT" and scale_low <= market_price):
+                return JSONResponse({"ok": False, "error": "LONG range must be below market; SHORT range must be above market"}, status_code=400)
+            child_prices = [scale_low + (scale_high - scale_low) * i / (scale_orders - 1) for i in range(scale_orders)]
+        else:
+            if (side == "LONG" and entry_price >= market_price) or (side == "SHORT" and entry_price <= market_price):
+                return JSONResponse({"ok": False, "error": "Scaled LONG limit must be below market; SHORT limit must be above market"}, status_code=400)
+            child_prices = [market_price + (entry_price - market_price) * (i + 1) / scale_orders for i in range(scale_orders)]
         weights = [1.0 / scale_orders] * scale_orders
         if scale_mode == "ascending":
             total_weight = scale_orders * (scale_orders + 1) / 2
             weights = [(i + 1) / total_weight for i in range(scale_orders)]
-        child_prices = [market_price + (entry_price - market_price) * (i + 1) / scale_orders for i in range(scale_orders)]
         if any((side == "LONG" and body.stop_loss >= p) or (side == "SHORT" and body.stop_loss <= p) for p in child_prices):
             return JSONResponse({"ok": False, "error": "Stop Loss conflicts with a scaled entry price"}, status_code=400)
         created = []
@@ -1040,7 +1057,7 @@ async def close_trade(tid: str):
 @app.get("/scan")
 async def trigger_scan(background_tasks: BackgroundTasks, top: int = Query(28, ge=10, le=40)):
     if not _cache["scanning"]:
-        background_tasks.add_task(run_scan, top_n=top)
+        background_tasks.add_task(run_scan, top_n=min(top, 12))
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -1249,6 +1266,10 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Scaled Order</label><select id="m_scale" onchange="updateOrderPreview()"><option value="">None</option><option value="flat">Equal Split</option><option value="ascending">Ascending Size</option></select></div>
       <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="2" max="50" placeholder="Set manually" oninput="updateOrderPreview()"></div>
     </div>
+    <div class="row2" id="scaleRangeFields" style="display:none">
+      <div><label>Lower Range Price</label><input type="number" id="m_scale_low" min="0" step="any" placeholder="Range low" oninput="updateOrderPreview()"></div>
+      <div><label>Upper Range Price</label><input type="number" id="m_scale_high" min="0" step="any" placeholder="Range high" oninput="updateOrderPreview()"></div>
+    </div>
     <div id="order_preview"></div><div id="liq_preview" class="hint" aria-live="polite">Estimated liquidation preview</div><div id="scale_preview" class="scale-preview" style="display:none"></div>
     
     <div class="btns">
@@ -1284,7 +1305,11 @@ function setSide(side){m_side.value=side;const isLong=side==='LONG';sideLong.cla
 function toggleOrderType(){const lim=m_order_type.value==='LIMIT';m_entry_label.textContent=lim?'Limit Price':'Market Entry';limit_hint.style.display=lim?'block':'none';m_entry.readOnly=!lim;if(!lim)m_entry.value=m_mkt.value||m_entry.value;updateOrderPreview();}
 function updateOrderPreview(){
  const endSpan='<'+'/span>',endDiv='<'+'/div>',endB='<'+'/b>';
- const px=+(m_entry.value||m_mkt.value||0),lev=+m_lev.value||1,mode=m_mode.value;
+ let px=+(m_entry.value||m_mkt.value||0);
+ const lev=+m_lev.value||1,mode=m_mode.value;
+ const rangeLow=+m_scale_low.value||0,rangeHigh=+m_scale_high.value||0;
+ if(m_scale.value&&rangeLow>0&&rangeHigh>rangeLow)px=(rangeLow+rangeHigh)/2;
+ document.getElementById('scaleRangeFields').style.display=m_scale.value?'grid':'none';
  let notional=0;
  if(mode==='amount')notional=+m_amount.value||0;
  else if(mode==='margin')notional=(+m_margin.value||0)*lev;
@@ -1297,13 +1322,15 @@ function updateOrderPreview(){
    const market=+(m_mkt.value||0),rows=[];let totalQty=0;
    if(m_order_type.value!=='LIMIT'){
      sp.style.display='block';sp.innerHTML='<div class="hint">Scaled orders are available for Limit orders only.</div>';
-   }else if(!(market>0)||Math.abs(market-px)<Math.max(px*1e-8,1e-10)){
+   }else if(!(rangeLow>0&&rangeHigh>rangeLow)){
+     sp.style.display='block';sp.innerHTML='<div class="hint">Enter a valid Lower Range and Upper Range to preview the order ladder.</div>';
+   }else if(!(market>0)||((m_side.value==='LONG'&&rangeHigh>=market)||(m_side.value==='SHORT'&&rangeLow<=market))){
      sp.style.display='block';sp.innerHTML='<div class="hint">Waiting for a distinct live market price. Set a Limit Price away from the current market to preview separate order prices.</div>';
    }else{
      let cumulativeQty=0,cumulativeCost=0;
      for(let i=0;i<n;i++){
        const weight=sm==='ascending'?(i+1)/(n*(n+1)/2):1/n;
-       const price=market+(px-market)*(i+1)/n;
+       const price=rangeLow+(rangeHigh-rangeLow)*i/(n-1);
        const amount=notional*weight;
        const childQty=Math.round((amount/price)*1e6)/1e6;
        totalQty+=childQty;cumulativeQty+=childQty;cumulativeCost+=price*childQty;
@@ -1377,7 +1404,7 @@ async function loadSignals(){
     list.innerHTML=d.signals.map(cardHTML).join('');
   }catch(e){status.textContent='Load failed';}
 }
-function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=28').then(()=>setTimeout(loadSignals,3000));}
+function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=12').then(()=>setTimeout(loadSignals,3000));}
 async function analyzeManual(){
   let s=(symIn.value||'').trim().toUpperCase().replace('/','').replace('-','');
   if(!s){toast('Enter symbol');return;} if(!s.endsWith('USDT'))s+='USDT';
@@ -1395,6 +1422,7 @@ function openModal(s){
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
+  m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=''; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
@@ -1404,19 +1432,23 @@ async function submitTrade(){
   const submitBtn=document.querySelector('#modalBg .btn.good');
   if(submitBtn.disabled)return;
   const mode=m_mode.value,typ=m_order_type.value;
-  const px=typ==='MARKET'?(+m_mkt.value||+m_entry.value):(+m_entry.value);
+  let px=typ==='MARKET'?(+m_mkt.value||+m_entry.value):(+m_entry.value);
+  const rangeLow=+m_scale_low.value||0,rangeHigh=+m_scale_high.value||0;
+  if(m_scale.value&&rangeLow>0&&rangeHigh>rangeLow)px=(rangeLow+rangeHigh)/2;
   const size=mode==='amount'?+m_amount.value:mode==='margin'?+m_margin.value:mode==='qty'?+m_qty.value:+m_risk.value;
   if(!(px>0)){toast('Live market / limit price is not available');return;}
   if(!(size>0)){toast('Enter a valid order amount');return;}
   if(!(+m_sl.value>0)){toast('Enter a valid Stop Loss');return;}
   if(!(+m_tp1.value>0)){toast('Enter a valid TP1');return;}
-  const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
+  const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null};
   if(mode==='amount')body.amount_usd=+m_amount.value;
   if(mode==='margin')body.margin_usd=+m_margin.value;
   if(mode==='risk')body.risk_pct=+m_risk.value||1;
   if(mode==='qty')body.quantity=+m_qty.value;
   if(body.scale_mode&&typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
   if(body.scale_mode&&(!Number.isInteger(body.scale_orders)||body.scale_orders<2||body.scale_orders>50)){toast('Set number of scaled orders (2–50)');return;}
+  if(body.scale_mode&&(!(rangeLow>0&&rangeHigh>rangeLow))){toast('Set a valid Lower Range and Upper Range');return;}
+  if(body.scale_mode&&((m_side.value==='LONG'&&rangeHigh>=(+m_mkt.value||0))||(m_side.value==='SHORT'&&rangeLow<=(+m_mkt.value||0)))){toast('LONG range must be below market; SHORT range must be above market');return;}
   if(body.scale_mode&&body.scale_orders>=2&&!confirm('Place '+body.scale_orders+' separate pending orders?'))return;
   submitBtn.disabled=true;submitBtn.textContent='Placing…';
   try{
