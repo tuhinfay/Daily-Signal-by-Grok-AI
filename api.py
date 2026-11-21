@@ -1430,7 +1430,7 @@ async function loadTrades(){
   const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
-  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') · Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>'<div class="list-row"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> '+t.symbol+' · LIMIT '+fmtPrice(t.limit_price)+' · $'+fmt(t.notional)+' · Qty '+t.qty+' · '+t.leverage+'x</span><button class="btn dim" onclick="cancelPending(\\''+t.id+'\\')">Cancel</button></div>').join('');h+='</details>';}
+  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') · Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtPrice(t.limit_price)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
   if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
