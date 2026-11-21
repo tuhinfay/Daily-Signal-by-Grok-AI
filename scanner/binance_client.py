@@ -159,16 +159,15 @@ class BinanceClient:
         ][:top_n]
 
     def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
-        """Rank liquid USDT-M contracts using the already-fetched 24h ticker snapshot."""
+        """Rank liquid USDT-M contracts from the current UTC daily candle (00:00 UTC = 06:00 Bangladesh)."""
         gainers, losers = [], []
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
         try:
-            tickers = self._tickers_cache
-            if not tickers:
-                tickers = self.exchange.fetch_tickers()
-                self._tickers_cache = tickers or {}
-            rows = []
+            self._ensure_markets()
+            tickers = self._tickers_cache or self.exchange.fetch_tickers()
+            self._tickers_cache = tickers or {}
+            candidates = []
             for symbol, data in tickers.items():
                 clean = self._clean_symbol(symbol)
                 if not clean.endswith("USDT"):
@@ -182,17 +181,39 @@ class BinanceClient:
                 try:
                     volume = float(qv or 0)
                     last = float(data.get("last") or 0)
-                    change = float(data.get("percentage"))
-                except (TypeError, ValueError):
+                except Exception:
                     continue
                 if volume >= min_volume and last > 0:
+                    candidates.append((clean, volume, last))
+            candidates.sort(key=lambda row: row[1], reverse=True)
+
+            # Limit daily-kline lookups to the most liquid contracts to keep API weight bounded.
+            rows = []
+            for clean, volume, last in candidates[:8]:
+                if self.rate_limited:
+                    break
+                try:
+                    candles = self.exchange.fetch_ohlcv(
+                        self._ccxt_symbol(clean), timeframe="1d", limit=1
+                    )
+                    if not candles:
+                        continue
+                    daily_open = float(candles[-1][1])
+                    if daily_open <= 0:
+                        continue
+                    change = ((last - daily_open) / daily_open) * 100
                     rows.append({
                         "symbol": clean,
                         "change": round(change, 4),
                         "volume": volume,
                         "price": last,
-                        "period": "Rolling 24h ticker change",
+                        "period": "UTC daily candle (BD 06:00)",
                     })
+                except Exception as e:
+                    self._mark_rate_limit(e)
+                    print(f"mover daily candle {clean}: {e}")
+                    if self.rate_limited:
+                        break
             rows.sort(key=lambda row: row["change"], reverse=True)
             gainers = rows[:top_n]
             losers = list(reversed(rows[-top_n:])) if rows else []
