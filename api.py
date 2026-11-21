@@ -905,6 +905,23 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .modal-bg{position:fixed;inset:0;background:#000c;z-index:80;display:none;align-items:flex-end;justify-content:center}
 .modal{width:100%;max-width:430px;background:var(--card);border:1px solid var(--line);border-radius:16px 16px 0 0;padding:14px 14px 20px;max-height:92vh;overflow:auto}
 .modal h3{font-size:14px;margin-bottom:6px}
+.side-picker{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:5px}
+.side-picker .side-btn{padding:13px 8px;border:2px solid #334155;border-radius:10px;background:#101827;color:#94a3b8;font-weight:900;font-size:13px;cursor:pointer;opacity:.72}
+.side-picker .side-btn.long.selected{background:#064e3b;border-color:#10b981;color:#d1fae5;opacity:1;box-shadow:0 0 0 2px #10b98133}
+.side-picker .side-btn.short.selected{background:#881337;border-color:#f43f5e;color:#ffe4e6;opacity:1;box-shadow:0 0 0 2px #f43f5e33}
+.trade-details{margin-top:8px;border-top:1px solid var(--line);padding-top:7px}
+.trade-details summary{cursor:pointer;color:var(--cyan);font-size:11px;font-weight:800;padding:5px 0;list-style:none}
+.trade-details summary::-webkit-details-marker{display:none}
+.trade-details summary:before{content:'＋ ';font-weight:900}
+.trade-details[open] summary:before{content:'− '}
+.position-main{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.position-main>div{background:#080e1a;border:1px solid var(--line);border-radius:8px;padding:7px}
+.position-main em{display:block;font-size:9px;color:var(--mut);font-style:normal}
+.position-main strong{display:block;font-size:11px;margin-top:3px;overflow-wrap:anywhere}
+.manage-modal{width:100%;max-width:430px;background:var(--card);border:1px solid var(--line);border-radius:16px 16px 0 0;padding:14px;max-height:85vh;overflow:auto}
+.manage-modal label{display:block;margin:9px 0 3px;font-size:10px;color:var(--mut);text-transform:uppercase}
+.manage-modal input{width:100%;background:#080e1a;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:11px;font-size:13px}
+@media(max-width:420px){.position-main{grid-template-columns:repeat(2,1fr)}}
 .modal label{display:block;margin:8px 0 3px;font-size:10px;color:var(--mut);text-transform:uppercase}
 .modal input,.modal select{width:100%;background:#080e1a;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px;font-size:13px}
 .modal input[type=range]{padding:0;height:28px}
@@ -992,8 +1009,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Order Type</label><select id="m_order_type" onchange="toggleOrderType()"><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></div>
       <div><label>Margin mode</label><select id="m_mm"><option value="CROSS">Cross</option><option value="ISOLATED">Isolated</option></select></div>
     </div>
-    <div class="row2">
-      <div><label>Direction</label><div class="row2"><button type="button" class="btn good" onclick="setSide('LONG')">Buy / Long</button><button type="button" class="btn bad" onclick="setSide('SHORT')">Sell / Short</button></div><select id="m_side" style="display:none"><option>LONG</option><option>SHORT</option></select></div>
+    <div class="row2"><div><label>Position Side — selected side is highlighted</label><div class="side-picker"><button type="button" id="sideLong" class="side-btn long" aria-pressed="false" onclick="setSide('LONG')">▲ BUY / LONG</button><button type="button" id="sideShort" class="side-btn short" aria-pressed="false" onclick="setSide('SHORT')">▼ SELL / SHORT</button></div><select id="m_side" style="display:none"><option>LONG</option><option>SHORT</option></select></div>
       <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="20" min="1" max="150" oninput="updateOrderPreview()"></div>
     </div>
     <div><label>Liquidity</label><input id="m_liq" readonly style="opacity:.8"></div>
@@ -1036,6 +1052,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     </div>
   </div>
 </div>
+<div class="modal-bg" id="manageBg"><div class="manage-modal"><h3 id="manageTitle">Manage Position</h3><input type="hidden" id="manageTradeId"><div id="manageDcaFields"><label>Add Position Size (USDT notional)</label><input type="number" id="manageDcaAmount" min="0" step="any" placeholder="e.g. 100"></div><div id="manageTrailFields" style="display:none"><label>Activation Price (blank = from entry)</label><input type="number" id="manageTrailActivation" step="any" placeholder="Optional"><label>Callback Rate (%)</label><input type="number" id="manageTrailRate" min="0" max="5" step="0.1" value="1"><p class="hint">After activation, the stop follows favorable price movement using this callback rate.</p></div><div class="btns"><button class="btn dim" onclick="closeManage()">Cancel</button><button class="btn good" onclick="saveManage()">Confirm</button></div></div></div>
 
 <script>
 let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
@@ -1057,7 +1074,7 @@ function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
   <div class="metric"><label>Total PnL</label><b class="${(st.total_pnl||0)>=0?'up':'dn'}">${(st.total_pnl||0)>=0?'+':''}$${fmt(st.total_pnl||0)}</b></div>
   <div class="metric"><label>Open</label><b>${st.open||0}</b></div>`;}
 function syncSizeMode(){const m=m_mode.value;box_amount.style.display=m==='amount'?'block':'none';box_margin.style.display=m==='margin'?'block':'none';box_risk.style.display=m==='risk'?'block':'none';box_qty.style.display=m==='qty'?'block':'none';updateOrderPreview();}
-function setSide(side){m_side.value=side;updateOrderPreview();}
+function setSide(side){m_side.value=side;const isLong=side==='LONG';sideLong.classList.toggle('selected',isLong);sideShort.classList.toggle('selected',!isLong);sideLong.setAttribute('aria-pressed',String(isLong));sideShort.setAttribute('aria-pressed',String(!isLong));updateOrderPreview();}
 function toggleOrderType(){const lim=m_order_type.value==='LIMIT';m_entry_label.textContent=lim?'Limit Price':'Market Entry';limit_hint.style.display=lim?'block':'none';m_entry.readOnly=!lim;if(!lim)m_entry.value=m_mkt.value||m_entry.value;updateOrderPreview();}
 function updateOrderPreview(){
  const px=+(m_entry.value||m_mkt.value||0),lev=+m_lev.value||1,mode=m_mode.value;
@@ -1131,7 +1148,7 @@ async function analyzeManual(){
 }
 function openModal(s){
   mTitle.textContent=s.symbol+' · '+(s.liquidity||'UNKNOWN');
-  m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
+  m_symbol.value=s.symbol; m_side.value=s.side; setSide(s.side); m_mm.value='CROSS'; m_order_type.value='MARKET';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=s.max_leverage?'verified max '+ml+'x':'safe 20x cap · verified max unavailable';
@@ -1166,24 +1183,17 @@ async function loadTrades(){
         <span class="tag">${t.liquidity||'UNKNOWN'}</span>${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
-      <div class="vals">
-        <div><em>Entry</em><strong>${t.entry}</strong></div>
-        <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
-        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
-        <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>Initial Margin</em><strong>${fmt(t.margin)} USDT</strong></div>
-        <div><em>Position Value (Mark)</em><strong>${fmt((t.current_price||t.entry||0)*(t.qty||0))} USDT</strong></div>
-        <div><em>Entry Notional</em><strong>${fmt(t.notional||((t.entry||0)*(t.qty||0)))} USDT</strong></div>
-        <div><em>Qty</em><strong>${t.qty}</strong></div>
-        <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        <div><em>Est. Liq. (approx.)</em><strong>${t.liquidation_price??'—'}</strong></div>
-        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct??'—'}%</strong></div>
-        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||'UNKNOWN'}</strong></div>
-        <div><em>Maintenance Est.</em><strong>${fmt(t.cross_maintenance_est||0)} USDT</strong></div>
-        <div><em>Cross Wallet Est.</em><strong>${t.margin_mode==='CROSS'?fmt(t.cross_wallet_equity_est)+' USDT':'—'}</strong></div>
-        <div><em>Order Type</em><strong>${t.order_type||'MARKET'}</strong></div>
-        <div><em>Trail</em><strong>${t.callback_rate?t.callback_rate+'%':'—'}</strong></div>
+      <div class="position-main">
+        <div><em>Entry Price</em><strong>${t.entry}</strong></div><div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>Unrealized PnL</em><strong style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</strong></div><div><em>Margin</em><strong>$${fmt(t.margin)} USDT</strong></div>
       </div>
+      <details class="trade-details"><summary>Position Details · SL/TP, liquidation, quantity & order info</summary><div class="vals">
+        <div><em>Stop Loss</em><strong>${t.stop_loss}</strong></div><div><em>Take Profit 1</em><strong>${t.tp1}</strong></div><div><em>Take Profit 2</em><strong>${t.tp2??'—'}</strong></div>
+        <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry||0)*(t.qty||0))} USDT</strong></div><div><em>Entry Notional</em><strong>${fmt(t.notional||((t.entry||0)*(t.qty||0)))} USDT</strong></div><div><em>Quantity</em><strong>${t.qty}</strong></div>
+        <div><em>PnL %</em><strong>${t.pnl_pct||0}%</strong></div><div><em>Est. Liquidation</em><strong>${t.liquidation_price??'—'}</strong></div><div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct??'—'}%</strong></div>
+        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||'UNKNOWN'}</strong></div><div><em>Maintenance Est.</em><strong>${fmt(t.cross_maintenance_est||0)} USDT</strong></div><div><em>Cross Wallet Est.</em><strong>${t.margin_mode==='CROSS'?fmt(t.cross_wallet_equity_est)+' USDT':'—'}</strong></div>
+        <div><em>Order Type</em><strong>${t.order_type||'MARKET'}</strong></div><div><em>Trailing Stop</em><strong>${t.callback_rate?(t.callback_rate+'% callback · activation '+(t.trailing_activation_price||'entry')):'Not set'}</strong></div><div><em>DCA Count</em><strong>${t.dca_count||0}</strong></div>
+      </div></details>
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
         <button class="btn dim" onclick="dcaPrompt('${t.id}')">DCA</button>
@@ -1198,8 +1208,11 @@ async function loadTrades(){
 }
 async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
-async function dcaPrompt(id){const v=prompt('DCA Amount USDT (notional)');if(!v)return;const d=await(await fetch('/api/trades/'+id+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:+v})})).json();if(d.ok){toast('DCA added');loadTrades();}else toast(d.error||'DCA failed');}
-async function trailPrompt(id,cur){const a=prompt('Activation Price (blank = activate from entry)','');if(a===null)return;const v=prompt('Callback Rate % (0–5; 0 disables)',cur||'1');if(v===null)return;const rate=+v;if(!Number.isFinite(rate)||rate<0||rate>5){toast('Callback must be 0–5%');return;}const body={callback_rate:rate};if(a.trim()){const p=+a;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){toast('Trailing configured');loadTrades();}}
+function dcaPrompt(id){manageTradeId.value=id;manageTitle.textContent='Add to Position · DCA';manageDcaFields.style.display='block';manageTrailFields.style.display='none';manageDcaAmount.value='';manageBg.style.display='flex';}
+function trailPrompt(id,cur){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageDcaFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value='';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
+function closeManage(){manageBg.style.display='none';}
+async function saveManage(){const id=manageTradeId.value;if(manageDcaFields.style.display!=='none'){const amount=+manageDcaAmount.value;if(!Number.isFinite(amount)||amount<=0){toast('Enter a valid DCA amount');return;}const d=await(await fetch('/api/trades/'+id+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:amount})})).json();if(d.ok){closeManage();toast('DCA added');loadTrades();}else toast(d.error||'DCA failed');return;}const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5){toast('Callback must be 0–5%');return;}const body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Trailing stop updated');loadTrades();}else toast(d.error||'Trailing update failed');}
+/* Trailing Stop uses the dedicated position management modal. */
 async function editLevels(id,sl,tp1,tp2){const nsl=prompt('Stop loss',sl);if(nsl===null)return;const n1=prompt('TP1',tp1);if(n1===null)return;const n2=prompt('TP2 (optional)',tp2||'');const body={stop_loss:+nsl,tp1:+n1};if(n2)body.tp2=+n2;const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){toast('Levels updated');loadTrades();}}
 function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
