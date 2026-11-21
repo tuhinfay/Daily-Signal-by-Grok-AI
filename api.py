@@ -627,6 +627,11 @@ async def api_alerts():
 async def create_trade(body: TradeCreate):
     sym = body.symbol.upper().replace("/", "")
     side = body.side.upper()
+    order_type = (body.order_type or "MARKET").upper()
+    if side not in ("LONG", "SHORT"): return JSONResponse({"ok": False, "error": "side must be LONG or SHORT"}, status_code=400)
+    if order_type not in ("MARKET", "LIMIT"): return JSONResponse({"ok": False, "error": "order_type must be MARKET or LIMIT"}, status_code=400)
+    entry_price = float((body.limit_price or body.entry) if order_type == "LIMIT" else body.entry)
+    if entry_price <= 0: return JSONResponse({"ok": False, "error": "invalid entry price"}, status_code=400)
     client = BinanceClient(futures=True)
     max_lev = client.get_max_leverage(sym)
     leverage_cap = max_lev or 20
@@ -637,31 +642,35 @@ async def create_trade(body: TradeCreate):
 
     existing_trade = next((t for t in _trades.values() if t.get("status") == "OPEN" and t["symbol"] == sym and t["side"] == side), None)
 
-    sl_dist = abs(body.entry - body.stop_loss)
+    sl_dist = abs(entry_price - body.stop_loss)
     if sl_dist <= 0:
         return JSONResponse({"ok": False, "error": "invalid SL"}, status_code=400)
+    if (side == "LONG" and body.stop_loss >= entry_price) or (side == "SHORT" and body.stop_loss <= entry_price):
+        return JSONResponse({"ok": False, "error": "Stop Loss is on the wrong side of entry"}, status_code=400)
+    if body.tp1 and ((side == "LONG" and body.tp1 <= entry_price) or (side == "SHORT" and body.tp1 >= entry_price)):
+        return JSONResponse({"ok": False, "error": "Take Profit is on the wrong side of entry"}, status_code=400)
 
     # Priority: quantity > amount_usd (notional) > margin_usd > risk_pct
     if body.quantity and body.quantity > 0:
         qty = float(body.quantity)
-        notional = qty * body.entry
+        notional = qty * entry_price
         margin = notional / lev
         risk_usd = qty * sl_dist
     elif body.amount_usd and body.amount_usd > 0:
         notional = float(body.amount_usd)
-        qty = notional / body.entry
+        qty = notional / entry_price
         margin = notional / lev
         risk_usd = qty * sl_dist
     elif body.margin_usd and body.margin_usd > 0:
         margin = min(float(body.margin_usd), _account["balance"] * 0.99)
         notional = margin * lev
-        qty = notional / body.entry
+        qty = notional / entry_price
         risk_usd = qty * sl_dist
     else:
         risk_pct = max(0.25, min(float(body.risk_pct or 1.0), 100.0))
         risk_usd = _account["balance"] * (risk_pct / 100.0)
         qty = risk_usd / sl_dist
-        notional = qty * body.entry
+        notional = qty * entry_price
         margin = notional / lev
 
     if margin > _account["balance"] * 0.99:
@@ -676,8 +685,8 @@ async def create_trade(body: TradeCreate):
 
     tid = str(uuid.uuid4())[:8]
     trade = {
-        "id": tid, "symbol": sym, "side": side,
-        "entry": body.entry, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
+        "id": tid, "symbol": sym, "side": side, "order_type": order_type, "order_price": entry_price if order_type == "LIMIT" else None, "limit_price": entry_price if order_type == "LIMIT" else None,
+        "entry": entry_price, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
@@ -686,10 +695,19 @@ async def create_trade(body: TradeCreate):
         "scale_mode": scale_mode, "scale_orders": scale_orders,
         "dca_history": [{"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()}],
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
-        "current_price": body.entry, "pnl_pct": 0.0, "unrealized_pnl": 0.0,
+        "current_price": entry_price if order_type == "MARKET" else None, "pnl_pct": 0.0, "unrealized_pnl": 0.0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dca_count": 0,
     }
+    if order_type == "LIMIT":
+        trade["status"] = "PENDING"
+        trade["pending_created_at"] = datetime.now(timezone.utc).isoformat()
+        trade["dca_history"] = []
+        _trades[tid] = trade
+        db.save_trade(trade)
+        _calc_equity()
+        db.save_account(_account)
+        return {"ok": True, "trade": trade, "pending": True, "duplicate": False, "account": _account}
     if existing_trade:
         old_qty = float(existing_trade.get("qty") or 0)
         combined_qty = old_qty + qty
@@ -715,6 +733,16 @@ async def create_trade(body: TradeCreate):
     _calc_equity()
     db.save_account(_account)
     return {"ok": True, "trade": trade, "duplicate": False, "account": _account}
+
+
+@app.delete("/api/trades/{tid}")
+async def cancel_pending_trade(tid: str):
+    if tid not in _trades or _trades[tid].get("status") != "PENDING":
+        return JSONResponse({"ok": False, "error": "pending order not found"}, status_code=404)
+    t = _trades[tid]
+    t.update({"status": "CANCELED", "canceled_at": datetime.now(timezone.utc).isoformat()})
+    db.save_trade(t)
+    return {"ok": True, "trade": t}
 
 
 @app.post("/api/trades/{tid}/dca")
