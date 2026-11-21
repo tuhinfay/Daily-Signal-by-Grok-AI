@@ -775,6 +775,8 @@ async def dca_trade(tid: str, body: DcaBody):
     t.setdefault("dca_history", []).append({"price": price, "qty": round(add_qty, 8), "notional": round(price * add_qty, 2), "margin": round(price * add_qty / lev, 2), "created_at": datetime.now(timezone.utc).isoformat()})
     t["current_price"] = price
     _update_trade_liquidation_fields(t)
+    for position in _trades.values():
+        if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
     db.save_trade(t)
     _calc_equity()
     return {"ok": True, "trade": t, "account": _account}
@@ -818,6 +820,8 @@ async def close_trade(tid: str):
     t.update({"status": "CLOSED", "needs_alert": False,
               "closed_at": datetime.now(timezone.utc).isoformat(),
               "hit": t.get("hit") or "MANUAL", "realized_pnl": round(pnl, 2)})
+    for position in _trades.values():
+        if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
     db.save_trade(t)
     _calc_equity()
     db.save_account(_account)
