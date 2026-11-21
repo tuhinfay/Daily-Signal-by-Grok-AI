@@ -187,7 +187,7 @@ class BinanceClient:
                     candidates.append((clean, volume, last))
             candidates.sort(key=lambda row: row[1], reverse=True)
 
-            # Check the top 26 contracts by quote volume using their current UTC daily candle (BD 06:00).
+            # Check the top 40 contracts by quote volume using their current UTC daily candle (BD 06:00).
             rows = []
             for clean, volume, last in candidates[:40]:
                 if self.rate_limited:
