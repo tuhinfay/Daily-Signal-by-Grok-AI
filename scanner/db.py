@@ -48,14 +48,21 @@ def _detect_backend() -> str:
         try:
             import psycopg
             from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
 
             conninfo = _normalize_pg_url(url)
-            # test connection
-            with psycopg.connect(conninfo) as conn:
+            # Keep a small warm pool so each order does not pay a new TLS/DNS
+            # connection setup cost. Pool checkout remains thread-safe.
+            pool = ConnectionPool(
+                conninfo=conninfo, min_size=1, max_size=6, timeout=5,
+                kwargs={"row_factory": dict_row}, open=True,
+            )
+            pool.wait(timeout=5)
+            with pool.connection() as conn:
                 conn.execute("SELECT 1")
-            _pg = {"conninfo": conninfo, "psycopg": psycopg, "dict_row": dict_row}
+            _pg = {"pool": pool}
             _backend = "postgres"
-            print("[db] Using PostgreSQL (DATABASE_URL)")
+            print("[db] Using PostgreSQL with warm connection pool (DATABASE_URL)")
             return _backend
         except Exception as e:
             print(f"[db] Postgres unavailable ({e}); falling back to SQLite")
@@ -65,8 +72,7 @@ def _detect_backend() -> str:
 
 
 def _pg_conn():
-    psycopg = _pg["psycopg"]
-    return psycopg.connect(_pg["conninfo"], row_factory=_pg["dict_row"])
+    return _pg["pool"].connection()
 
 
 def _sqlite_conn():
