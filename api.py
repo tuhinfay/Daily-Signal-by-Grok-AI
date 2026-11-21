@@ -191,7 +191,7 @@ def _update_trade_liquidation_fields(trade: Dict[str, Any]) -> None:
 
 def run_scan(top_n: int = 12):
     global _scan_retry_after
-    top_n = max(5, min(int(top_n or 12), 12))
+    top_n = max(5, min(int(top_n or 26), 26))
     cooldown_remaining = int(_scan_retry_after - time_mod.monotonic())
     if cooldown_remaining > 0:
         minutes, seconds = divmod(cooldown_remaining, 60)
@@ -271,8 +271,8 @@ def auto_scan_loop():
                 run_scan(26)
             except Exception as e:
                 print("auto scan", e)
-            # Wait five minutes between scans to stay below public API rate limits.
-            for _ in range(30):
+            # Wait 90 seconds after each completed scan; the scan lock prevents overlap.
+            for _ in range(9):
                 if not _monitor_running or not _cache.get("auto_scan"):
                     break
                 time_mod.sleep(10)
@@ -1072,7 +1072,7 @@ async def close_trade(tid: str):
 @app.get("/scan")
 async def trigger_scan(background_tasks: BackgroundTasks, top: int = Query(28, ge=10, le=40)):
     if not _cache["scanning"]:
-        background_tasks.add_task(run_scan, top_n=min(top, 12))
+        background_tasks.add_task(run_scan, top_n=min(top, 26))
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -1419,7 +1419,7 @@ async function loadSignals(){
     list.innerHTML=d.signals.map(cardHTML).join('');
   }catch(e){status.textContent='Load failed';}
 }
-function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=12').then(()=>setTimeout(loadSignals,3000));}
+function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=26').then(()=>setTimeout(loadSignals,3000));}
 async function analyzeManual(){
   let s=(symIn.value||'').trim().toUpperCase().replace('/','').replace('-','');
   if(!s){toast('Enter symbol');return;} if(!s.endsWith('USDT'))s+='USDT';
