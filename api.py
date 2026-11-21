@@ -806,17 +806,18 @@ async def create_trade(body: TradeCreate):
         created = []
         for i, weight in enumerate(weights):
             child_price = child_prices[i]
-            child_qty = round(qty * weight, 6)
+            child_notional = notional * weight
+            child_qty = round(child_notional / child_price, 6)
             if child_qty <= 0:
                 continue
             child = dict(trade)
             child_id = str(uuid.uuid4())[:8]
-            child_margin = round(margin * weight, 2)
+            child_margin = round(child_notional / lev, 2)
             child.update({
                 "id": child_id, "entry": round(child_price, 8),
                 "order_price": round(child_price, 8), "limit_price": round(child_price, 8),
                 "qty": child_qty, "margin": child_margin,
-                "notional": round(child_qty * child_price, 2),
+                "notional": round(child_notional, 2),
                 "risk_usd": round(child_qty * abs(child_price - body.stop_loss), 2),
                 "current_price": None, "status": "PENDING",
                 "scale_order_index": i + 1, "scale_orders": scale_orders,
