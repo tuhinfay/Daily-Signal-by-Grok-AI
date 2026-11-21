@@ -989,10 +989,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Direction</label><div class="row2"><button type="button" class="btn good" onclick="setSide('LONG')">Buy / Long</button><button type="button" class="btn bad" onclick="setSide('SHORT')">Sell / Short</button></div><select id="m_side" style="display:none"><option>LONG</option><option>SHORT</option></select></div>
       <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="20" min="1" max="150" oninput="updateOrderPreview()"></div>
     </div>
-    <div class="row2">
-      <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="20" min="1" max="150"></div>
-      <div><label>Liquidity</label><input id="m_liq" readonly style="opacity:.8"></div>
-    </div>
+    <div><label>Liquidity</label><input id="m_liq" readonly style="opacity:.8"></div>
     <div class="row2">
       <div><label id="m_entry_label">Market Entry</label><input type="number" id="m_entry" step="any" oninput="updateOrderPreview()"></div>
       <div><label>Live Mark Price</label><input type="number" id="m_mkt" step="any" readonly style="opacity:.7"></div>
@@ -1055,7 +1052,16 @@ function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
 function syncSizeMode(){const m=m_mode.value;box_amount.style.display=m==='amount'?'block':'none';box_margin.style.display=m==='margin'?'block':'none';box_risk.style.display=m==='risk'?'block':'none';box_qty.style.display=m==='qty'?'block':'none';updateOrderPreview();}
 function setSide(side){m_side.value=side;updateOrderPreview();}
 function toggleOrderType(){const lim=m_order_type.value==='LIMIT';m_entry_label.textContent=lim?'Limit Price':'Market Entry';limit_hint.style.display=lim?'block':'none';if(!lim)m_entry.value=m_mkt.value||m_entry.value;updateOrderPreview();}
-function updateOrderPreview(){const px=+(m_entry.value||m_mkt.value||0),lev=+m_lev.value||1,mode=m_mode.value;let notional=0;if(mode==='amount')notional=+m_amount.value||0;else if(mode==='margin')notional=(+m_margin.value||0)*lev;else if(mode==='qty')notional=(+m_qty.value||0)*px;else if(mode==='risk'){const risk=(+m_risk.value||1)/100*10000,dist=Math.abs(px-(+m_sl.value||px));notional=dist>0?risk/dist*px:0;}const qty=px>0?notional/px:0,margin=lev>0?notional/lev:0;order_preview.innerHTML='<div><em>Position Value</em><strong>
+function updateOrderPreview(){
+ const px=+(m_entry.value||m_mkt.value||0),lev=+m_lev.value||1,mode=m_mode.value;
+ let notional=0;
+ if(mode==='amount')notional=+m_amount.value||0;
+ else if(mode==='margin')notional=(+m_margin.value||0)*lev;
+ else if(mode==='qty')notional=(+m_qty.value||0)*px;
+ else if(mode==='risk'){const bal=+(sBal.textContent||'').replace(/[^0-9.]/g,'')||10000;const risk=(+m_risk.value||1)/100*bal,dist=Math.abs(px-(+m_sl.value||px));notional=dist>0?risk/dist*px:0;}
+ const qty=px>0?notional/px:0,margin=lev>0?notional/lev:0;
+ order_preview.innerHTML='<div><em>Position Value</em><strong>$'+fmt(notional)+' USDT</strong></div><div><em>Initial Margin</em><strong>$'+fmt(margin)+' USDT</strong></div><div><em>Quantity</em><strong>'+qty.toFixed(6)+'</strong></div>';
+}
 function tv(sym){return 'BINANCE:'+String(sym).replace('/','').replace(':USDT','')+'.P';}
 function toggleChart(id,sym){
   const box=document.getElementById(id);if(!box)return;
