@@ -68,7 +68,9 @@ class TradeUpdate(BaseModel):
     stop_loss: Optional[float] = None
     tp1: Optional[float] = None
     tp2: Optional[float] = None
-    trailing_pct: Optional[float] = None  # trail distance %
+    trailing_pct: Optional[float] = None  # legacy callback rate %
+    trailing_activation_price: Optional[float] = None
+    callback_rate: Optional[float] = None
 
 
 class DcaBody(BaseModel):
@@ -281,20 +283,27 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
         if entry <= 0 or qty <= 0:
             continue
 
-        trail = float(t.get("trailing_pct") or 0)
-        if trail > 0:
-            if side == "LONG":
-                peak = max(float(t.get("peak_price") or entry), price)
-                t["peak_price"] = peak
-                trail_sl = peak * (1 - trail / 100)
-                if trail_sl > float(t.get("stop_loss") or 0):
-                    t["stop_loss"] = round(trail_sl, 8)
-            else:
-                trough = min(float(t.get("trough_price") or entry), price)
-                t["trough_price"] = trough
-                trail_sl = trough * (1 + trail / 100)
-                if trail_sl < float(t.get("stop_loss") or float("inf")):
-                    t["stop_loss"] = round(trail_sl, 8)
+        callback = float(t.get("callback_rate") or t.get("trailing_pct") or 0)
+        activation = float(t.get("trailing_activation_price") or 0)
+        active = bool(t.get("trailing_active"))
+        if callback > 0:
+            if not active:
+                active = (price >= activation if side == "LONG" else price <= activation) if activation > 0 else (price >= entry if side == "LONG" else price <= entry)
+                if active:
+                    t["trailing_active"] = True
+                    t["peak_price"] = price
+                    t["trough_price"] = price
+            if active:
+                if side == "LONG":
+                    peak = max(float(t.get("peak_price") or price), price)
+                    t["peak_price"] = peak
+                    trail_sl = peak * (1 - callback / 100)
+                    if trail_sl > float(t.get("stop_loss") or 0): t["stop_loss"] = round(trail_sl, 8)
+                else:
+                    trough = min(float(t.get("trough_price") or price), price)
+                    t["trough_price"] = trough
+                    trail_sl = trough * (1 + callback / 100)
+                    if trail_sl < float(t.get("stop_loss") or float("inf")): t["stop_loss"] = round(trail_sl, 8)
 
         previous_hit = t.get("hit")
         if side == "LONG":
@@ -600,9 +609,7 @@ async def create_trade(body: TradeCreate):
     if margin_mode not in ("CROSS", "ISOLATED"):
         margin_mode = "CROSS"
 
-    for t in _trades.values():
-        if t.get("status") == "OPEN" and t["symbol"] == sym and t["side"] == side:
-            return {"ok": True, "trade": t, "duplicate": True}
+    existing_trade = next((t for t in _trades.values() if t.get("status") == "OPEN" and t["symbol"] == sym and t["side"] == side), None)
 
     sl_dist = abs(body.entry - body.stop_loss)
     if sl_dist <= 0:
@@ -648,13 +655,33 @@ async def create_trade(body: TradeCreate):
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
-        "trailing_pct": None, "peak_price": body.entry, "trough_price": body.entry,
+        "trailing_pct": None, "callback_rate": None, "trailing_activation_price": None,
+        "trailing_active": False, "peak_price": body.entry, "trough_price": body.entry,
         "scale_mode": scale_mode, "scale_orders": scale_orders,
+        "dca_history": [{"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()}],
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
         "current_price": body.entry, "pnl_pct": 0.0, "unrealized_pnl": 0.0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dca_count": 0,
     }
+    if existing_trade:
+        old_qty = float(existing_trade.get("qty") or 0)
+        combined_qty = old_qty + qty
+        old_entry = float(existing_trade.get("entry") or body.entry)
+        existing_trade["entry"] = round((old_entry * old_qty + body.entry * qty) / combined_qty, 8)
+        existing_trade["qty"] = round(combined_qty, 8)
+        existing_trade["notional"] = round(existing_trade["entry"] * combined_qty, 2)
+        existing_trade["margin"] = round(float(existing_trade.get("margin") or 0) + margin, 2)
+        existing_trade["dca_count"] = int(existing_trade.get("dca_count") or 0) + 1
+        existing_trade.setdefault("dca_history", []).append({"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()})
+        existing_trade["current_price"] = body.entry
+        existing_trade["unrealized_pnl"] = 0.0
+        existing_trade["pnl_pct"] = 0.0
+        _update_trade_liquidation_fields(existing_trade)
+        db.save_trade(existing_trade)
+        _calc_equity()
+        db.save_account(_account)
+        return {"ok": True, "trade": existing_trade, "duplicate": True, "auto_dca": True, "account": _account}
     _update_trade_liquidation_fields(trade)
     _trades[tid] = trade
     db.save_trade(trade)
@@ -688,6 +715,7 @@ async def dca_trade(tid: str, body: DcaBody):
     t["notional"] = round(new_qty * t["entry"], 2)
     t["margin"] = round(t["notional"] / lev, 2)
     t["dca_count"] = (t.get("dca_count") or 0) + 1
+    t.setdefault("dca_history", []).append({"price": price, "qty": round(add_qty, 8), "notional": round(price * add_qty, 2), "margin": round(price * add_qty / lev, 2), "created_at": datetime.now(timezone.utc).isoformat()})
     t["current_price"] = price
     _update_trade_liquidation_fields(t)
     db.save_trade(t)
@@ -706,8 +734,16 @@ async def update_trade(tid: str, body: TradeUpdate):
         t["tp1"] = body.tp1
     if body.tp2 is not None:
         t["tp2"] = body.tp2
-    if body.trailing_pct is not None:
-        t["trailing_pct"] = max(0.0, float(body.trailing_pct))
+    if body.trailing_pct is not None or body.callback_rate is not None:
+        rate = body.callback_rate if body.callback_rate is not None else body.trailing_pct
+        rate = max(0.0, min(float(rate), 5.0))
+        t["callback_rate"] = rate or None
+        t["trailing_pct"] = rate or None
+        t["trailing_active"] = False
+        t["peak_price"] = float(t.get("current_price") or t.get("entry") or 0)
+        t["trough_price"] = float(t.get("current_price") or t.get("entry") or 0)
+    if body.trailing_activation_price is not None:
+        t["trailing_activation_price"] = max(0.0, float(body.trailing_activation_price)) or None
     db.save_trade(t)
     return {"ok": True, "trade": t}
 
@@ -1032,7 +1068,7 @@ async function submitTrade(){
   if(mode==='risk') body.risk_pct=+m_risk.value||1;
   if(mode==='qty') body.quantity=+m_qty.value||0;
   const d=await(await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-  if(d.ok){closeModal();toast(d.duplicate?'Already open':'Trade opened');speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;loadSignals();showTab('trades');loadTrades();}
+  if(d.ok){closeModal();toast(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened'));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;loadSignals();showTab('trades');loadTrades();}
   else toast(d.error||'Failed');
 }
 async function loadTrades(){
@@ -1053,7 +1089,8 @@ async function loadTrades(){
         <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
+        <div><em>Margin</em><strong>${fmt(t.margin)} USDT</strong></div>
+        <div><em>Position Value</em><strong>${fmt(t.notional||((t.entry||0)*(t.qty||0)))} USDT</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
         <div><em>Est. Liq. (approx.)</em><strong>${t.liquidation_price??'—'}</strong></div>
@@ -1074,7 +1111,7 @@ async function loadTrades(){
 }
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
 async function dcaPrompt(id){const v=prompt('DCA Amount USDT (notional)');if(!v)return;const d=await(await fetch('/api/trades/'+id+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:+v})})).json();if(d.ok){toast('DCA added');loadTrades();}else toast(d.error||'DCA failed');}
-async function trailPrompt(id,cur){const v=prompt('Trailing stop % (e.g. 1.5). 0 to disable',cur||'1');if(v===null)return;const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trailing_pct:+v})})).json();if(d.ok){toast('Trailing updated');loadTrades();}}
+async function trailPrompt(id,cur){const a=prompt('Activation Price (blank = activate from entry)','');if(a===null)return;const v=prompt('Callback Rate % (0–5; 0 disables)',cur||'1');if(v===null)return;const rate=+v;if(!Number.isFinite(rate)||rate<0||rate>5){toast('Callback must be 0–5%');return;}const body={callback_rate:rate};if(a.trim()){const p=+a;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){toast('Trailing configured');loadTrades();}}
 async function editLevels(id,sl,tp1,tp2){const nsl=prompt('Stop loss',sl);if(nsl===null)return;const n1=prompt('TP1',tp1);if(n1===null)return;const n2=prompt('TP2 (optional)',tp2||'');const body={stop_loss:+nsl,tp1:+n1};if(n2)body.tp2=+n2;const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){toast('Levels updated');loadTrades();}}
 function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
