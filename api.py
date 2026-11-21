@@ -1190,10 +1190,10 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <div id="box_qty" style="display:none"><label>Quantity</label><input type="number" id="m_qty" step="any" oninput="updateOrderPreview()"></div>
     <div class="row2">
       <div><label>Scaled Order</label><select id="m_scale" onchange="updateOrderPreview()"><option value="">None</option><option value="flat">Equal Split</option><option value="ascending">Ascending Size</option></select></div>
-      <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="0" max="10" value="0" oninput="updateOrderPreview()"></div>
+      <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="2" max="50" value="2" oninput="updateOrderPreview()"></div>
     </div>
     <div id="order_preview"></div><div id="scale_preview" class="hint" style="display:none"></div>
-    <p class="hint">Default: Amount + Cross margin. Scaled Order splits your entry into multiple orders.</p>
+    
     <div class="btns">
       <button class="btn dim" onclick="closeModal()">Cancel</button>
       <button class="btn good" onclick="submitTrade()">Open Trade</button>
@@ -1307,18 +1307,31 @@ function openModal(s){
 function closeModal(){modalBg.style.display='none';}
 async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
 async function submitTrade(){
-  const mode=m_mode.value;
-  const typ=m_order_type.value,px=+m_entry.value;
+  const submitBtn=document.querySelector('#modalBg .btn.good');
+  if(submitBtn.disabled)return;
+  const mode=m_mode.value,typ=m_order_type.value;
+  const px=typ==='MARKET'?(+m_mkt.value||+m_entry.value):(+m_entry.value);
+  const size=mode==='amount'?+m_amount.value:mode==='margin'?+m_margin.value:mode==='qty'?+m_qty.value:+m_risk.value;
+  if(!(px>0)){toast('Live market / limit price is not available');return;}
+  if(!(size>0)){toast('Enter a valid order amount');return;}
+  if(!(+m_sl.value>0)){toast('Enter a valid Stop Loss');return;}
+  if(!(+m_tp1.value>0)){toast('Enter a valid TP1');return;}
   const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
-  if(mode==='amount') body.amount_usd=+m_amount.value||0;
-  if(mode==='margin') body.margin_usd=+m_margin.value||0;
-  if(mode==='risk') body.risk_pct=+m_risk.value||1;
-  if(mode==='qty') body.quantity=+m_qty.value||0;
-  if(body.scale_mode && body.scale_orders>=2 && typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
-  if(body.scale_mode && body.scale_orders>=2 && !confirm(document.getElementById('scale_preview').textContent+'\\nPlace these pending orders?'))return;
-  const d=await(await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-  if(d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;loadSignals();showTab('trades');loadTrades();}
-  else toast(d.error||'Failed');
+  if(mode==='amount')body.amount_usd=+m_amount.value;
+  if(mode==='margin')body.margin_usd=+m_margin.value;
+  if(mode==='risk')body.risk_pct=+m_risk.value||1;
+  if(mode==='qty')body.quantity=+m_qty.value;
+  if(body.scale_mode&&body.scale_orders>=2&&typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
+  if(body.scale_mode&&body.scale_orders>50){toast('Maximum 50 scaled orders');return;}
+  if(body.scale_mode&&body.scale_orders>=2&&!confirm('Place '+body.scale_orders+' separate pending orders?'))return;
+  submitBtn.disabled=true;submitBtn.textContent='Placing…';
+  try{
+    const response=await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await response.json();
+    if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;showTab('trades');loadTrades();loadSignals();}
+    else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed · HTTP '+response.status),5000);}
+  }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
+  finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
 }
 async function loadTrades(){
   if(window._loadingTrades)return;window._loadingTrades=true;
