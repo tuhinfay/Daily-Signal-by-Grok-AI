@@ -1172,7 +1172,8 @@ async function loadTrades(){
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
         <div><em>Initial Margin</em><strong>${fmt(t.margin)} USDT</strong></div>
-        <div><em>Position Value</em><strong>${fmt(t.notional||((t.entry||0)*(t.qty||0)))} USDT</strong></div>
+        <div><em>Position Value (Mark)</em><strong>${fmt((t.current_price||t.entry||0)*(t.qty||0))} USDT</strong></div>
+        <div><em>Entry Notional</em><strong>${fmt(t.notional||((t.entry||0)*(t.qty||0)))} USDT</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
         <div><em>Est. Liq. (approx.)</em><strong>${t.liquidation_price??'—'}</strong></div>
