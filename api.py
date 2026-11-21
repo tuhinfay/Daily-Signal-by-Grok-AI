@@ -1007,6 +1007,8 @@ async function loadTrades(){
         <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
+        <div><em>Est. Liq. (approx.)</em><strong>${t.liquidation_price??'—'}</strong></div>
+        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||'UNKNOWN'}</strong></div>
         <div><em>Trail</em><strong>${t.trailing_pct?t.trailing_pct+'%':'—'}</strong></div>
       </div>
       <div class="actions">
