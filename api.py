@@ -877,7 +877,12 @@ def create_trade(body: TradeCreate):
         if has_scale_range:
             if (side == "LONG" and scale_high >= market_price) or (side == "SHORT" and scale_low <= market_price):
                 return JSONResponse({"ok": False, "error": "LONG range must be below market; SHORT range must be above market"}, status_code=400)
-            child_prices = [scale_low + (scale_high - scale_low) * i / (scale_orders - 1) for i in range(scale_orders)]
+            child_prices = [
+                (scale_high - (scale_high - scale_low) * i / (scale_orders - 1))
+                if side == "LONG" else
+                (scale_low + (scale_high - scale_low) * i / (scale_orders - 1))
+                for i in range(scale_orders)
+            ]
         else:
             if (side == "LONG" and entry_price >= market_price) or (side == "SHORT" and entry_price <= market_price):
                 return JSONResponse({"ok": False, "error": "Scaled LONG limit must be below market; SHORT limit must be above market"}, status_code=400)
@@ -1340,7 +1345,7 @@ function updateOrderPreview(){
      let cumulativeQty=0,cumulativeCost=0;
      for(let i=0;i<n;i++){
        const weight=sm==='ascending'?(i+1)/(n*(n+1)/2):1/n;
-       const price=rangeLow+(rangeHigh-rangeLow)*i/(n-1);
+       const price=m_side.value==='LONG'?rangeHigh-(rangeHigh-rangeLow)*i/(n-1):rangeLow+(rangeHigh-rangeLow)*i/(n-1);
        const amount=notional*weight;
        const childQty=Math.round((amount/price)*1e6)/1e6;
        totalQty+=childQty;cumulativeQty+=childQty;cumulativeCost+=price*childQty;
@@ -1407,7 +1412,7 @@ async function loadSignals(){
     window._movers={gainers:d.gainers||[],losers:d.losers||[]};
     if(pinManual) return; // keep manual analysis visible
     const list=document.getElementById('signalList');
-    if(!d.signals||!d.signals.length){list.innerHTML='<div class="empty">No signals yet. Wait for auto-scan or tap Scan.</div>';return;}
+    if(!d.signals||!d.signals.length){list.innerHTML='<div class="empty">'+(d.error?('Signal scanner paused: '+d.error):('No matching signals in '+(d.scanned_count||0)+' scanned pairs. Wait for the next scan or tap Scan.'))+'</div>';return;}
     const h=d.signals.map(s=>s.symbol+s.side+s.score).join('|');
     if(lastSig&&h!==lastSig){beep(2);const neu=d.signals.filter(s=>!lastSig.includes(s.symbol+s.side));if(neu.length)speak(neu.slice(0,3).map(s=>`${s.side} ${s.symbol.replace('USDT','')}`).join(', '));}
     lastSig=h;
