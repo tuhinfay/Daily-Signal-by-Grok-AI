@@ -1006,25 +1006,26 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <h3 id="mTitle">Open Trade</h3>
     <input type="hidden" id="m_symbol">
     <div class="row2">
-      <div><label>Order Type</label><select id="m_order_type" onchange="toggleOrderType()"><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></div>
+      <div><label>Side</label><select id="m_side"><option value="LONG">LONG / BUY</option><option value="SHORT">SHORT / SELL</option></select></div>
       <div><label>Margin mode</label><select id="m_mm"><option value="CROSS">Cross</option><option value="ISOLATED">Isolated</option></select></div>
     </div>
-    <div class="row2"><div><label>Position Side — selected side is highlighted</label><div class="side-picker"><button type="button" id="sideLong" class="side-btn long" aria-pressed="false" onclick="setSide('LONG')">▲ BUY / LONG</button><button type="button" id="sideShort" class="side-btn short" aria-pressed="false" onclick="setSide('SHORT')">▼ SELL / SHORT</button></div><select id="m_side" style="display:none"><option>LONG</option><option>SHORT</option></select></div>
+    <div class="row2">
+      <div><label>Order Type</label><select id="m_order_type" onchange="toggleOrderType()"><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></div>
       <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="20" min="1" max="150" oninput="updateOrderPreview()"></div>
     </div>
     <div><label>Liquidity</label><input id="m_liq" readonly style="opacity:.8"></div>
     <div class="row2">
-      <div><label id="m_entry_label">Market Entry</label><input type="number" id="m_entry" step="any" oninput="updateOrderPreview()"></div>
-      <div><label>Live Mark Price</label><input type="number" id="m_mkt" step="any" readonly style="opacity:.7"></div>
+      <div><label id="m_entry_label">Entry</label><input type="number" id="m_entry" step="any" oninput="updateOrderPreview()"></div>
+      <div><label>Market</label><input type="number" id="m_mkt" step="any" readonly style="opacity:.7"></div>
     </div>
-    <div id="limit_hint" class="hint" style="display:none">Limit order stays Pending until mark price reaches the limit. Buy/Long fills at or below limit; Sell/Short fills at or above limit.</div>
+    <div id="limit_hint" class="hint" style="display:none">Limit order remains pending until mark price reaches your limit.</div>
     <div class="row2">
       <div><label>Stop Loss</label><input type="number" id="m_sl" step="any" oninput="updateOrderPreview()"></div>
       <div><label>TP1</label><input type="number" id="m_tp1" step="any"></div>
     </div>
     <label>TP2</label><input type="number" id="m_tp2" step="any">
     <label>Size mode</label>
-    <select id="m_mode" onchange="syncSizeMode()">
+    <select id="m_mode" onchange="syncSizeMode();updateOrderPreview()">
       <option value="amount" selected>Amount USDT (notional)</option>
       <option value="margin">Margin USDT</option>
       <option value="risk">Risk % of balance</option>
@@ -1038,14 +1039,10 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     </div>
     <div id="box_qty" style="display:none"><label>Quantity</label><input type="number" id="m_qty" step="any" oninput="updateOrderPreview()"></div>
     <div class="row2">
-      <div><label>Scale</label><select id="m_scale"><option value="">None</option><option value="flat">Flat</option><option value="ascending">Ascending</option></select></div>
-      <div><label>Scale orders</label><input type="number" id="m_scale_n" min="0" max="10" value="0"></div>
+      <div><label>Scaled Order</label><select id="m_scale"><option value="">None</option><option value="flat">Equal Split</option><option value="ascending">Ascending Size</option></select></div>
+      <div><label>Number of Orders</label><input type="number" id="m_scale_n" min="0" max="10" value="0"></div>
     </div>
-    <div class="card" style="margin:10px 0 0;padding:10px">
-      <div class="sec" style="padding:0 0 6px">Order Preview</div>
-      <div class="vals" id="order_preview"><div><em>Position Value</em><strong>—</strong></div><div><em>Initial Margin</em><strong>—</strong></div><div><em>Quantity</em><strong>—</strong></div></div>
-    </div>
-    <p class="hint">Paper trading only. Cross liquidation is a portfolio estimate, not an exchange guarantee.</p>
+    <p class="hint">Default: Amount + Cross margin. Scaled Order splits your entry into multiple orders.</p>
     <div class="btns">
       <button class="btn dim" onclick="closeModal()">Cancel</button>
       <button class="btn good" onclick="submitTrade()">Open Trade</button>
@@ -1148,7 +1145,7 @@ async function analyzeManual(){
 }
 function openModal(s){
   mTitle.textContent=s.symbol+' · '+(s.liquidity||'UNKNOWN');
-  m_symbol.value=s.symbol; m_side.value=s.side; setSide(s.side); m_mm.value='CROSS'; m_order_type.value='MARKET';
+  m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=s.max_leverage?'verified max '+ml+'x':'safe 20x cap · verified max unavailable';
@@ -1175,29 +1172,29 @@ async function loadTrades(){
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
   if(pending.length){h+='<div class="sec">Pending Orders</div><div class="card">';h+=pending.map(t=>'<div class="list-row"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> '+t.symbol+' · LIMIT '+t.limit_price+' · '+t.leverage+'x</span><button class="btn dim" onclick="cancelPending(\''+t.id+'\')">Cancel</button></div>').join('');h+='</div>';}
-  if(open.length){h+='<div class="sec">Open Positions</div>';h+=open.map(t=>{
+  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
+    const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
         <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
-        <span class="tag">${t.liquidity||'UNKNOWN'}</span>${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
+        ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
-      <div class="position-main">
-        <div><em>Entry Price</em><strong>${t.entry}</strong></div><div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
-        <div><em>Unrealized PnL</em><strong style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</strong></div><div><em>Margin</em><strong>$${fmt(t.margin)} USDT</strong></div>
+      <div class="vals">
+        <div><em>Entry</em><strong>${t.entry}</strong></div>
+        <div><em>Market</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
+        <div><em>TP1</em><strong>${t.tp1}</strong></div>
+        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
+        <div><em>Qty</em><strong>${t.qty}</strong></div>
+        <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
+        <div><em>Trail</em><strong>${trail}</strong></div>
       </div>
-      <details class="trade-details"><summary>Position Details · SL/TP, liquidation, quantity & order info</summary><div class="vals">
-        <div><em>Stop Loss</em><strong>${t.stop_loss}</strong></div><div><em>Take Profit 1</em><strong>${t.tp1}</strong></div><div><em>Take Profit 2</em><strong>${t.tp2??'—'}</strong></div>
-        <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry||0)*(t.qty||0))} USDT</strong></div><div><em>Entry Notional</em><strong>${fmt(t.notional||((t.entry||0)*(t.qty||0)))} USDT</strong></div><div><em>Quantity</em><strong>${t.qty}</strong></div>
-        <div><em>PnL %</em><strong>${t.pnl_pct||0}%</strong></div><div><em>Est. Liquidation</em><strong>${t.liquidation_price??'—'}</strong></div><div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct??'—'}%</strong></div>
-        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||'UNKNOWN'}</strong></div><div><em>Maintenance Est.</em><strong>${fmt(t.cross_maintenance_est||0)} USDT</strong></div><div><em>Cross Wallet Est.</em><strong>${t.margin_mode==='CROSS'?fmt(t.cross_wallet_equity_est)+' USDT':'—'}</strong></div>
-        <div><em>Order Type</em><strong>${t.order_type||'MARKET'}</strong></div><div><em>Trailing Stop</em><strong>${t.callback_rate?(t.callback_rate+'% callback · activation '+(t.trailing_activation_price||'entry')):'Not set'}</strong></div><div><em>DCA Count</em><strong>${t.dca_count||0}</strong></div>
-      </div></details>
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
         <button class="btn dim" onclick="dcaPrompt('${t.id}')">DCA</button>
-        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.trailing_pct||0})">Trail</button>
+        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0})">Trail</button>
         <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
