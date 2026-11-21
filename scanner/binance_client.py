@@ -189,7 +189,7 @@ class BinanceClient:
 
             # Check the top 26 contracts by quote volume using their current UTC daily candle (BD 06:00).
             rows = []
-            for clean, volume, last in candidates[:26]:
+            for clean, volume, last in candidates[:40]:
                 if self.rate_limited:
                     break
                 try:
