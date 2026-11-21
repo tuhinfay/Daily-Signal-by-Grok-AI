@@ -721,13 +721,16 @@ async def create_trade(body: TradeCreate):
         existing_trade["current_price"] = entry_price
         existing_trade["unrealized_pnl"] = 0.0
         existing_trade["pnl_pct"] = 0.0
-        _update_trade_liquidation_fields(existing_trade)
+        for position in _trades.values():
+            if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
         db.save_trade(existing_trade)
         _calc_equity()
         db.save_account(_account)
         return {"ok": True, "trade": existing_trade, "duplicate": True, "auto_dca": True, "account": _account}
     _update_trade_liquidation_fields(trade)
     _trades[tid] = trade
+    for position in _trades.values():
+        if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
     db.save_trade(trade)
     print(f"[trades] opened {tid} {sym} {side} entry={entry_price} qty={trade['qty']}")
     _calc_equity()
@@ -1135,7 +1138,7 @@ function closeModal(){modalBg.style.display='none';}
 async function submitTrade(){
   const mode=m_mode.value;
   const typ=m_order_type.value,px=+m_entry.value;
-  const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value||null,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
+  const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
   if(mode==='amount') body.amount_usd=+m_amount.value||0;
   if(mode==='margin') body.margin_usd=+m_margin.value||0;
   if(mode==='risk') body.risk_pct=+m_risk.value||1;
