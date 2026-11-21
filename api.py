@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily Signal by Grok AI — auto-scan, SQLite, live trades"""
+"""Daily Signal by Tuhinfay — auto-scan, SQLite, live trades"""
 
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -14,7 +14,7 @@ from scanner.signal_engine import SignalEngine
 from scanner import db
 import config
 
-app = FastAPI(title="Daily Signal by Grok AI", version="4.0.0")
+app = FastAPI(title="Daily Signal by Tuhinfay", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _cache: Dict[str, Any] = {
@@ -1065,7 +1065,7 @@ PAGE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="theme-color" content="#060a12">
-<title>Daily Signal by Grok AI</title>
+<title>Daily Signal by Tuhinfay</title>
 <style>
 :root{--bg:#060a12;--card:#0c1322;--line:#1a2336;--text:#eef3ff;--mut:#7f8eaa;--cyan:#22d3ee;--blue:#3b82f6;--gn:#10b981;--rd:#f43f5e;--gd:#fbbf24}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1150,7 +1150,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 <body>
 <div id="alertBar" onclick="showTab('trades')"></div>
 <header class="top">
-  <h1>Daily Signal by Grok AI</h1>
+  <h1>Daily Signal by Tuhinfay</h1>
   <div class="metrics">
     <div class="metric"><label>Balance</label><b id="sBal">—</b></div>
     <div class="metric"><label>Equity</label><b id="sEq">—</b></div>
