@@ -707,6 +707,55 @@ async def api_market_price(symbol: str):
     return {"symbol": sym, "price": price}
 
 
+@app.post("/api/trade-preview")
+async def api_trade_preview(body: TradeCreate):
+    sym = body.symbol.upper().replace("/", "").replace(":USDT", "")
+    side = body.side.upper()
+    if side not in ("LONG", "SHORT"):
+        return JSONResponse({"ok": False, "error": "Choose LONG or SHORT"}, status_code=400)
+    client = BinanceClient(futures=True)
+    market = client.get_current_price(sym) or _cache.get("prices", {}).get(sym)
+    entry = float((body.limit_price or body.entry) if body.order_type == "LIMIT" else (market or body.entry or 0))
+    if entry <= 0:
+        return {"ok": False, "error": "Live price unavailable"}
+    max_lev = client.get_max_leverage(sym)
+    lev = max(1, min(int(body.leverage or 20), max_lev or 20, 150))
+    sl_dist = abs(entry - float(body.stop_loss or 0))
+    if body.quantity and body.quantity > 0:
+        qty = float(body.quantity)
+    elif body.amount_usd and body.amount_usd > 0:
+        qty = float(body.amount_usd) / entry
+    elif body.margin_usd and body.margin_usd > 0:
+        qty = float(body.margin_usd) * lev / entry
+    elif body.risk_pct and sl_dist > 0:
+        qty = (_account["balance"] * max(0.25, min(float(body.risk_pct), 100.0)) / 100.0) / sl_dist
+    else:
+        return {"ok": False, "error": "Enter an amount to calculate liquidation"}
+    existing = next((t for t in _trades.values() if t.get("status") == "OPEN" and t.get("symbol") == sym and t.get("side") == side), None)
+    if existing and body.order_type != "LIMIT":
+        old_qty = float(existing.get("qty") or 0)
+        total_qty = old_qty + qty
+        entry = ((float(existing.get("entry") or entry) * old_qty) + entry * qty) / total_qty
+        qty = total_qty
+    candidate = {
+        "symbol": sym, "side": side, "entry": entry, "qty": qty,
+        "margin": qty * entry / lev, "leverage": lev,
+        "margin_mode": (body.margin_mode or "CROSS").upper(),
+        "current_price": float(market or entry), "maintenance_margin_rate": 0.005,
+        "maintenance_amount": 0, "status": "OPEN",
+    }
+    liq = _estimate_liquidation_price(candidate)
+    current = float(market or entry)
+    distance = abs(current-liq)/current*100 if liq and current > 0 else None
+    risk = ("HIGH" if distance <= 5 else "MEDIUM" if distance <= 10 else "LOW") if distance is not None else "UNKNOWN"
+    return {"ok": True, "entry": round(entry, 8), "market_price": market,
+            "quantity": round(qty, 8), "notional": round(qty*entry, 2),
+            "margin": round(qty*entry/lev, 2), "leverage": lev,
+            "liquidation_price": round(liq, 8) if liq else None,
+            "liquidation_distance_pct": round(distance, 2) if distance is not None else None,
+            "liquidation_risk": risk, "estimate": True}
+
+
 @app.get("/api/alerts")
 async def api_alerts():
     alerts = [t for t in _trades.values() if t.get("needs_alert") and t.get("hit")]
