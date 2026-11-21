@@ -293,8 +293,29 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
             pending_side=str(t.get("side", "")).upper()
             crossed=(price <= limit_px) if pending_side == "LONG" else (price >= limit_px)
             if not crossed: continue
+            matching = next((x for x in _trades.values() if x is not t and x.get("status") == "OPEN" and x.get("symbol") == symbol and x.get("side") == pending_side), None)
+            if matching:
+                old_qty = float(matching.get("qty") or 0)
+                add_qty = float(t.get("qty") or 0)
+                total_qty = old_qty + add_qty
+                old_entry = float(matching.get("entry") or limit_px)
+                matching["entry"] = round((old_entry * old_qty + limit_px * add_qty) / total_qty, 8)
+                matching["qty"] = round(total_qty, 8)
+                matching["notional"] = round(matching["entry"] * total_qty, 2)
+                matching["margin"] = round(float(matching.get("margin") or 0) + float(t.get("margin") or 0), 2)
+                matching["dca_count"] = int(matching.get("dca_count") or 0) + 1
+                matching.setdefault("dca_history", []).append({"price": limit_px, "qty": add_qty, "notional": round(limit_px * add_qty, 2), "margin": t.get("margin", 0), "created_at": datetime.now(timezone.utc).isoformat()})
+                matching["current_price"] = price
+                matching["position_mode"] = "HEDGE"
+                t.update({"status": "MERGED", "hit": "MERGED", "merged_into": matching.get("id"), "merged_at": datetime.now(timezone.utc).isoformat()})
+                db.save_trade(t)
+                db.save_trade(matching)
+                print(f"[orders] limit filled and auto-merged {t.get('id')} into {matching.get('id')}")
+                changed = True
+                continue
             t["status"]="OPEN"; t["entry"]=limit_px; t["current_price"]=None
             t["filled_at"]=datetime.now(timezone.utc).isoformat(); t["unrealized_pnl"]=0.0
+            t["position_mode"] = "HEDGE"
             print(f"[orders] limit filled {t.get('id')} {symbol} @ {limit_px}")
         if t.get("status") != "OPEN": continue
         if t.get("current_price") == price: continue
