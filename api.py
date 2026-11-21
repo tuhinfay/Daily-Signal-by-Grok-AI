@@ -645,6 +645,7 @@ async def dca_trade(tid: str, body: DcaBody):
     t["margin"] = round(t["notional"] / lev, 2)
     t["dca_count"] = (t.get("dca_count") or 0) + 1
     t["current_price"] = price
+    _update_trade_liquidation_fields(t)
     db.save_trade(t)
     _calc_equity()
     return {"ok": True, "trade": t, "account": _account}
