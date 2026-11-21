@@ -253,6 +253,40 @@ def delete_trade(tid: str):
         con.close()
 
 
+
+def save_trades_and_account(trades, acc: Dict[str, float]):
+    """Persist a group of trade changes and the account snapshot in one DB transaction."""
+    backend = _detect_backend()
+    with _lock:
+        if backend == "postgres":
+            with _pg_conn() as conn:
+                for trade in trades:
+                    conn.execute(
+                        """
+                        INSERT INTO trades (id, data) VALUES (%s, %s::jsonb)
+                        ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data
+                        """,
+                        (trade["id"], json.dumps(trade)),
+                    )
+                conn.execute(
+                    "UPDATE account SET balance=%s, equity=%s, realized_pnl=%s, start_balance=%s WHERE id=1",
+                    (acc["balance"], acc["equity"], acc["realized_pnl"], acc["start_balance"]),
+                )
+                conn.commit()
+            return
+        con = _sqlite_conn()
+        for trade in trades:
+            con.execute(
+                "INSERT OR REPLACE INTO trades (id, data) VALUES (?, ?)",
+                (trade["id"], json.dumps(trade)),
+            )
+        con.execute(
+            "UPDATE account SET balance=?, equity=?, realized_pnl=?, start_balance=? WHERE id=1",
+            (acc["balance"], acc["equity"], acc["realized_pnl"], acc["start_balance"]),
+        )
+        con.commit()
+        con.close()
+
 def save_all_trades(trades: Dict[str, Dict]):
     backend = _detect_backend()
     with _lock:
