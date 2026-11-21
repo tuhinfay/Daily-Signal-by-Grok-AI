@@ -269,6 +269,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
         if t.get("current_price") == price:
             continue
         t["current_price"] = price
+        _update_trade_liquidation_fields(t)
         side = t["side"].upper()
         entry = float(t.get("entry") or 0)
         qty = float(t.get("qty") or 0)
@@ -611,6 +612,7 @@ async def create_trade(body: TradeCreate):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dca_count": 0,
     }
+    _update_trade_liquidation_fields(trade)
     _trades[tid] = trade
     db.save_trade(trade)
     _calc_equity()
