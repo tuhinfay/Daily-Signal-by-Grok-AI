@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily Signal by Tuhinfay â auto-scan, SQLite, live trades"""
+"""Daily Signal by Tuhinfay — auto-scan, SQLite, live trades"""
 
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -232,7 +232,7 @@ def run_scan(top_n: int = 28):
                     r["market_price"] = px or r["entry"]
                     r["max_leverage"] = max_leverage
                     r["styles"] = [style_name]
-                    r["summary"] = f"{r.get('setup','')} Â· {style_name.upper()} Â· R:R 1:{r['rr']} Â· SL {r['risk_pct']}% Â· TP1 {r['tp1_pct']}%"
+                    r["summary"] = f"{r.get('setup','')} · {style_name.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
                     signals.append(r)
             except Exception as e:
                 print(f"scan {symbol}: {e}")
@@ -639,7 +639,7 @@ async def analyze_one(symbol: str, style: str = Query("day")):
     r["max_leverage"] = lev
     r["liquidity"] = liq
     r["styles"] = [selected_style]
-    r["summary"] = f"{r.get('setup','')} Â· {selected_style.upper()} Â· R:R 1:{r['rr']} Â· SL {r['risk_pct']}% Â· TP1 {r['tp1_pct']}%"
+    r["summary"] = f"{r.get('setup','')} · {selected_style.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
     return {"ok": True, "signal": r}
 
 
@@ -1117,8 +1117,8 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .trade-details{margin-top:8px;border-top:1px solid var(--line);padding-top:7px}
 .trade-details summary{cursor:pointer;color:var(--cyan);font-size:11px;font-weight:800;padding:5px 0;list-style:none}
 .trade-details summary::-webkit-details-marker{display:none}
-.trade-details summary:before{content:'ï¼ ';font-weight:900}
-.trade-details[open] summary:before{content:'â '}
+.trade-details summary:before{content:'＋ ';font-weight:900}
+.trade-details[open] summary:before{content:'− '}
 .position-main{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
 .position-main>div{background:#080e1a;border:1px solid var(--line);border-radius:8px;padding:7px}
 .position-main em{display:block;font-size:9px;color:var(--mut);font-style:normal}
@@ -1147,9 +1147,9 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 <header class="top">
   <h1>Daily Signal by Tuhinfay</h1>
   <div class="metrics">
-    <div class="metric"><label>Balance</label><b id="sBal">â</b></div>
-    <div class="metric"><label>Equity</label><b id="sEq">â</b></div>
-    <div class="metric"><label>PnL</label><b id="sReal">â</b></div>
+    <div class="metric"><label>Balance</label><b id="sBal">—</b></div>
+    <div class="metric"><label>Equity</label><b id="sEq">—</b></div>
+    <div class="metric"><label>PnL</label><b id="sReal">—</b></div>
     <div class="metric"><label>Open</label><b id="sOpen">0</b></div>
   </div>
 </header>
@@ -1174,7 +1174,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <button data-s="day" onclick="setStyle('day')">Day</button>
     <button data-s="swing" onclick="setStyle('swing')">Swing</button>
   </div>
-  <div class="note" id="status">Loadingâ¦</div>
+  <div class="note" id="status">Loading…</div>
   <div id="signalList"></div>
 </section>
 
@@ -1192,10 +1192,10 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
   <div class="stats" id="accStats"></div>
   <div class="card">
     <div class="vals">
-      <div><em>Start</em><strong id="aStart">â</strong></div>
-      <div><em>Balance</em><strong id="aBal">â</strong></div>
-      <div><em>Equity</em><strong id="aEq">â</strong></div>
-      <div><em>Realized</em><strong id="aReal">â</strong></div>
+      <div><em>Start</em><strong id="aStart">—</strong></div>
+      <div><em>Balance</em><strong id="aBal">—</strong></div>
+      <div><em>Equity</em><strong id="aEq">—</strong></div>
+      <div><em>Realized</em><strong id="aReal">—</strong></div>
     </div>
     <div class="actions">
       <button class="btn dim" onclick="resetAcc(10000)">Reset 10k</button>
@@ -1253,7 +1253,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     </div>
   </div>
 </div>
-<div class="modal-bg" id="manageBg"><div class="manage-modal"><h3 id="manageTitle">Manage Position</h3><input type="hidden" id="manageTradeId"><div id="manageTrailFields" style="display:none"><label>Activation Price (blank = from entry)</label><input type="number" id="manageTrailActivation" step="any" placeholder="Optional"><label>Callback Rate (%) Â· 0.1â5</label><input type="number" id="manageTrailRate" min="0" max="5" step="0.1" value="1"><p class="hint">Trailing follows favorable mark-price movement after activation. Set 0 to disable.</p></div><div id="manageLevelsFields" style="display:none"><label>Stop Loss</label><input type="number" id="manageSL" step="any"><label>Take Profit 1</label><input type="number" id="manageTP1" step="any"><label>Take Profit 2 (optional)</label><input type="number" id="manageTP2" step="any"></div><div class="btns"><button class="btn dim" onclick="closeManage()">Cancel</button><button class="btn good" onclick="saveManage()">Confirm</button></div></div></div>
+<div class="modal-bg" id="manageBg"><div class="manage-modal"><h3 id="manageTitle">Manage Position</h3><input type="hidden" id="manageTradeId"><div id="manageTrailFields" style="display:none"><label>Activation Price (blank = from entry)</label><input type="number" id="manageTrailActivation" step="any" placeholder="Optional"><label>Callback Rate (%) · 0.1–5</label><input type="number" id="manageTrailRate" min="0" max="5" step="0.1" value="1"><p class="hint">Trailing follows favorable mark-price movement after activation. Set 0 to disable.</p></div><div id="manageLevelsFields" style="display:none"><label>Stop Loss</label><input type="number" id="manageSL" step="any"><label>Take Profit 1</label><input type="number" id="manageTP1" step="any"><label>Take Profit 2 (optional)</label><input type="number" id="manageTP2" step="any"></div><div class="btns"><button class="btn dim" onclick="closeManage()">Cancel</button><button class="btn good" onclick="saveManage()">Confirm</button></div></div></div>
 
 <script>
 let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
@@ -1267,7 +1267,7 @@ async function toggleAuto(){autoScan=!autoScan;await fetch('/api/auto-scan?enabl
 function showTab(n){['signals','trades','movers','account'].forEach(x=>{const el=document.getElementById('tab-'+x);if(el)el.style.display=x===n?'block':'none';});document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===n));if(n==='trades')loadTrades();if(n==='movers')loadMovers();if(n==='account')loadAccount();}
 function setStyle(s){style=s;pinManual=false;document.querySelectorAll('.filters button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));loadSignals();}
 function fmt(n){return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
-function fmtPrice(n){const v=Number(n);if(!Number.isFinite(v))return 'â';return v.toFixed(8).replace(/0+$/,'').replace(/\.$/,'');}
+function fmtPrice(n){const v=Number(n);if(!Number.isFinite(v))return '—';return v.toFixed(8).replace(/0+$/,'').replace(/\.$/,'');}
 function setAcc(a){if(!a)return;sBal.textContent='$'+fmt(a.balance);sEq.textContent='$'+fmt(a.equity);sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);sReal.className=a.realized_pnl>=0?'up':'dn';if(window.aStart){aStart.textContent='$'+fmt(a.start_balance);aBal.textContent='$'+fmt(a.balance);aEq.textContent='$'+fmt(a.equity);aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}}
 function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
   <div class="metric"><label>Trades</label><b>${st.total_trades||0}</b></div>
@@ -1279,6 +1279,7 @@ function syncSizeMode(){const m=m_mode.value;box_amount.style.display=m==='amoun
 function setSide(side){m_side.value=side;const isLong=side==='LONG';sideLong.classList.toggle('selected',isLong);sideShort.classList.toggle('selected',!isLong);sideLong.setAttribute('aria-pressed',String(isLong));sideShort.setAttribute('aria-pressed',String(!isLong));updateOrderPreview();}
 function toggleOrderType(){const lim=m_order_type.value==='LIMIT';m_entry_label.textContent=lim?'Limit Price':'Market Entry';limit_hint.style.display=lim?'block':'none';m_entry.readOnly=!lim;if(!lim)m_entry.value=m_mkt.value||m_entry.value;updateOrderPreview();}
 function updateOrderPreview(){
+ const endSpan='<'+'/span>',endDiv='<'+'/div>',endB='<'+'/b>';
  const px=+(m_entry.value||m_mkt.value||0),lev=+m_lev.value||1,mode=m_mode.value;
  let notional=0;
  if(mode==='amount')notional=+m_amount.value||0;
@@ -1303,12 +1304,12 @@ function updateOrderPreview(){
        const childQty=Math.round((amount/price)*1e6)/1e6;
        totalQty+=childQty;cumulativeQty+=childQty;cumulativeCost+=price*childQty;
        const avgAfter=cumulativeQty>0?cumulativeCost/cumulativeQty:0;
-       const spanEnd='<'+'/span>',divEnd='<'+'/div>';
-       rows.push('<div class="scale-row"><b>#'+(i+1)+'</b><span>'+fmtPrice(price)+spanEnd+'<span>$'+fmt(amount)+spanEnd+'<span>'+childQty.toFixed(6)+spanEnd+'<b>'+fmtPrice(avgAfter)+'</b>'+divEnd);
+       rows.push('<div class="scale-row"><b>#'+(i+1)+endB+'<span>'+fmtPrice(price)+endSpan+'<span>$'+fmt(amount)+endSpan+'<span>'+childQty.toFixed(6)+endSpan+'<b>'+fmtPrice(avgAfter)+endB+endDiv);
      }
      const finalAverage=totalQty>0?cumulativeCost/totalQty:0;
      sp.style.display='block';
-     sp.innerHTML='<div class="scale-row scale-head"><b>Step</b><span>Order Price'+spanEnd+'<span>Amount'+spanEnd+'<span>Qty'+spanEnd+'<span>Avg Entry After Fill'+spanEnd+divEnd+rows.join('')+'<div class="scale-row"><b>Total</b><span>—'+spanEnd+'<b>$'+fmt(notional)+'</b><b>'+totalQty.toFixed(6)+'</b><b>'+fmtPrice(finalAverage)+'</b>'+divEnd+'<div class="hint">Final average entry assumes every limit order fills at its preview price.</div>';
+     sp.innerHTML='<div class="scale-row scale-head"><b>Step'+endB+'<span>Order Price'+endSpan+'<span>Amount'+endSpan+'<span>Qty'+endSpan+'<span>Avg Entry After Fill'+endSpan+endDiv+rows.join('')+'<div class="scale-row"><b>Total'+endB+'<span>—'+endSpan+'<b>$'+fmt(notional)+endB+'<b>'+totalQty.toFixed(6)+endB+'<b>'+fmtPrice(finalAverage)+endB+endDiv+'<div class="hint">Final average entry assumes every limit order fills at its preview price.</div>';
+   }
  }else{sp.style.display='none';sp.innerHTML='';}
  clearTimeout(window._liqPreviewTimer);
  window._liqPreviewTimer=setTimeout(async()=>{
@@ -1321,7 +1322,7 @@ function updateOrderPreview(){
      else pb.risk_pct=+m_risk.value||1;
      const res=await fetch('/api/trade-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pb)});
      const data=await res.json();
-     liq_preview.textContent=data.ok?(data.liquidation_price?'Estimated Liquidation: '+fmt(data.liquidation_price)+' USDT Â· '+data.liquidation_risk+' Â· '+(data.liquidation_distance_pct==null?'â':data.liquidation_distance_pct+'%')+' distance (estimate)':(data.no_liquidation_price?'No liquidation price at current cross equity Â· SAFE':'Liquidation estimate unavailable Â· check margin/size')):(data.error||'Liquidation preview unavailable');
+     liq_preview.textContent=data.ok?(data.liquidation_price?'Estimated Liquidation: '+fmt(data.liquidation_price)+' USDT · '+data.liquidation_risk+' · '+(data.liquidation_distance_pct==null?'—':data.liquidation_distance_pct+'%')+' distance (estimate)':(data.no_liquidation_price?'No liquidation price at current cross equity · SAFE':'Liquidation estimate unavailable · check margin/size')):(data.error||'Liquidation preview unavailable');
    }catch(e){liq_preview.textContent='Liquidation preview unavailable';}
  },350);
 }
@@ -1332,7 +1333,7 @@ function toggleChart(id,sym){
   const symbol=tv(sym);
   const url='https://www.tradingview.com/widgetembed/?symbol='+encodeURIComponent(symbol)+'&interval=15&hidesidetoolbar=1&hidetoptoolbar=1&theme=dark&style=1&withdateranges=1&allow_symbol_change=1';
   box.style.display='block';
-  box.innerHTML='<div class="chart-loading">Loading '+symbol+' chartâ¦</div><iframe title="'+symbol+' TradingView chart" src="'+url+'" loading="eager" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe><div class="chart-fallback">Chart not loading? <a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)+'">Open chart in TradingView</a></div>';
+  box.innerHTML='<div class="chart-loading">Loading '+symbol+' chart…</div><iframe title="'+symbol+' TradingView chart" src="'+url+'" loading="eager" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe><div class="chart-fallback">Chart not loading? <a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)+'">Open chart in TradingView</a></div>';
 }
 function cardHTML(s){
   const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
@@ -1341,7 +1342,7 @@ function cardHTML(s){
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
       <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x cap'}</span></div>
       <div class="score">${s.score}</div></div>
-    <div class="sub">${s.setup||''} Â· ${(s.styles||[]).join('/')} Â· ${s.timeframe||''} Â· HTF ${s.bias_1d||'â'}/${s.bias_4h||'â'} Â· ADX ${s.adx??'â'} Â· RSI ${s.rsi??'â'}</div>
+    <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
       <div><em>Entry</em><strong>${s.entry}</strong></div>
       <div><em>Market</em><strong>${mp}</strong></div>
@@ -1351,7 +1352,7 @@ function cardHTML(s){
       <div><em>R:R</em><strong>1:${s.rr}</strong></div>
     </div>
     <div class="sub" style="margin-top:8px">${s.summary||''}</div>
-    <div class="sub">${(s.reasons||[]).slice(0,4).join(' Â· ')}</div>
+    <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
     <div class="chartbox" id="${cid}"></div></article>`;
 }
@@ -1361,7 +1362,7 @@ async function loadSignals(){
     setAcc(d.account); renderStats(d.stats, tradeStats); renderStats(d.stats, accStats);
     sOpen.textContent=(d.stats&&d.stats.open)||0;
     autoScan=!!d.auto_scan; autoBtn.textContent=autoScan?'Auto ON':'Auto OFF';
-    status.textContent=d.scanning?'Scanningâ¦':(d.error?'â ï¸ '+d.error:`${d.count||0} signals Â· ${d.scanned_count||0} pairs Â· ${d.last_updated||''}${autoScan?' Â· auto':''}`);
+    status.textContent=d.scanning?'Scanning…':(d.error?'⚠️ '+d.error:`${d.count||0} signals · ${d.scanned_count||0} pairs · ${d.last_updated||''}${autoScan?' · auto':''}`);
     window._movers={gainers:d.gainers||[],losers:d.losers||[]};
     if(pinManual) return; // keep manual analysis visible
     const list=document.getElementById('signalList');
@@ -1380,7 +1381,7 @@ async function analyzeManual(){
   const d=await(await fetch('/api/analyze/'+s+'?style='+(style==='all'?'day':style))).json();
   const list=document.getElementById('signalList');
   if(!d.ok){list.innerHTML=`<div class="empty">${d.error||'Failed'}</div>`;return;}
-  if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'â'} Â· max ${d.max_leverage||'â'}x</div><div class="empty">${d.message||'No signal'}</div>
+  if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'—'} · max ${d.max_leverage||'—'}x</div><div class="empty">${d.message||'No signal'}</div>
     <div class="actions"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
   list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
@@ -1411,14 +1412,14 @@ async function submitTrade(){
   if(mode==='risk')body.risk_pct=+m_risk.value||1;
   if(mode==='qty')body.quantity=+m_qty.value;
   if(body.scale_mode&&typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
-  if(body.scale_mode&&(!Number.isInteger(body.scale_orders)||body.scale_orders<2||body.scale_orders>50)){toast('Set number of scaled orders (2â50)');return;}
+  if(body.scale_mode&&(!Number.isInteger(body.scale_orders)||body.scale_orders<2||body.scale_orders>50)){toast('Set number of scaled orders (2–50)');return;}
   if(body.scale_mode&&body.scale_orders>=2&&!confirm('Place '+body.scale_orders+' separate pending orders?'))return;
-  submitBtn.disabled=true;submitBtn.textContent='Placingâ¦';
+  submitBtn.disabled=true;submitBtn.textContent='Placing…';
   try{
     const response=await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await response.json();
     if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;showTab('trades');loadTrades();loadSignals();}
-    else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed Â· HTTP '+response.status),5000);}
+    else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed · HTTP '+response.status),5000);}
   }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
   finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
 }
@@ -1433,10 +1434,10 @@ async function loadTrades(){
   const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
-  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') Â· Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} Â· LIMIT ${fmtPrice(t.limit_price)} Â· ${fmt(t.notional)} Â· Qty ${t.qty} Â· ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
+  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') · Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtPrice(t.limit_price)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
   if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
-    const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'â');
+    const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
         <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
@@ -1445,17 +1446,17 @@ async function loadTrades(){
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
       <div class="vals">
         <div><em>Average Entry</em><strong>${fmtPrice(t.entry)}</strong></div>
-        <div><em>Mark Price</em><strong>${t.current_price??'â'}</strong></div>
+        <div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
         <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
-<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"â Safe Â· ":"â  ")+fmt(t.liquidation_price):"â"}</strong></div>
+<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmt(t.liquidation_price):"—"}</strong></div>
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
         <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"â":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
+        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"—":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
         <div><em>Liq. Risk</em><strong>${t.liquidation_risk||"UNKNOWN"}</strong></div>
-        <div><em>Trail</em><strong>${trail}${t.trailing_active?" Â· ACTIVE":""}</strong></div>
+        <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
       </div>
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
@@ -1464,7 +1465,7 @@ async function loadTrades(){
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
       <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} Â· ${t.hit||'CLOSED'}</span>
+  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · ${t.hit||'CLOSED'}</span>
     <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
@@ -1474,386 +1475,13 @@ async function cancelPending(id){if(!confirm('Cancel pending limit order?'))retu
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
 function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
 function closeManage(){manageBg.style.display='none';}
-async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null;if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}body={stop_loss:sl,tp1:tp1,tp2:tp2};}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1â5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}
+async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null;if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}body={stop_loss:sl,tp1:tp1,tp2:tp2};}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1–5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}
 async function editLevels(id,sl,tp1,tp2){manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';manageBg.style.display='flex';}
 async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
-function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scanâ¦</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
+function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
 async function resetAcc(bal){if(!confirm('Reset to $'+bal+'?'))return;const d0=await(await fetch('/api/trades')).json();for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN'))await fetch('/api/trades/'+t.id+'/close',{method:'POST'});const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();if(d.ok){setAcc(d.account);toast('Reset');}}
-async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' Â· ');alertBar.textContent='ALERT Â· '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
-loadSignals();
-setInterval(()=>{if(!pinManual)loadSignals();},20000);
-setInterval(checkAlerts,10000);
-setInterval(refreshModalMarket,1500);
-setInterval(()=>{if(document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
-setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
-</script>
-</body>
-</html>
-"""
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)
-+fmt(amount)+'</span><span>'+childQty.toFixed(6)+'</span><b>'+fmtPrice(avgAfter)+'</b></div>');
-     }
-     const finalAverage=totalQty>0?cumulativeCost/totalQty:0;
-     sp.style.display='block';
-     sp.innerHTML='<div class="scale-row scale-head"><b>Step</b><span>Order Price</span><span>Amount</span><span>Qty</span><span>Avg Entry After Fill</span></div>'+rows.join('')+'<div class="scale-row"><b>Total</b><span>â</span><b>
- }else{sp.style.display='none';sp.innerHTML='';}
- clearTimeout(window._liqPreviewTimer);
- window._liqPreviewTimer=setTimeout(async()=>{
-   try{
-     if(!(notional>0&&px>0&&+m_sl.value>0)){liq_preview.textContent='Enter amount and Stop Loss to preview liquidation.';return;}
-     const pb={symbol:m_symbol.value,side:m_side.value,order_type:m_order_type.value,entry:px,limit_price:m_order_type.value==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value||0,leverage:lev,margin_mode:m_mm.value};
-     if(mode==='amount')pb.amount_usd=+m_amount.value||0;
-     else if(mode==='margin')pb.margin_usd=+m_margin.value||0;
-     else if(mode==='qty')pb.quantity=+m_qty.value||0;
-     else pb.risk_pct=+m_risk.value||1;
-     const res=await fetch('/api/trade-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pb)});
-     const data=await res.json();
-     liq_preview.textContent=data.ok?(data.liquidation_price?'Estimated Liquidation: '+fmt(data.liquidation_price)+' USDT Â· '+data.liquidation_risk+' Â· '+(data.liquidation_distance_pct==null?'â':data.liquidation_distance_pct+'%')+' distance (estimate)':(data.no_liquidation_price?'No liquidation price at current cross equity Â· SAFE':'Liquidation estimate unavailable Â· check margin/size')):(data.error||'Liquidation preview unavailable');
-   }catch(e){liq_preview.textContent='Liquidation preview unavailable';}
- },350);
-}
-function tv(sym){return 'BINANCE:'+String(sym).replace('/','').replace(':USDT','')+'.P';}
-function toggleChart(id,sym){
-  const box=document.getElementById(id);if(!box)return;
-  if(box.style.display==='block'){box.style.display='none';box.innerHTML='';return;}
-  const symbol=tv(sym);
-  const url='https://www.tradingview.com/widgetembed/?symbol='+encodeURIComponent(symbol)+'&interval=15&hidesidetoolbar=1&hidetoptoolbar=1&theme=dark&style=1&withdateranges=1&allow_symbol_change=1';
-  box.style.display='block';
-  box.innerHTML='<div class="chart-loading">Loading '+symbol+' chartâ¦</div><iframe title="'+symbol+' TradingView chart" src="'+url+'" loading="eager" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe><div class="chart-fallback">Chart not loading? <a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)+'">Open chart in TradingView</a></div>';
-}
-function cardHTML(s){
-  const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
-  const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
-  return `<article class="card ${L?'L':'S'}">
-    <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x cap'}</span></div>
-      <div class="score">${s.score}</div></div>
-    <div class="sub">${s.setup||''} Â· ${(s.styles||[]).join('/')} Â· ${s.timeframe||''} Â· HTF ${s.bias_1d||'â'}/${s.bias_4h||'â'} Â· ADX ${s.adx??'â'} Â· RSI ${s.rsi??'â'}</div>
-    <div class="vals">
-      <div><em>Entry</em><strong>${s.entry}</strong></div>
-      <div><em>Market</em><strong>${mp}</strong></div>
-      <div><em>SL</em><strong>${s.stop_loss}</strong></div>
-      <div><em>TP1</em><strong>${s.tp1}</strong></div>
-      <div><em>TP2</em><strong>${s.tp2}</strong></div>
-      <div><em>R:R</em><strong>1:${s.rr}</strong></div>
-    </div>
-    <div class="sub" style="margin-top:8px">${s.summary||''}</div>
-    <div class="sub">${(s.reasons||[]).slice(0,4).join(' Â· ')}</div>
-    <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
-    <div class="chartbox" id="${cid}"></div></article>`;
-}
-async function loadSignals(){
-  try{
-    const d=await(await fetch('/api/signals?style='+style)).json();
-    setAcc(d.account); renderStats(d.stats, tradeStats); renderStats(d.stats, accStats);
-    sOpen.textContent=(d.stats&&d.stats.open)||0;
-    autoScan=!!d.auto_scan; autoBtn.textContent=autoScan?'Auto ON':'Auto OFF';
-    status.textContent=d.scanning?'Scanningâ¦':(d.error?'â ï¸ '+d.error:`${d.count||0} signals Â· ${d.scanned_count||0} pairs Â· ${d.last_updated||''}${autoScan?' Â· auto':''}`);
-    window._movers={gainers:d.gainers||[],losers:d.losers||[]};
-    if(pinManual) return; // keep manual analysis visible
-    const list=document.getElementById('signalList');
-    if(!d.signals||!d.signals.length){list.innerHTML='<div class="empty">No signals yet. Wait for auto-scan or tap Scan.</div>';return;}
-    const h=d.signals.map(s=>s.symbol+s.side+s.score).join('|');
-    if(lastSig&&h!==lastSig){beep(2);const neu=d.signals.filter(s=>!lastSig.includes(s.symbol+s.side));if(neu.length)speak(neu.slice(0,3).map(s=>`${s.side} ${s.symbol.replace('USDT','')}`).join(', '));}
-    lastSig=h;
-    list.innerHTML=d.signals.map(cardHTML).join('');
-  }catch(e){status.textContent='Load failed';}
-}
-function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=28').then(()=>setTimeout(loadSignals,3000));}
-async function analyzeManual(){
-  let s=(symIn.value||'').trim().toUpperCase().replace('/','').replace('-','');
-  if(!s){toast('Enter symbol');return;} if(!s.endsWith('USDT'))s+='USDT';
-  toast('Analyzing '+s); pinManual=true;
-  const d=await(await fetch('/api/analyze/'+s+'?style='+(style==='all'?'day':style))).json();
-  const list=document.getElementById('signalList');
-  if(!d.ok){list.innerHTML=`<div class="empty">${d.error||'Failed'}</div>`;return;}
-  if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'â'} Â· max ${d.max_leverage||'â'}x</div><div class="empty">${d.message||'No signal'}</div>
-    <div class="actions"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
-  list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
-  speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
-}
-function openModal(s){
-  mTitle.textContent=s.symbol;
-  m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
-  m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
-  m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=''; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
-  modalBg.style.display='flex'; updateOrderPreview();
-}
-function closeModal(){modalBg.style.display='none';}
-async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
-async function submitTrade(){
-  const submitBtn=document.querySelector('#modalBg .btn.good');
-  if(submitBtn.disabled)return;
-  const mode=m_mode.value,typ=m_order_type.value;
-  const px=typ==='MARKET'?(+m_mkt.value||+m_entry.value):(+m_entry.value);
-  const size=mode==='amount'?+m_amount.value:mode==='margin'?+m_margin.value:mode==='qty'?+m_qty.value:+m_risk.value;
-  if(!(px>0)){toast('Live market / limit price is not available');return;}
-  if(!(size>0)){toast('Enter a valid order amount');return;}
-  if(!(+m_sl.value>0)){toast('Enter a valid Stop Loss');return;}
-  if(!(+m_tp1.value>0)){toast('Enter a valid TP1');return;}
-  const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
-  if(mode==='amount')body.amount_usd=+m_amount.value;
-  if(mode==='margin')body.margin_usd=+m_margin.value;
-  if(mode==='risk')body.risk_pct=+m_risk.value||1;
-  if(mode==='qty')body.quantity=+m_qty.value;
-  if(body.scale_mode&&typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
-  if(body.scale_mode&&(!Number.isInteger(body.scale_orders)||body.scale_orders<2||body.scale_orders>50)){toast('Set number of scaled orders (2â50)');return;}
-  if(body.scale_mode&&body.scale_orders>=2&&!confirm('Place '+body.scale_orders+' separate pending orders?'))return;
-  submitBtn.disabled=true;submitBtn.textContent='Placingâ¦';
-  try{
-    const response=await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const d=await response.json();
-    if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;showTab('trades');loadTrades();loadSignals();}
-    else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed Â· HTTP '+response.status),5000);}
-  }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
-  finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
-}
-async function loadTrades(){
-  if(window._loadingTrades)return;window._loadingTrades=true;
-  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
-  const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
-  const open=(d.trades||[]).filter(t=>t.status==='OPEN');
-  const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
-  const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
-  let h='';
-  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') Â· Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} Â· LIMIT ${fmtPrice(t.limit_price)} Â· ${fmt(t.notional)} Â· Qty ${t.qty} Â· ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
-  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
-    const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
-    const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'â');
-    return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
-      <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
-        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
-        ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
-        ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
-        <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
-      <div class="vals">
-        <div><em>Average Entry</em><strong>${fmtPrice(t.entry)}</strong></div>
-        <div><em>Mark Price</em><strong>${t.current_price??'â'}</strong></div>
-        <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
-<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"â Safe Â· ":"â  ")+fmt(t.liquidation_price):"â"}</strong></div>
-        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
-        <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
-        <div><em>Qty</em><strong>${t.qty}</strong></div>
-        <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"â":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
-        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||"UNKNOWN"}</strong></div>
-        <div><em>Trail</em><strong>${trail}${t.trailing_active?" Â· ACTIVE":""}</strong></div>
-      </div>
-      <div class="actions">
-        <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
-        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
-        <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
-        <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
-      </div>
-      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} Â· ${t.hit||'CLOSED'}</span>
-    <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
-  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
-  for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
-  }catch(e){console.error('loadTrades',e);}finally{window._loadingTrades=false;}
-}
-async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
-async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
-function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
-function closeManage(){manageBg.style.display='none';}
-async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null;if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}body={stop_loss:sl,tp1:tp1,tp2:tp2};}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1â5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}
-async function editLevels(id,sl,tp1,tp2){manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';manageBg.style.display='flex';}
-async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
-function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scanâ¦</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
-async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
-async function resetAcc(bal){if(!confirm('Reset to $'+bal+'?'))return;const d0=await(await fetch('/api/trades')).json();for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN'))await fetch('/api/trades/'+t.id+'/close',{method:'POST'});const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();if(d.ok){setAcc(d.account);toast('Reset');}}
-async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' Â· ');alertBar.textContent='ALERT Â· '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
-loadSignals();
-setInterval(()=>{if(!pinManual)loadSignals();},20000);
-setInterval(checkAlerts,10000);
-setInterval(refreshModalMarket,1500);
-setInterval(()=>{if(document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
-setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
-</script>
-</body>
-</html>
-"""
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)
-+fmt(notional)+'</b><b>'+totalQty.toFixed(6)+'</b><b>'+fmtPrice(finalAverage)+'</b></div><div class="hint">Final average entry assumes every limit order fills at its preview price.</div>';
-   }
- }else{sp.style.display='none';sp.innerHTML='';}
- clearTimeout(window._liqPreviewTimer);
- window._liqPreviewTimer=setTimeout(async()=>{
-   try{
-     if(!(notional>0&&px>0&&+m_sl.value>0)){liq_preview.textContent='Enter amount and Stop Loss to preview liquidation.';return;}
-     const pb={symbol:m_symbol.value,side:m_side.value,order_type:m_order_type.value,entry:px,limit_price:m_order_type.value==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value||0,leverage:lev,margin_mode:m_mm.value};
-     if(mode==='amount')pb.amount_usd=+m_amount.value||0;
-     else if(mode==='margin')pb.margin_usd=+m_margin.value||0;
-     else if(mode==='qty')pb.quantity=+m_qty.value||0;
-     else pb.risk_pct=+m_risk.value||1;
-     const res=await fetch('/api/trade-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pb)});
-     const data=await res.json();
-     liq_preview.textContent=data.ok?(data.liquidation_price?'Estimated Liquidation: '+fmt(data.liquidation_price)+' USDT Â· '+data.liquidation_risk+' Â· '+(data.liquidation_distance_pct==null?'â':data.liquidation_distance_pct+'%')+' distance (estimate)':(data.no_liquidation_price?'No liquidation price at current cross equity Â· SAFE':'Liquidation estimate unavailable Â· check margin/size')):(data.error||'Liquidation preview unavailable');
-   }catch(e){liq_preview.textContent='Liquidation preview unavailable';}
- },350);
-}
-function tv(sym){return 'BINANCE:'+String(sym).replace('/','').replace(':USDT','')+'.P';}
-function toggleChart(id,sym){
-  const box=document.getElementById(id);if(!box)return;
-  if(box.style.display==='block'){box.style.display='none';box.innerHTML='';return;}
-  const symbol=tv(sym);
-  const url='https://www.tradingview.com/widgetembed/?symbol='+encodeURIComponent(symbol)+'&interval=15&hidesidetoolbar=1&hidetoptoolbar=1&theme=dark&style=1&withdateranges=1&allow_symbol_change=1';
-  box.style.display='block';
-  box.innerHTML='<div class="chart-loading">Loading '+symbol+' chartâ¦</div><iframe title="'+symbol+' TradingView chart" src="'+url+'" loading="eager" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe><div class="chart-fallback">Chart not loading? <a target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(symbol)+'">Open chart in TradingView</a></div>';
-}
-function cardHTML(s){
-  const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
-  const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
-  return `<article class="card ${L?'L':'S'}">
-    <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x cap'}</span></div>
-      <div class="score">${s.score}</div></div>
-    <div class="sub">${s.setup||''} Â· ${(s.styles||[]).join('/')} Â· ${s.timeframe||''} Â· HTF ${s.bias_1d||'â'}/${s.bias_4h||'â'} Â· ADX ${s.adx??'â'} Â· RSI ${s.rsi??'â'}</div>
-    <div class="vals">
-      <div><em>Entry</em><strong>${s.entry}</strong></div>
-      <div><em>Market</em><strong>${mp}</strong></div>
-      <div><em>SL</em><strong>${s.stop_loss}</strong></div>
-      <div><em>TP1</em><strong>${s.tp1}</strong></div>
-      <div><em>TP2</em><strong>${s.tp2}</strong></div>
-      <div><em>R:R</em><strong>1:${s.rr}</strong></div>
-    </div>
-    <div class="sub" style="margin-top:8px">${s.summary||''}</div>
-    <div class="sub">${(s.reasons||[]).slice(0,4).join(' Â· ')}</div>
-    <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
-    <div class="chartbox" id="${cid}"></div></article>`;
-}
-async function loadSignals(){
-  try{
-    const d=await(await fetch('/api/signals?style='+style)).json();
-    setAcc(d.account); renderStats(d.stats, tradeStats); renderStats(d.stats, accStats);
-    sOpen.textContent=(d.stats&&d.stats.open)||0;
-    autoScan=!!d.auto_scan; autoBtn.textContent=autoScan?'Auto ON':'Auto OFF';
-    status.textContent=d.scanning?'Scanningâ¦':(d.error?'â ï¸ '+d.error:`${d.count||0} signals Â· ${d.scanned_count||0} pairs Â· ${d.last_updated||''}${autoScan?' Â· auto':''}`);
-    window._movers={gainers:d.gainers||[],losers:d.losers||[]};
-    if(pinManual) return; // keep manual analysis visible
-    const list=document.getElementById('signalList');
-    if(!d.signals||!d.signals.length){list.innerHTML='<div class="empty">No signals yet. Wait for auto-scan or tap Scan.</div>';return;}
-    const h=d.signals.map(s=>s.symbol+s.side+s.score).join('|');
-    if(lastSig&&h!==lastSig){beep(2);const neu=d.signals.filter(s=>!lastSig.includes(s.symbol+s.side));if(neu.length)speak(neu.slice(0,3).map(s=>`${s.side} ${s.symbol.replace('USDT','')}`).join(', '));}
-    lastSig=h;
-    list.innerHTML=d.signals.map(cardHTML).join('');
-  }catch(e){status.textContent='Load failed';}
-}
-function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=28').then(()=>setTimeout(loadSignals,3000));}
-async function analyzeManual(){
-  let s=(symIn.value||'').trim().toUpperCase().replace('/','').replace('-','');
-  if(!s){toast('Enter symbol');return;} if(!s.endsWith('USDT'))s+='USDT';
-  toast('Analyzing '+s); pinManual=true;
-  const d=await(await fetch('/api/analyze/'+s+'?style='+(style==='all'?'day':style))).json();
-  const list=document.getElementById('signalList');
-  if(!d.ok){list.innerHTML=`<div class="empty">${d.error||'Failed'}</div>`;return;}
-  if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'â'} Â· max ${d.max_leverage||'â'}x</div><div class="empty">${d.message||'No signal'}</div>
-    <div class="actions"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
-  list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
-  speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
-}
-function openModal(s){
-  mTitle.textContent=s.symbol;
-  m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
-  m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
-  m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=''; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
-  modalBg.style.display='flex'; updateOrderPreview();
-}
-function closeModal(){modalBg.style.display='none';}
-async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
-async function submitTrade(){
-  const submitBtn=document.querySelector('#modalBg .btn.good');
-  if(submitBtn.disabled)return;
-  const mode=m_mode.value,typ=m_order_type.value;
-  const px=typ==='MARKET'?(+m_mkt.value||+m_entry.value):(+m_entry.value);
-  const size=mode==='amount'?+m_amount.value:mode==='margin'?+m_margin.value:mode==='qty'?+m_qty.value:+m_risk.value;
-  if(!(px>0)){toast('Live market / limit price is not available');return;}
-  if(!(size>0)){toast('Enter a valid order amount');return;}
-  if(!(+m_sl.value>0)){toast('Enter a valid Stop Loss');return;}
-  if(!(+m_tp1.value>0)){toast('Enter a valid TP1');return;}
-  const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0};
-  if(mode==='amount')body.amount_usd=+m_amount.value;
-  if(mode==='margin')body.margin_usd=+m_margin.value;
-  if(mode==='risk')body.risk_pct=+m_risk.value||1;
-  if(mode==='qty')body.quantity=+m_qty.value;
-  if(body.scale_mode&&typ!=='LIMIT'){toast('Scaled orders require Limit order type');return;}
-  if(body.scale_mode&&(!Number.isInteger(body.scale_orders)||body.scale_orders<2||body.scale_orders>50)){toast('Set number of scaled orders (2â50)');return;}
-  if(body.scale_mode&&body.scale_orders>=2&&!confirm('Place '+body.scale_orders+' separate pending orders?'))return;
-  submitBtn.disabled=true;submitBtn.textContent='Placingâ¦';
-  try{
-    const response=await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    const d=await response.json();
-    if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;showTab('trades');loadTrades();loadSignals();}
-    else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed Â· HTTP '+response.status),5000);}
-  }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
-  finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
-}
-async function loadTrades(){
-  if(window._loadingTrades)return;window._loadingTrades=true;
-  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
-  const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
-  const open=(d.trades||[]).filter(t=>t.status==='OPEN');
-  const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
-  const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
-  let h='';
-  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') Â· Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} Â· LIMIT ${fmtPrice(t.limit_price)} Â· ${fmt(t.notional)} Â· Qty ${t.qty} Â· ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
-  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
-    const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
-    const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'â');
-    return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
-      <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
-        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
-        ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
-        ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
-        <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
-      <div class="vals">
-        <div><em>Average Entry</em><strong>${fmtPrice(t.entry)}</strong></div>
-        <div><em>Mark Price</em><strong>${t.current_price??'â'}</strong></div>
-        <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
-<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"â Safe Â· ":"â  ")+fmt(t.liquidation_price):"â"}</strong></div>
-        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
-        <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
-        <div><em>Qty</em><strong>${t.qty}</strong></div>
-        <div><em>PnL%</em><strong>${t.pnl_pct||0}%</strong></div>
-        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"â":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
-        <div><em>Liq. Risk</em><strong>${t.liquidation_risk||"UNKNOWN"}</strong></div>
-        <div><em>Trail</em><strong>${trail}${t.trailing_active?" Â· ACTIVE":""}</strong></div>
-      </div>
-      <div class="actions">
-        <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
-        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
-        <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
-        <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
-      </div>
-      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} Â· ${t.hit||'CLOSED'}</span>
-    <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
-  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
-  for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
-  }catch(e){console.error('loadTrades',e);}finally{window._loadingTrades=false;}
-}
-async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
-async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
-function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
-function closeManage(){manageBg.style.display='none';}
-async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null;if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}body={stop_loss:sl,tp1:tp1,tp2:tp2};}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1â5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}const d=await(await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();if(d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}
-async function editLevels(id,sl,tp1,tp2){manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';manageBg.style.display='flex';}
-async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
-function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scanâ¦</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
-async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
-async function resetAcc(bal){if(!confirm('Reset to $'+bal+'?'))return;const d0=await(await fetch('/api/trades')).json();for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN'))await fetch('/api/trades/'+t.id+'/close',{method:'POST'});const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();if(d.ok){setAcc(d.account);toast('Reset');}}
-async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' Â· ');alertBar.textContent='ALERT Â· '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
+async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
 loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
