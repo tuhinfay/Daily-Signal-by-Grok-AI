@@ -109,6 +109,11 @@ def run_scan(top_n: int = 28):
 
         if client.rate_limited:
             _cache["error"] = "Binance Futures rate limit active; scan paused to avoid extending the ban."
+            _cache["auto_scan"] = False
+            try:
+                db.set_meta("auto_scan", "0")
+            except Exception:
+                pass
             return
 
         signals, prices = [], {}
@@ -122,6 +127,11 @@ def run_scan(top_n: int = 28):
                     data[tf] = df
             if client.rate_limited:
                 _cache["error"] = "Binance Futures rate limit active; remaining pairs skipped."
+                _cache["auto_scan"] = False
+                try:
+                    db.set_meta("auto_scan", "0")
+                except Exception:
+                    pass
                 break
             if len(data) < 4:
                 continue
