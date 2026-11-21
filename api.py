@@ -104,9 +104,63 @@ def _stats() -> Dict[str, Any]:
     }
 
 
+
+def _estimate_liquidation_price(trade: Dict[str, Any]) -> Optional[float]:
+    """Rough estimate only; Binance maintenance tiers and fees are not available here."""
+    try:
+        side = str(trade.get("side", "")).upper()
+        qty = float(trade.get("qty") or trade.get("quantity") or 0)
+        entry = float(trade.get("entry") or 0)
+        mmr = float(trade.get("maintenance_margin_rate") or 0.005)
+        maintenance = float(trade.get("maintenance_amount") or 0)
+        if side not in ("LONG", "SHORT") or qty <= 0 or entry <= 0 or not (0 <= mmr < 1):
+            return None
+        notional = entry * qty
+        if str(trade.get("margin_mode", "CROSS")).upper() == "ISOLATED":
+            margin = float(trade.get("margin") or 0)
+        else:
+            margin = float(trade.get("wallet_balance", _account.get("balance", 0)) or 0)
+        if side == "LONG":
+            denominator = qty * (1 - mmr)
+            price = (notional - margin + maintenance) / denominator
+        else:
+            denominator = qty * (1 + mmr)
+            price = (notional + margin - maintenance) / denominator
+        if denominator <= 0 or price <= 0:
+            return None
+        return float(price)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _update_trade_liquidation_fields(trade: Dict[str, Any]) -> None:
+    """Attach an explicitly estimated price and a distance-based risk warning."""
+    price = _estimate_liquidation_price(trade)
+    trade["liquidation_price"] = round(price, 8) if price is not None else None
+    trade["liquidation_price_type"] = "ESTIMATED" if price is not None else None
+    if price is None:
+        trade["liquidation_risk"] = "UNKNOWN"
+        trade["liquidation_distance_pct"] = None
+        return
+    try:
+        current = float(trade.get("current_price") or trade.get("entry") or 0)
+        if current <= 0:
+            raise ValueError("missing current price")
+        distance = abs(current - price) / current * 100
+        trade["liquidation_distance_pct"] = round(distance, 2)
+        trade["liquidation_risk"] = "HIGH" if distance <= 5 else ("MEDIUM" if distance <= 10 else "LOW")
+    except (TypeError, ValueError):
+        trade["liquidation_distance_pct"] = None
+        trade["liquidation_risk"] = "UNKNOWN"
+
+
 def run_scan(top_n: int = 28):
     global _scan_retry_after
-    if time_mod.monotonic() < _scan_retry_after:
+    cooldown_remaining = int(_scan_retry_after - time_mod.monotonic())
+    if cooldown_remaining > 0:
+        minutes, seconds = divmod(cooldown_remaining, 60)
+        _cache["error"] = f"Binance Futures IP cooldown active. Scan will retry in {minutes}m {seconds}s."
+        _cache["scanning"] = False
         return
     if not _scan_lock.acquire(blocking=False):
         return
