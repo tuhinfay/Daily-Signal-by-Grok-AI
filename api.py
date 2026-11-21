@@ -270,7 +270,7 @@ def _open_trade_symbols():
     return sorted({
         str(t.get("symbol", "")).upper().replace("/", "").split(":")[0]
         for t in _trades.values()
-        if t.get("status") == "OPEN" and t.get("symbol")
+        if t.get("status") in ("OPEN", "PENDING") and t.get("symbol")
     })
 
 
@@ -691,9 +691,9 @@ async def create_trade(body: TradeCreate):
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
         "trailing_pct": None, "callback_rate": None, "trailing_activation_price": None,
-        "trailing_active": False, "peak_price": body.entry, "trough_price": body.entry,
+        "trailing_active": False, "peak_price": entry_price, "trough_price": entry_price
         "scale_mode": scale_mode, "scale_orders": scale_orders,
-        "dca_history": [{"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()}],
+        "dca_history": [{"price": entry_price, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()}],
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
         "current_price": entry_price if order_type == "MARKET" else None, "pnl_pct": 0.0, "unrealized_pnl": 0.0,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -711,14 +711,14 @@ async def create_trade(body: TradeCreate):
     if existing_trade:
         old_qty = float(existing_trade.get("qty") or 0)
         combined_qty = old_qty + qty
-        old_entry = float(existing_trade.get("entry") or body.entry)
-        existing_trade["entry"] = round((old_entry * old_qty + body.entry * qty) / combined_qty, 8)
+        old_entry = float(existing_trade.get("entry") or entry_price)
+        existing_trade["entry"] = round((old_entry * old_qty + entry_price * qty) / combined_qty, 8)
         existing_trade["qty"] = round(combined_qty, 8)
         existing_trade["notional"] = round(existing_trade["entry"] * combined_qty, 2)
         existing_trade["margin"] = round(float(existing_trade.get("margin") or 0) + margin, 2)
         existing_trade["dca_count"] = int(existing_trade.get("dca_count") or 0) + 1
         existing_trade.setdefault("dca_history", []).append({"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()})
-        existing_trade["current_price"] = body.entry
+        existing_trade["current_price"] = entry_price
         existing_trade["unrealized_pnl"] = 0.0
         existing_trade["pnl_pct"] = 0.0
         _update_trade_liquidation_fields(existing_trade)
@@ -729,7 +729,7 @@ async def create_trade(body: TradeCreate):
     _update_trade_liquidation_fields(trade)
     _trades[tid] = trade
     db.save_trade(trade)
-    print(f"[trades] opened {tid} {sym} {side} entry={body.entry} qty={trade['qty']}")
+    print(f"[trades] opened {tid} {sym} {side} entry={entry_price} qty={trade['qty']}")
     _calc_equity()
     db.save_account(_account)
     return {"ok": True, "trade": trade, "duplicate": False, "account": _account}
