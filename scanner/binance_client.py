@@ -189,7 +189,7 @@ class BinanceClient:
 
             # Limit daily-kline lookups to the most liquid contracts to keep API weight bounded.
             rows = []
-            for clean, volume, last in candidates[:40]:
+            for clean, volume, last in candidates[:8]:
                 if self.rate_limited:
                     break
                 try:
