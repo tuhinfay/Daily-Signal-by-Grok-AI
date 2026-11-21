@@ -611,6 +611,24 @@ async def reset_account(body: AccountReset):
     return {"ok": True, "account": _account}
 
 
+@app.get("/api/position-mode")
+async def api_position_mode():
+    return {"mode": "HEDGE", "engine": "SIMULATED", "allows_opposite_positions": True}
+
+
+@app.delete("/api/trades/history")
+async def clear_trade_history():
+    removed = []
+    for tid, trade in list(_trades.items()):
+        if trade.get("status") != "OPEN":
+            removed.append(tid)
+            _trades.pop(tid, None)
+            db.delete_trade(tid)
+    _calc_equity()
+    db.save_account(_account)
+    return {"ok": True, "deleted": len(removed), "account": _account}
+
+
 @app.get("/api/trades")
 async def api_trades():
     _calc_equity()
@@ -685,7 +703,7 @@ async def create_trade(body: TradeCreate):
 
     tid = str(uuid.uuid4())[:8]
     trade = {
-        "id": tid, "symbol": sym, "side": side, "order_type": order_type, "order_price": entry_price if order_type == "LIMIT" else None, "limit_price": entry_price if order_type == "LIMIT" else None,
+        "id": tid, "symbol": sym, "side": side, "position_mode": "HEDGE", "order_type": order_type, "order_price": entry_price if order_type == "LIMIT" else None, "limit_price": entry_price if order_type == "LIMIT" else None,
         "entry": entry_price, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
@@ -718,9 +736,15 @@ async def create_trade(body: TradeCreate):
         existing_trade["margin"] = round(float(existing_trade.get("margin") or 0) + margin, 2)
         existing_trade["dca_count"] = int(existing_trade.get("dca_count") or 0) + 1
         existing_trade.setdefault("dca_history", []).append({"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()})
-        existing_trade["current_price"] = entry_price
-        existing_trade["unrealized_pnl"] = 0.0
-        existing_trade["pnl_pct"] = 0.0
+        current_mark = float(_cache.get("prices", {}).get(sym) or existing_trade.get("current_price") or entry_price)
+        existing_trade["current_price"] = current_mark
+        if side == "LONG":
+            existing_trade["unrealized_pnl"] = round((current_mark - existing_trade["entry"]) * combined_qty, 4)
+            existing_trade["pnl_pct"] = round(((current_mark - existing_trade["entry"]) / existing_trade["entry"]) * 100 * lev, 3)
+        else:
+            existing_trade["unrealized_pnl"] = round((existing_trade["entry"] - current_mark) * combined_qty, 4)
+            existing_trade["pnl_pct"] = round(((existing_trade["entry"] - current_mark) / existing_trade["entry"]) * 100 * lev, 3)
+        existing_trade["position_mode"] = "HEDGE"
         for position in _trades.values():
             if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
         db.save_trade(existing_trade)
