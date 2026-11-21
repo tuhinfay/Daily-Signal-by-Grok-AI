@@ -19,6 +19,7 @@ class BinanceClient:
             exchange_config.update({"apiKey": api_key, "secret": api_secret})
         self.exchange = ccxt.binance(exchange_config)
         self.futures = futures
+        self._has_api_credentials = bool(api_key and api_secret)
         self._markets_loaded = False
         self._lev_cache: Dict[str, Optional[int]] = {}
         self._tickers_cache: Dict[str, dict] = {}
@@ -69,12 +70,14 @@ class BinanceClient:
         clean = self._clean_symbol(symbol)
         if clean in self._lev_cache:
             return self._lev_cache[clean]
+        if self.rate_limited:
+            return None
         self._ensure_markets()
         maximum = None
         ccxt_symbol = self._ccxt_symbol(clean)
         try:
             market = self.exchange.market(ccxt_symbol)
-            if self.exchange.has.get("fetchMarketLeverageTiers"):
+            if self._has_api_credentials and self.exchange.has.get("fetchMarketLeverageTiers"):
                 tiers = self.exchange.fetch_market_leverage_tiers(ccxt_symbol)
                 values = []
                 for tier in tiers or []:
@@ -133,6 +136,8 @@ class BinanceClient:
     def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
         """Rank liquid USDT-M contracts from the current UTC daily candle (00:00 UTC = 06:00 Bangladesh)."""
         gainers, losers = [], []
+        if self.rate_limited:
+            return {"gainers": gainers, "losers": losers}
         try:
             self._ensure_markets()
             tickers = self._tickers_cache or self.exchange.fetch_tickers()
