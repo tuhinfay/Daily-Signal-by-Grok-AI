@@ -32,7 +32,7 @@ class BinanceClient:
         message = str(error)
         if "418" in message or "-1003" in message or "Too many requests" in message:
             self.rate_limited = True
-            match = re.search(r"banned until\\s+(\\d{10,})", message, re.IGNORECASE)
+            match = re.search(r"banned until\s+(\d{10,})", message, re.IGNORECASE)
             if match:
                 try:
                     self.rate_limit_until = max(self.rate_limit_until, int(match.group(1)) / 1000.0)
