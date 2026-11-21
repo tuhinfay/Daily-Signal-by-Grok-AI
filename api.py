@@ -107,13 +107,22 @@ def run_scan(top_n: int = 28):
         except Exception as e:
             print("movers", e)
 
+        if client.rate_limited:
+            _cache["error"] = "Binance Futures rate limit active; scan paused to avoid extending the ban."
+            return
+
         signals, prices = [], {}
         for symbol, vol in pairs:
             data = {}
             for tf in ("5m", "15m", "1h", "4h", "1d"):
+                if client.rate_limited:
+                    break
                 df = client.fetch_ohlcv(symbol, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
                 if df is not None and len(df) > 30:
                     data[tf] = df
+            if client.rate_limited:
+                _cache["error"] = "Binance Futures rate limit active; remaining pairs skipped."
+                break
             if len(data) < 4:
                 continue
             try:
