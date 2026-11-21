@@ -306,7 +306,12 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
                 matching["dca_count"] = int(matching.get("dca_count") or 0) + 1
                 matching.setdefault("dca_history", []).append({"price": limit_px, "qty": add_qty, "notional": round(limit_px * add_qty, 2), "margin": t.get("margin", 0), "created_at": datetime.now(timezone.utc).isoformat()})
                 matching["current_price"] = price
+                if pending_side == "LONG":
+                    matching["unrealized_pnl"] = round((price - matching["entry"]) * total_qty, 4)
+                else:
+                    matching["unrealized_pnl"] = round((matching["entry"] - price) * total_qty, 4)
                 matching["position_mode"] = "HEDGE"
+                _update_trade_liquidation_fields(matching)
                 t.update({"status": "MERGED", "hit": "MERGED", "merged_into": matching.get("id"), "merged_at": datetime.now(timezone.utc).isoformat()})
                 db.save_trade(t)
                 db.save_trade(matching)
