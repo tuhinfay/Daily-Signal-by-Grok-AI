@@ -102,8 +102,20 @@ class BinanceClient:
             if maximum is None:
                 leverage_limits = ((market.get("limits") or {}).get("leverage") or {})
                 value = leverage_limits.get("max")
-                if value is not None:
-                    maximum = int(float(value))
+                info = market.get("info") or {}
+                candidates = [
+                    value,
+                    market.get("maxLeverage"),
+                    info.get("maxLeverage"),
+                    (info.get("leverageFilter") or {}).get("maxLeverage"),
+                ]
+                for candidate in candidates:
+                    if candidate is not None:
+                        try:
+                            maximum = int(float(candidate))
+                            break
+                        except (TypeError, ValueError):
+                            continue
         except Exception as e:
             print(f"leverage {clean}: {e}")
         if maximum is not None:
