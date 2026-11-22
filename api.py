@@ -313,6 +313,15 @@ def run_scan(top_n: int = 12):
 
         # Query derivatives context only for the highest-ranked unique symbols to
         # keep public API request weight bounded; funding is a mild crowding filter.
+        for item in signals:
+            item["market_regime"] = btc_regime
+            if (btc_regime == "BULL" and item["side"] == "SHORT") or (btc_regime == "BEAR" and item["side"] == "LONG"):
+                item["score"] = max(0, int(item["score"]) - 7)
+                item["reasons"].append(f"Against BTC {btc_regime} regime")
+            elif (btc_regime == "BULL" and item["side"] == "LONG") or (btc_regime == "BEAR" and item["side"] == "SHORT"):
+                item["score"] = min(100, int(item["score"]) + 2)
+                item["reasons"].append(f"Aligned BTC {btc_regime} regime")
+
         checked_derivatives = set()
         for candidate in sorted(signals, key=lambda x: x["score"], reverse=True):
             sym = candidate["symbol"]
@@ -355,12 +364,7 @@ def run_scan(top_n: int = 12):
                 if spread is not None and spread >= 0.10:
                     item["score"] = max(0, int(item["score"]) - 4)
                     item["reasons"].append("Wide order-book spread")
-                if (btc_regime == "BULL" and item["side"] == "SHORT") or (btc_regime == "BEAR" and item["side"] == "LONG"):
-                    item["score"] = max(0, int(item["score"]) - 7)
-                    item["reasons"].append(f"Against BTC {btc_regime} regime")
-                elif (btc_regime == "BULL" and item["side"] == "LONG") or (btc_regime == "BEAR" and item["side"] == "SHORT"):
-                    item["score"] = min(100, int(item["score"]) + 2)
-                    item["reasons"].append(f"Aligned BTC {btc_regime} regime")
+
         if client.rate_limited:
             _cache["error"] = "Binance Futures rate limit active during derivatives checks; remaining checks paused."
             _pause_scans_for_rate_limit(client)
