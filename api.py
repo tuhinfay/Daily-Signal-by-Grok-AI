@@ -305,7 +305,7 @@ def run_scan(top_n: int = 12):
                                 r["score"] = min(100, int(r["score"]) + 3)
                                 r["reasons"].append("BTC relative strength aligned")
                     r["styles"] = [style_name]
-                    r["summary"] = f"{r.get('setup','')} · {style_name.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
+                    r["summary"] = f"{r.get('setup','')} · {style_name.upper()} · RR TP1 1:{r['rr']} / TP2 1:{r.get('rr_tp2', 0)} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
                     signals.append(r)
             except Exception as e:
                 print(f"scan {symbol}: {e}")
@@ -780,7 +780,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     r["max_leverage"] = lev
     r["liquidity"] = liq
     r["styles"] = [selected_style]
-    r["summary"] = f"{r.get('setup','')} · {selected_style.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
+    r["summary"] = f"{r.get('setup','')} · {selected_style.upper()} · RR TP1 1:{r['rr']} / TP2 1:{r.get('rr_tp2', 0)} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
     return {"ok": True, "signal": r}
 
 
@@ -1530,9 +1530,11 @@ function cardHTML(s){
       <div><em>SL</em><strong>${s.stop_loss}</strong></div>
       <div><em>TP1</em><strong>${s.tp1}</strong></div>
       <div><em>TP2</em><strong>${s.tp2}</strong></div>
-      <div><em>R:R</em><strong>1:${s.rr}</strong></div>
+      <div><em>TP1 RR</em><strong>1:${s.rr}</strong></div>
+      <div><em>TP2 RR</em><strong>1:${(s.rr_tp2??'—')}</strong></div>
     </div>
     <div class="sub" style="margin-top:8px">${s.summary||''}</div>
+    <div class="sub">BTC ${s.market_regime||'—'} · OI 1h ${s.oi_change_1h_pct==null?'—':s.oi_change_1h_pct+'%'} · Book ${s.orderbook_imbalance_pct==null?'—':s.orderbook_imbalance_pct+'%'} · Spread ${s.spread_pct==null?'—':s.spread_pct+'%'}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
     <div class="chartbox" id="${cid}"></div></article>`;
