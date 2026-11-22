@@ -295,6 +295,9 @@ def run_scan(top_n: int = 12):
                 elif funding is not None and funding <= -0.0005 and item["side"] == "SHORT":
                     item["score"] = max(0, int(item["score"]) - 4)
                     item["reasons"].append("Crowded short funding")
+        if client.rate_limited:
+            _cache["error"] = "Binance Futures rate limit active during derivatives checks; remaining checks paused."
+            _pause_scans_for_rate_limit(client)
         signals.sort(key=lambda x: x["score"], reverse=True)
         _cache["signals"] = signals
         _cache["prices"] = prices
