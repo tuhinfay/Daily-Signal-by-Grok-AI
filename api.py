@@ -47,12 +47,12 @@ _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
 
 def _symbol_leverage_cap(symbol: str) -> int:
-    """Use a verified symbol tier, otherwise keep the conservative 20x cap."""
+    """Use a verified symbol tier, otherwise use a 150x paper-trading ceiling."""
     value = _scan_max_leverage.get(str(symbol).upper().replace("/", "").split(":")[0])
     try:
-        return max(1, min(int(value), 150)) if value is not None else 20
+        return max(1, min(int(value), 150)) if value is not None else 150
     except (TypeError, ValueError):
-        return 20
+        return 150
 
 
 
@@ -933,7 +933,7 @@ def create_trade(body: TradeCreate):
     # No Binance client/network I/O in the order-submit path.
     # The modal/scanner refreshes market prices in the background.
     max_lev = _scan_max_leverage.get(sym)
-    leverage_cap = max(1, min(int(max_lev), 150)) if max_lev is not None else 20
+    leverage_cap = max(1, min(int(max_lev), 150)) if max_lev is not None else 150
     requested_leverage = int(body.leverage or min(20, leverage_cap))
     if requested_leverage > leverage_cap:
         return JSONResponse({"ok": False, "error": f"{sym} leverage is capped at {leverage_cap}x. Exact higher tiers are unavailable; refresh symbol analysis first."}, status_code=400)
@@ -1521,7 +1521,7 @@ function cardHTML(s){
   const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x cap'}</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x sim max':'150x sim max*'}</span></div>
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
