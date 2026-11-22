@@ -44,9 +44,10 @@ def calculate_levels(side: str, entry: float, atr: float, rr_min: float = None,
             risk = sl_atr
 
         resistances = [x for x in highs if x > entry]
-        near_resistance = min(resistances) if resistances else None
+        valid_resistances = [x for x in resistances if (x-entry) >= risk*rr_min]
+        near_resistance = min(valid_resistances) if valid_resistances else None
         far_resistance = max(resistances) if resistances else None
-        tp1 = near_resistance if near_resistance and (near_resistance-entry) >= risk*rr_min else entry + tp1_atr
+        tp1 = near_resistance if near_resistance is not None else entry + tp1_atr
         tp2 = far_resistance if far_resistance and far_resistance > tp1 + atr*0.25 else entry + max(tp2_atr, risk*2.5)
         reward1, reward2 = tp1-entry, tp2-entry
     else:
@@ -62,9 +63,10 @@ def calculate_levels(side: str, entry: float, atr: float, rr_min: float = None,
             risk = sl_atr
 
         supports = [x for x in lows if x < entry]
-        near_support = max(supports) if supports else None
+        valid_supports = [x for x in supports if (entry-x) >= risk*rr_min]
+        near_support = max(valid_supports) if valid_supports else None
         far_support = min(supports) if supports else None
-        tp1 = near_support if near_support and (entry-near_support) >= risk*rr_min else entry-tp1_atr
+        tp1 = near_support if near_support is not None else entry-tp1_atr
         tp2 = far_support if far_support and far_support < tp1-atr*0.25 else entry-max(tp2_atr, risk*2.5)
         reward1, reward2 = entry-tp1, entry-tp2
 
