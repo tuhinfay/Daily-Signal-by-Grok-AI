@@ -124,7 +124,7 @@ def run_backtest(files: Dict[str, str], style: str = "day", step: int = 4,
             continue
         fill_bar = entry_frame.iloc[i + 1]
         fill = float(fill_bar["open"])
-        future = entry_frame.iloc[i + 2:i + 2 + max_bars]
+        future = entry_frame.iloc[i + 1:i + 1 + max_bars]
         if future.empty:
             continue
         result = simulate_trade(
