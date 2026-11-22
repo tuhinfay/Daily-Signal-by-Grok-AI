@@ -47,12 +47,12 @@ _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
 
 def _symbol_leverage_cap(symbol: str) -> int:
-    """Use a verified symbol tier, otherwise use a 150x paper-trading ceiling."""
+    """Use a verified symbol tier; keep a conservative 20x cap when unknown."""
     value = _scan_max_leverage.get(str(symbol).upper().replace("/", "").split(":")[0])
     try:
-        return max(1, min(int(value), 150)) if value is not None else 150
+        return max(1, min(int(value), 150)) if value is not None else 20
     except (TypeError, ValueError):
-        return 150
+        return 20
 
 
 
@@ -933,7 +933,7 @@ def create_trade(body: TradeCreate):
     # No Binance client/network I/O in the order-submit path.
     # The modal/scanner refreshes market prices in the background.
     max_lev = _scan_max_leverage.get(sym)
-    leverage_cap = max(1, min(int(max_lev), 150)) if max_lev is not None else 150
+    leverage_cap = max(1, min(int(max_lev), 150)) if max_lev is not None else 20
     requested_leverage = int(body.leverage or min(20, leverage_cap))
     if requested_leverage > leverage_cap:
         return JSONResponse({"ok": False, "error": f"{sym} leverage is capped at {leverage_cap}x. Exact higher tiers are unavailable; refresh symbol analysis first."}, status_code=400)
@@ -1386,7 +1386,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     </div>
     <div class="row2">
       <div><label>Order Type</label><select id="m_order_type" onchange="toggleOrderType()"><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></div>
-      <div><label>Leverage <span id="mLevHint"></span></label><input type="number" id="m_lev" value="20" min="1" max="150" oninput="updateOrderPreview()"></div>
+      <div><label>Leverage</label><input type="number" id="m_lev" value="20" min="1" max="150" oninput="updateOrderPreview()"></div>
     </div>
     <div class="row2">
       <div><label id="m_entry_label">Entry</label><input type="number" id="m_entry" step="any" oninput="updateOrderPreview()"></div>
@@ -1575,7 +1575,7 @@ function openModal(s){
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
   m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';
-  const ml=s.max_leverage||150; m_lev.value=Math.min(20,ml); m_lev.max=ml; mLevHint.textContent='Paper-trading ceiling only; Binance account/symbol limits may be lower.'; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
+  const ml=s.max_leverage||20; m_lev.value=Math.min(20,ml); m_lev.max=ml; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
 function closeModal(){modalBg.style.display='none';}
