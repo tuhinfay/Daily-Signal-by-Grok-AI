@@ -297,7 +297,9 @@ class BinanceClient:
 
     def get_derivatives_context(self, symbol: str) -> Dict[str, Optional[float]]:
         """Fetch optional public Futures funding and open-interest context."""
-        result: Dict[str, Optional[float]] = {"funding_rate": None, "open_interest": None}
+        result: Dict[str, Optional[float]] = {
+            "funding_rate": None, "open_interest": None, "oi_change_pct": None,
+        }
         if self.rate_limited:
             return result
         market_symbol = self._ccxt_symbol(symbol)
@@ -320,6 +322,43 @@ class BinanceClient:
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"open interest {symbol}: {e}")
+        try:
+            if not self.rate_limited and self.exchange.has.get("fetchOpenInterestHistory"):
+                history = self.exchange.fetch_open_interest_history(market_symbol, timeframe="1h", limit=2) or []
+                values = []
+                for row in history:
+                    info = row.get("info") or {}
+                    value = row.get("openInterestAmount") or row.get("openInterest") or info.get("sumOpenInterest")
+                    if value is not None and float(value) > 0:
+                        values.append(float(value))
+                if len(values) >= 2 and values[-2] > 0:
+                    result["oi_change_pct"] = (values[-1] / values[-2] - 1.0) * 100.0
+        except Exception as e:
+            self._mark_rate_limit(e)
+            print(f"open interest history {symbol}: {e}")
+        return result
+
+    def get_order_book_context(self, symbol: str, limit: int = 20) -> Dict[str, Optional[float]]:
+        """Return top-of-book spread and depth imbalance; never infer hidden liquidity."""
+        result: Dict[str, Optional[float]] = {"book_imbalance_pct": None, "spread_pct": None}
+        if self.rate_limited:
+            return result
+        try:
+            book = self.exchange.fetch_order_book(self._ccxt_symbol(symbol), limit=limit) or {}
+            bids, asks = book.get("bids") or [], book.get("asks") or []
+            bid_qty = sum(float(level[1]) for level in bids if len(level) >= 2 and float(level[1]) > 0)
+            ask_qty = sum(float(level[1]) for level in asks if len(level) >= 2 and float(level[1]) > 0)
+            total = bid_qty + ask_qty
+            if total > 0:
+                result["book_imbalance_pct"] = (bid_qty - ask_qty) / total * 100.0
+            if bids and asks:
+                bid, ask = float(bids[0][0]), float(asks[0][0])
+                mid = (bid + ask) / 2.0
+                if bid > 0 and ask >= bid and mid > 0:
+                    result["spread_pct"] = (ask - bid) / mid * 100.0
+        except Exception as e:
+            self._mark_rate_limit(e)
+            print(f"order book {symbol}: {e}")
         return result
 
     def get_market_liquidity(self, symbol: str) -> str:
