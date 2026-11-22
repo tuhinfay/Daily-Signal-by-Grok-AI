@@ -1418,6 +1418,16 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <button data-s="day" onclick="setStyle('day')">Day</button>
     <button data-s="swing" onclick="setStyle('swing')">Swing</button>
   </div>
+  <details class="card" id="botPanel">
+    <summary class="sec" style="cursor:pointer">Auto Trade · Bot <span id="botState" class="tag">OFF</span></summary>
+    <div class="row2"><div><label>Bot</label><select id="botEnabled"><option value="false">OFF</option><option value="true">ON</option></select></div><div><label>Minimum Score</label><input id="botScore" type="number" min="60" max="100" value="75"></div></div>
+    <div class="row2"><div><label>Minimum Quality</label><select id="botQuality"><option>A+</option><option selected>A</option><option>B</option></select></div><div><label>Position Value (USDT)</label><input id="botAmount" type="number" min="5" step="any" value="50"></div></div>
+    <div class="row2"><div><label>Max Open Bot Trades</label><input id="botMaxOpen" type="number" min="1" max="10" value="2"></div><div><label>Trailing Stop (%) · 0 = Off</label><input id="botTrail" type="number" min="0" max="5" step="0.1" value="0.8"></div></div>
+    <label>Target Coins (comma-separated, blank = all)</label><input id="botSymbols" placeholder="BTCUSDT, ETHUSDT">
+    <label><input id="botOpposite" type="checkbox" checked> Close on strong opposite signal</label>
+    <div class="actions"><button class="btn good" onclick="saveBotSettings()">Save Auto Trade</button></div>
+    <p class="hint">Simulated paper trades only — no Binance orders. Bot starts OFF. Existing SL/TP and trailing logic manage positions.</p>
+  </details>
   <div class="note" id="status">Loading…</div>
   <div id="signalList"></div>
 </section>
@@ -1506,6 +1516,8 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <script>
 let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
+async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score||75;botQuality.value=c.min_quality||'A';botAmount.value=c.amount_usd||50;botMaxOpen.value=c.max_open||2;botTrail.value=c.trailing_pct??0.8;botSymbols.value=c.symbols||'';botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';}catch(e){}}
+async function saveBotSettings(){const p={enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,symbols:botSymbols.value,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
 if('Notification'in window && Notification.permission==='default') Notification.requestPermission();
 
 function speak(text){if(!voiceOn||!('speechSynthesis'in window))return;try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.rate=1;u.lang='en-US';speechSynthesis.speak(u);}catch(e){}}
@@ -1780,6 +1792,7 @@ function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(a
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
 async function adjustFunds(action){const input=document.getElementById('fundAmount'),amount=Number(input.value);if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}const label=action==='add'?'Add':'Remove';if(!confirm(label+' $'+fmt(amount)+' USDT '+(action==='add'?'to':'from')+' paper account?'))return;try{const r=await fetch('/api/account/funds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,amount})}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Balance adjustment failed');return;}setAcc(d.account);const account=await(await fetch('/api/account')).json();renderStats(account.stats,accStats);input.value='';toast(label+'ed $'+fmt(amount)+' USDT');loadTrades();}catch(e){toast('Balance adjustment failed: '+(e.message||'network error'));}}
 async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
+loadBotSettings();
 loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
