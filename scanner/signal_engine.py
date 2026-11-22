@@ -1,6 +1,7 @@
 """Signal Engine v4 — Professional trade plans"""
 
 from typing import Dict, Optional, List, Tuple
+import math
 import pandas as pd
 from .indicators import add_indicators, get_latest, get_prev
 from .risk import calculate_levels
@@ -15,9 +16,10 @@ class SignalEngine:
     def _safe(d, key, default=0.0):
         try:
             v = d.get(key, default)
-            if v is None or (isinstance(v, float) and v != v):
+            if v is None:
                 return default
-            return float(v)
+            value = float(v)
+            return value if math.isfinite(value) else default
         except Exception:
             return default
 
@@ -31,7 +33,7 @@ class SignalEngine:
         long_p = short_p = 0
         lr, sr = [], []
         bias = "neutral"
-        if df is None or len(df) < 40:
+        if df is None or len(df) < 205:
             return 0, 0, lr, sr, bias
         df = add_indicators(df)
         r = get_latest(df)
@@ -62,7 +64,7 @@ class SignalEngine:
         lr, sr = [], []
         adx_val = 0.0
         bias = "neutral"
-        if df is None or len(df) < 40:
+        if df is None or len(df) < 50:
             return 0, 0, lr, sr, adx_val, bias
         df = add_indicators(df)
         r = get_latest(df)
@@ -90,29 +92,31 @@ class SignalEngine:
             long_p += 7; lr.append("4H MACD+")
         elif self._safe(r, "macd") < self._safe(r, "macd_signal") and hist <= 0:
             short_p += 7; sr.append("4H MACD-")
+        if self._safe(r, "close") > self._safe(r, "swing_high_ref"):
+            long_p += 6; lr.append("4H structure breakout↑")
+        elif self._safe(r, "close") < self._safe(r, "swing_low_ref"):
+            short_p += 6; sr.append("4H structure breakout↓")
         return long_p, short_p, lr, sr, adx_val, bias
 
     def _score_1h(self, df):
         long_p = short_p = 0
         lr, sr = [], []
         rsi_val = 50.0
-        if df is None or len(df) < 40:
+        if df is None or len(df) < 50:
             return 0, 0, lr, sr, rsi_val
         df = add_indicators(df)
         r, prev = get_latest(df), get_prev(df, 1)
         rsi_val = self._safe(r, "rsi", 50)
         rsi_prev = self._safe(prev, "rsi", 50)
-        if rsi_val <= config.RSI_OVERSOLD:
-            long_p += 10; lr.append(f"RSI {rsi_val:.0f} OS")
-        elif rsi_val >= config.RSI_OVERBOUGHT:
-            short_p += 10; sr.append(f"RSI {rsi_val:.0f} OB")
-        elif rsi_val < 48 and rsi_val >= rsi_prev:
-            long_p += 6; lr.append("RSI rising")
-        elif rsi_val > 52 and rsi_val <= rsi_prev:
-            short_p += 6; sr.append("RSI falling")
-        else:
-            long_p += 3 if rsi_val < 50 else 0
-            short_p += 3 if rsi_val >= 50 else 0
+        # Do not fade a strong move just because RSI is stretched: require a confirmed turn.
+        if rsi_prev <= config.RSI_OVERSOLD and rsi_val > rsi_prev and rsi_val > config.RSI_OVERSOLD:
+            long_p += 8; lr.append(f"RSI rebound {rsi_val:.0f}")
+        elif rsi_prev >= config.RSI_OVERBOUGHT and rsi_val < rsi_prev and rsi_val < config.RSI_OVERBOUGHT:
+            short_p += 8; sr.append(f"RSI rollover {rsi_val:.0f}")
+        elif rsi_val >= 52 and rsi_val > rsi_prev:
+            long_p += 5; lr.append("RSI momentum↑")
+        elif rsi_val <= 48 and rsi_val < rsi_prev:
+            short_p += 5; sr.append("RSI momentum↓")
         if self._safe(r, "ema9") > self._safe(r, "ema21"):
             long_p += 7; lr.append("1H EMA↑")
         else:
@@ -128,13 +132,19 @@ class SignalEngine:
                 long_p += 5; lr.append("Vol+")
             else:
                 short_p += 5; sr.append("Vol+")
+        vwap = self._safe(r, "vwap")
+        close = self._safe(r, "close")
+        if vwap > 0 and close > vwap:
+            long_p += 3; lr.append("1H above VWAP")
+        elif vwap > 0 and close < vwap:
+            short_p += 3; sr.append("1H below VWAP")
         return long_p, short_p, lr, sr, rsi_val
 
     def _score_15m(self, df):
         long_p = short_p = 0
         lr, sr = [], []
         atr = entry = None
-        if df is None or len(df) < 40:
+        if df is None or len(df) < 50:
             return 0, 0, lr, sr, atr, entry
         df = add_indicators(df)
         r, prev = get_latest(df), get_prev(df, 1)
@@ -161,10 +171,25 @@ class SignalEngine:
         elif sk > 75:
             short_p += 4
         c, bl, bu = self._safe(r, "close"), self._safe(r, "bb_lower"), self._safe(r, "bb_upper")
-        if bl > 0 and c <= bl * 1.01:
-            long_p += 6; lr.append("BB low")
-        elif bu > 0 and c >= bu * 0.99:
-            short_p += 6; sr.append("BB high")
+        prev_close = self._safe(prev, "close")
+        prev_lower, prev_upper = self._safe(prev, "bb_lower"), self._safe(prev, "bb_upper")
+        # Band touches alone are not reversals; require re-entry into the band.
+        if prev_lower > 0 and prev_close < prev_lower and c > bl:
+            long_p += 5; lr.append("BB reclaim")
+        elif prev_upper > 0 and prev_close > prev_upper and c < bu:
+            short_p += 5; sr.append("BB rejection")
+        vwap = self._safe(r, "vwap")
+        if vwap > 0:
+            if c > vwap:
+                long_p += 3; lr.append("Above VWAP")
+            elif c < vwap:
+                short_p += 3; sr.append("Below VWAP")
+        poc = self._safe(r, "volume_poc")
+        if poc > 0:
+            if c > poc:
+                long_p += 2; lr.append("Above Volume POC")
+            elif c < poc:
+                short_p += 2; sr.append("Below Volume POC")
         if self._safe(r, "ema9") > self._safe(r, "ema21"):
             long_p += 4
         else:
