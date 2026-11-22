@@ -295,6 +295,33 @@ class BinanceClient:
             print(f"mark price {symbol}: {e}")
             return None
 
+    def get_derivatives_context(self, symbol: str) -> Dict[str, Optional[float]]:
+        """Fetch optional public Futures funding and open-interest context."""
+        result: Dict[str, Optional[float]] = {"funding_rate": None, "open_interest": None}
+        if self.rate_limited:
+            return result
+        market_symbol = self._ccxt_symbol(symbol)
+        try:
+            if self.exchange.has.get("fetchFundingRate"):
+                funding = self.exchange.fetch_funding_rate(market_symbol) or {}
+                value = funding.get("fundingRate")
+                if value is not None:
+                    result["funding_rate"] = float(value)
+        except Exception as e:
+            self._mark_rate_limit(e)
+            print(f"funding {symbol}: {e}")
+        try:
+            if not self.rate_limited and self.exchange.has.get("fetchOpenInterest"):
+                oi = self.exchange.fetch_open_interest(market_symbol) or {}
+                info = oi.get("info") or {}
+                value = oi.get("openInterestAmount") or oi.get("openInterest") or info.get("openInterest")
+                if value is not None:
+                    result["open_interest"] = float(value)
+        except Exception as e:
+            self._mark_rate_limit(e)
+            print(f"open interest {symbol}: {e}")
+        return result
+
     def get_market_liquidity(self, symbol: str) -> str:
         """Classify liquidity from the contract's current 24h USDT quote turnover."""
         try:
