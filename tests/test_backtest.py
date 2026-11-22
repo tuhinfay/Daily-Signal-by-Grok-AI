@@ -17,7 +17,7 @@ class BacktestSimulationTests(unittest.TestCase):
             {"high": 102.5, "low": 100.5, "close": 102.0},
             {"high": 104.5, "low": 101.5, "close": 104.0},
         ])
-        result = simulate_trade("LONG", 100.0, 99.0, 102.0, 104.0, future)
+        result = simulate_trade("LONG", 100.0, 99.0, 102.0, 104.0, future, fee_rate=0, slippage_rate=0)
         self.assertEqual(result["exit"], "TP2")
         self.assertEqual(result["r"], 3.0)
 
@@ -26,13 +26,13 @@ class BacktestSimulationTests(unittest.TestCase):
             {"high": 99.5, "low": 97.5, "close": 98.0},
             {"high": 101.0, "low": 97.0, "close": 100.0},
         ])
-        result = simulate_trade("SHORT", 100.0, 101.0, 98.0, 96.0, future)
+        result = simulate_trade("SHORT", 100.0, 101.0, 98.0, 96.0, future, fee_rate=0, slippage_rate=0)
         self.assertEqual(result["exit"], "SL_AFTER_TP1")
         self.assertEqual(result["r"], 0.5)
 
     def test_invalid_risk_geometry_is_rejected(self):
         future = pd.DataFrame([{"high": 102.0, "low": 99.0, "close": 100.0}])
-        self.assertIsNone(simulate_trade("LONG", 100.0, 101.0, 102.0, 104.0, future))
+        self.assertIsNone(simulate_trade("LONG", 100.0, 101.0, 102.0, 104.0, future, fee_rate=0, slippage_rate=0))
 
 
 if __name__ == "__main__":
