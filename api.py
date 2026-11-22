@@ -128,8 +128,9 @@ class DcaBody(BaseModel):
     price: Optional[float] = None
 
 
-class AccountReset(BaseModel):
-    balance: float = 10000
+class FundsAdjustment(BaseModel):
+    action: str
+    amount: float
 
 
 def _persist():
@@ -534,6 +535,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
             t["realized_pnl"] = round(float(t.get("realized_pnl") or 0) + pnl, 4)
             t.update({
                 "status": "CLOSED", "hit": trigger, "unrealized_pnl": 0.0,
+                "close_price": float(t.get("current_price") or t.get("entry") or 0),
                 "needs_alert": True, "closed_at": datetime.now(timezone.utc).isoformat(),
             })
         else:
@@ -790,16 +792,26 @@ async def api_account():
     return {**_account, "open_trades": sum(1 for t in _trades.values() if t["status"] == "OPEN"), "stats": _stats()}
 
 
-@app.post("/api/account/reset")
-async def reset_account(body: AccountReset):
-    for t in list(_trades.values()):
-        if t.get("status") == "OPEN":
-            t["status"] = "CLOSED"; t["hit"] = "RESET"; t["needs_alert"] = False
-            db.save_trade(t)
-    _account.update({"balance": float(body.balance), "equity": float(body.balance),
-                     "realized_pnl": 0.0, "start_balance": float(body.balance)})
+@app.post("/api/account/funds")
+async def adjust_account_funds(body: FundsAdjustment):
+    action = str(body.action or "").strip().lower()
+    amount = float(body.amount or 0)
+    if action not in ("add", "remove"):
+        return JSONResponse({"ok": False, "error": "Choose Add or Remove funds"}, status_code=400)
+    if not (amount > 0 and amount < float("inf")):
+        return JSONResponse({"ok": False, "error": "Enter a valid amount greater than zero"}, status_code=400)
+    delta = amount if action == "add" else -amount
+    if _account["balance"] + delta < 0:
+        return JSONResponse({"ok": False, "error": "Insufficient account balance to remove that amount"}, status_code=400)
+    _account["balance"] = round(float(_account["balance"]) + delta, 2)
+    _account["start_balance"] = round(float(_account.get("start_balance") or 0) + delta, 2)
+    _calc_equity()
+    for position in _trades.values():
+        if position.get("status") == "OPEN":
+            _update_trade_liquidation_fields(position)
+            db.save_trade(position)
     db.save_account(_account)
-    return {"ok": True, "account": _account}
+    return {"ok": True, "action": action, "amount": amount, "account": _account}
 
 
 @app.get("/api/position-mode")
@@ -1195,6 +1207,7 @@ async def close_trade(tid: str):
     total_realized = round(float(t.get("realized_pnl") or 0) + pnl, 2)
     t.update({"status": "CLOSED", "needs_alert": False,
               "closed_at": datetime.now(timezone.utc).isoformat(),
+              "close_price": float(t.get("current_price") or t.get("entry") or 0),
               "hit": t.get("hit") or "MANUAL", "realized_pnl": total_realized, "unrealized_pnl": 0.0})
     for position in _trades.values():
         if position.get("status") == "OPEN": _update_trade_liquidation_fields(position)
@@ -1304,7 +1317,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .modal .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .modal .btns{display:flex;gap:8px;margin-top:12px}
 .modal .btns .btn{flex:1;padding:12px}
- .hint{font-size:11px;color:var(--mut);margin-top:4px}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
+ .hint{font-size:11px;color:var(--mut);margin-top:4px}.fund-tools{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.fund-tools label{display:block;color:var(--mut);font-size:11px;margin-bottom:6px}.fund-tools input{width:100%;padding:11px;border-radius:9px;background:#080e1a;border:1px solid var(--line);color:var(--text);font-size:14px}.fund-tools .actions{margin-top:8px}.share-bg{display:none;position:fixed;inset:0;background:#000b;z-index:120;align-items:center;justify-content:center;padding:14px}.share-modal{width:min(100%,480px);max-height:94vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.share-modal h3{font-size:15px;margin-bottom:10px}.share-preview{background:#070b14;border-radius:12px;padding:8px;text-align:center}.share-preview canvas{display:block;width:100%;height:auto;border-radius:8px}.share-modal .actions{display:flex;gap:7px;margin-top:10px}.share-modal .btn{flex:1}.history-trade{padding:12px 0;border-bottom:1px solid var(--line)}.history-trade:last-child{border-bottom:0}.history-trade .vals{margin-top:8px}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
 .sec{padding:10px 12px 4px;font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
 .mv{display:flex;gap:8px;overflow-x:auto;padding:0 12px 10px}
 .mv .i{min-width:108px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -1368,14 +1381,17 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><em>Equity</em><strong id="aEq">—</strong></div>
       <div><em>Realized</em><strong id="aReal">—</strong></div>
     </div>
-    <div class="actions">
-      <button class="btn dim" onclick="resetAcc(10000)">Reset 10k</button>
-      <button class="btn dim" onclick="resetAcc(100000)">Reset 100k</button>
+    <div class="fund-tools">
+      <label for="fundAmount">Manual USDT balance adjustment</label>
+      <input id="fundAmount" type="number" min="0.01" step="any" placeholder="Enter any USDT amount">
+      <div class="actions"><button class="btn good" onclick="adjustFunds('add')">＋ Add Funds</button><button class="btn bad" onclick="adjustFunds('remove')">− Remove Funds</button></div>
+      <p class="hint">Paper account only · No reset option</p>
     </div>
   </div>
 </section>
 
 <div id="toast"></div>
+<div class="share-bg" id="shareBg" onclick="if(event.target===this)closeShare()"><div class="share-modal"><h3>Share Trade</h3><div class="share-preview"><canvas id="shareCanvas" width="900" height="1080"></canvas></div><div class="actions"><button class="btn dim" onclick="closeShare()">Close</button><button class="btn good" onclick="saveShareCard()">Save Image</button><button class="btn good" onclick="shareTradeImage()">Share</button><button class="btn dim" onclick="shareTradeWhatsApp()">WhatsApp</button></div><p class="hint">Share opens your device's share menu; choose WhatsApp or any supported app.</p></div></div>
 <div class="modal-bg" id="modalBg">
   <div class="modal">
     <h3 id="mTitle">Open Trade</h3>
@@ -1625,6 +1641,7 @@ async function loadTrades(){
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
   if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') · Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtPrice(t.limit_price)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
+  window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
   if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
@@ -1652,15 +1669,48 @@ async function loadTrades(){
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
         <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
         <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
+        <button class="btn dim" onclick="shareTrade('${t.id}')">Share</button>
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
       <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice(-12).reverse().map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · ${t.hit||'CLOSED'}</span>
-    <span style="color:${(t.realized_pnl||0)>=0?'var(--gn)':'var(--rd)'}">${(t.realized_pnl||0)>=0?'+':''}$${fmt(t.realized_pnl||0)}</span></div>`).join('');h+='</div>';}
+  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
+    const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
+    const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
+    return '<div class="history-trade"><div class="head"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> <b>'+t.symbol+'</b> · '+(t.hit||'CLOSED')+'</span><b style="color:'+(pnl>=0?'var(--gn)':'var(--rd)')+'">'+(pnl>=0?'+':'')+'$'+fmt(pnl)+'</b></div><div class="vals"><div><em>Entry Price</em><strong>'+fmtPrice(t.entry)+'</strong></div><div><em>Close Price</em><strong>'+(exit?fmtPrice(exit):'—')+'</strong></div><div><em>Quantity</em><strong>'+fmt(t.qty)+'</strong></div><div><em>Closed</em><strong>'+closedAt+'</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade(\''+t.id+'\')">Share Trade</button></div></div>';
+  }).join('');h+='</div>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
   }catch(e){console.error('loadTrades',e);}finally{window._loadingTrades=false;}
 }
+
+function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id)];if(!t){toast('Trade details unavailable');return;}window._sharingTrade=t;shareBg.style.display='flex';drawShareCard(t);}
+function closeShare(){shareBg.style.display='none';}
+function drawShareCard(t){
+ const c=shareCanvas,ctx=c.getContext('2d'),w=c.width,h=c.height;
+ const pnl=Number(t.realized_pnl!==undefined?t.realized_pnl:t.unrealized_pnl)||0,closed=t.status==='CLOSED',exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);
+ const positive=pnl>=0,green='#16c784',red='#f6465d';
+ const bg=ctx.createLinearGradient(0,0,w,h);bg.addColorStop(0,'#101b2d');bg.addColorStop(1,'#070b14');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+ function rr(x,y,ww,hh,r,fill,stroke){ctx.beginPath();ctx.roundRect(x,y,ww,hh,r);ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}}
+ function txt(value,x,y,size,color,weight){ctx.fillStyle=color;ctx.font=(weight||'500')+' '+size+'px Inter,Arial,sans-serif';ctx.fillText(String(value),x,y);}
+ rr(42,42,w-84,h-84,28,'#0b1322','#23334d');
+ txt('DAILY SIGNAL',82,112,28,'#22d3ee','800');txt('TRADE RECEIPT',82,154,17,'#8798b5','700');
+ rr(82,192,w-164,132,20,'#101d31');txt(t.symbol||'—',112,250,42,'#f2f6ff','800');
+ const side=String(t.side||'').toUpperCase();rr(112,270,side==='LONG'?130:140,34,10,side==='LONG'?'#123b35':'#421c2b');txt(side,132,295,19,side==='LONG'?'#16c784':'#f6465d','800');
+ const status=closed?'CLOSED':'RUNNING';txt(status,w-245,295,17,closed?'#a8b4c8':'#22d3ee','800');
+ txt(closed?'REALIZED PNL':'UNREALIZED PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
+ const rows=[['ENTRY PRICE',fmtPrice(t.entry)],[closed?'CLOSE PRICE':'MARK PRICE',fmtPrice(exit)],['POSITION SIZE','$'+fmt(t.notional||exit*(Number(t.qty)||0))],['QUANTITY',fmt(t.qty)],['LEVERAGE',(t.leverage||1)+'x'],['MARGIN','$'+fmt(t.margin)]];
+ for(let i=0;i<rows.length;i++){const col=i%2,row=Math.floor(i/2),x=112+col*340,yy=565+row*112;txt(rows[i][0],x,yy,15,'#8191ad','700');txt(rows[i][1],x,yy+42,24,'#edf3ff','700');}
+ const stamp=closed?(t.closed_at?new Date(t.closed_at).toLocaleString():''):(t.created_at?new Date(t.created_at).toLocaleString():'');
+ ctx.strokeStyle='#25334a';ctx.beginPath();ctx.moveTo(112,925);ctx.lineTo(w-112,925);ctx.stroke();
+ txt((t.hit||status)+'  ·  '+(t.margin_mode||'CROSS'),112,975,18,'#b6c4dc','600');txt(stamp||'Paper Trading',112,1018,15,'#8191ad');txt('SIMULATED PAPER TRADE · NOT AN EXCHANGE EXECUTION',112,1050,12,'#5d6e8c','600');
+}
+function shareFileName(){const t=window._sharingTrade||{};return (t.symbol||'trade')+'-'+(t.status||'trade').toLowerCase()+'.png';}
+function shareSummary(){const t=window._sharingTrade||{},closed=t.status==='CLOSED',pnl=Number(t.realized_pnl!==undefined?t.realized_pnl:t.unrealized_pnl)||0,exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);return (t.symbol||'Trade')+' '+(t.side||'')+' · '+(closed?'Closed':'Running')+' · Entry '+fmtPrice(t.entry)+' · '+(closed?'Close ':'Mark ')+fmtPrice(exit)+' · PnL '+(pnl>=0?'+':'-')+'$'+fmt(Math.abs(pnl))+' · Paper trade';}
+function shareCardBlob(){return new Promise(resolve=>shareCanvas.toBlob(resolve,'image/png'));}
+async function saveShareCard(){const blob=await shareCardBlob();if(!blob){toast('Could not create image');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=shareFileName();a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
+async function shareTradeImage(){const blob=await shareCardBlob();if(!blob){toast('Could not create image');return;}const file=new File([blob],shareFileName(),{type:'image/png'});if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'Trade Card',text:shareSummary()});}catch(e){if(e.name!=='AbortError')toast('Share failed: '+e.message);}}else{await saveShareCard();if(navigator.share){try{await navigator.share({title:'Trade Card',text:shareSummary()});}catch(e){}}else if(navigator.clipboard){await navigator.clipboard.writeText(shareSummary());toast('Image saved; trade summary copied');}}}
+async function shareTradeWhatsApp(){const blob=await shareCardBlob();if(blob){const file=new File([blob],shareFileName(),{type:'image/png'});if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'Trade Card',text:shareSummary()});return;}catch(e){if(e.name==='AbortError')return;}}}window.open('https://wa.me/?text='+encodeURIComponent(shareSummary()),'_blank','noopener');}
+
 async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
 function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
@@ -1670,7 +1720,7 @@ async function editLevels(id,sl,tp1,tp2){manageTradeId.value=id;manageTitle.text
 async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
 function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
-async function resetAcc(bal){if(!confirm('Reset to $'+bal+'?'))return;const d0=await(await fetch('/api/trades')).json();for(const t of(d0.trades||[]).filter(x=>x.status==='OPEN'))await fetch('/api/trades/'+t.id+'/close',{method:'POST'});const d=await(await fetch('/api/account/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({balance:bal})})).json();if(d.ok){setAcc(d.account);toast('Reset');}}
+async function adjustFunds(action){const input=document.getElementById('fundAmount'),amount=Number(input.value);if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}const label=action==='add'?'Add':'Remove';if(!confirm(label+' $'+fmt(amount)+' USDT '+(action==='add'?'to':'from')+' paper account?'))return;try{const r=await fetch('/api/account/funds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,amount})}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Balance adjustment failed');return;}setAcc(d.account);const account=await(await fetch('/api/account')).json();renderStats(account.stats,accStats);input.value='';toast(label+'ed $'+fmt(amount)+' USDT');loadTrades();}catch(e){toast('Balance adjustment failed: '+(e.message||'network error'));}}
 async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
 loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
