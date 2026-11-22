@@ -346,8 +346,8 @@ class BinanceClient:
         try:
             book = self.exchange.fetch_order_book(self._ccxt_symbol(symbol), limit=limit) or {}
             bids, asks = book.get("bids") or [], book.get("asks") or []
-            bid_qty = sum(float(level[1]) for level in bids if len(level) >= 2 and float(level[1]) > 0)
-            ask_qty = sum(float(level[1]) for level in asks if len(level) >= 2 and float(level[1]) > 0)
+            bid_qty = sum(float(level[0]) * float(level[1]) for level in bids if len(level) >= 2 and float(level[0]) > 0 and float(level[1]) > 0)
+            ask_qty = sum(float(level[0]) * float(level[1]) for level in asks if len(level) >= 2 and float(level[0]) > 0 and float(level[1]) > 0)
             total = bid_qty + ask_qty
             if total > 0:
                 result["book_imbalance_pct"] = (bid_qty - ask_qty) / total * 100.0
