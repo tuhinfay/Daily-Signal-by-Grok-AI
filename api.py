@@ -43,6 +43,16 @@ _price_monitor_status: Dict[str, Any] = {
 }
 _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
+_scan_max_leverage: Dict[str, Optional[int]] = {}
+
+def _symbol_leverage_cap(symbol: str) -> int:
+    """Use a verified symbol tier, otherwise keep the conservative 20x cap."""
+    value = _scan_max_leverage.get(str(symbol).upper().replace("/", "").split(":")[0])
+    try:
+        return max(1, min(int(value), 150)) if value is not None else 20
+    except (TypeError, ValueError):
+        return 20
+
 
 
 def _pause_scans_for_rate_limit(client):
@@ -241,6 +251,7 @@ def run_scan(top_n: int = 12):
             try:
                 px = client.get_current_price(symbol)
                 max_leverage = client.get_max_leverage(symbol)
+                _scan_max_leverage[symbol] = max_leverage
                 if px:
                     prices[symbol] = px
                 for style_name in ("scalp", "day", "swing"):
@@ -701,6 +712,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     r = engine.analyze_pair(sym, data, volume_24h=0, style=selected_style)
     px = client.get_current_price(sym)
     lev = client.get_max_leverage(sym)
+    _scan_max_leverage[sym] = lev
     liq = client.get_market_liquidity(sym)
     if not r:
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
@@ -789,7 +801,11 @@ async def api_trade_preview(body: TradeCreate):
     if entry <= 0:
         return {"ok": False, "error": "Live price unavailable"}
     # Preview must be local and fast; verified leverage metadata is optional here.
-    lev = max(1, min(int(body.leverage or 20), 20, 150))
+    leverage_cap = _symbol_leverage_cap(sym)
+    requested_leverage = int(body.leverage or 20)
+    if requested_leverage > leverage_cap:
+        return {"ok": False, "error": f"{sym} leverage is capped at {leverage_cap}x by available Binance tier data."}
+    lev = max(1, min(requested_leverage, leverage_cap, 150))
     sl_dist = abs(entry - float(body.stop_loss or 0))
     if body.quantity and body.quantity > 0:
         qty = float(body.quantity)
@@ -857,9 +873,12 @@ def create_trade(body: TradeCreate):
     if entry_price <= 0: return JSONResponse({"ok": False, "error": "invalid entry price"}, status_code=400)
     # No Binance client/network I/O in the order-submit path.
     # The modal/scanner refreshes market prices in the background.
-    max_lev = None
-    leverage_cap = 20
-    lev = max(1, min(int(body.leverage or leverage_cap), leverage_cap, 150))
+    max_lev = _scan_max_leverage.get(sym)
+    leverage_cap = max(1, min(int(max_lev), 150)) if max_lev is not None else 20
+    requested_leverage = int(body.leverage or min(20, leverage_cap))
+    if requested_leverage > leverage_cap:
+        return JSONResponse({"ok": False, "error": f"{sym} leverage is capped at {leverage_cap}x. Exact higher tiers are unavailable; refresh symbol analysis first."}, status_code=400)
+    lev = max(1, min(requested_leverage, leverage_cap, 150))
     margin_mode = (body.margin_mode or "CROSS").upper()
     if margin_mode not in ("CROSS", "ISOLATED"):
         margin_mode = "CROSS"
