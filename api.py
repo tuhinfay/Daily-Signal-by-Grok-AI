@@ -1537,7 +1537,7 @@ function cardHTML(s){
   const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x sim max':'150x sim max*'}</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span></div>
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
@@ -1591,7 +1591,7 @@ function openModal(s){
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
   m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';
-  const ml=s.max_leverage||20; m_lev.value=Math.min(20,ml); m_lev.max=ml; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
+  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
 function closeModal(){modalBg.style.display='none';}
@@ -1674,7 +1674,7 @@ async function loadTrades(){
   if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
     const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
-    return '<div class="history-trade"><div class="head"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> <b>'+t.symbol+'</b> · '+(t.hit||'CLOSED')+'</span><b style="color:'+(pnl>=0?'var(--gn)':'var(--rd)')+'">'+(pnl>=0?'+':'')+'$'+fmt(pnl)+'</b></div><div class="vals"><div><em>Entry Price</em><strong>'+fmtPrice(t.entry)+'</strong></div><div><em>Close Price</em><strong>'+(exit?fmtPrice(exit):'—')+'</strong></div><div><em>Quantity</em><strong>'+fmt(t.qty)+'</strong></div><div><em>Closed</em><strong>'+closedAt+'</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade(\''+t.id+'\')">Share Trade</button></div></div>';
+    return '<div class="history-trade"><div class="head"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> <b>'+t.symbol+'</b> · '+(t.hit||'CLOSED')+'</span><b style="color:'+(pnl>=0?'var(--gn)':'var(--rd)')+'">'+(pnl>=0?'+':'')+'$'+fmt(pnl)+'</b></div><div class="vals"><div><em>Entry Price</em><strong>'+fmtPrice(t.entry)+'</strong></div><div><em>Close Price</em><strong>'+(exit?fmtPrice(exit):'—')+'</strong></div><div><em>Quantity</em><strong>'+fmt(t.qty)+'</strong></div><div><em>Opened</em><strong>'+(t.created_at?new Date(t.created_at).toLocaleString():'—')+'</strong></div><div><em>Closed</em><strong>'+closedAt+'</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade(\''+t.id+'\')">Share Trade</button></div></div>';
   }).join('');h+='</div>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
@@ -1685,7 +1685,7 @@ function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id
 function closeShare(){shareBg.style.display='none';}
 function drawShareCard(t){
  const c=shareCanvas,ctx=c.getContext('2d'),w=c.width,h=c.height;
- const pnl=closed?(Number(t.realized_pnl)||0):((Number(t.realized_pnl)||0)+(Number(t.unrealized_pnl)||0)),closed=t.status==='CLOSED',exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);
+ const closed=t.status==='CLOSED',pnl=closed?(Number(t.realized_pnl)||0):((Number(t.realized_pnl)||0)+(Number(t.unrealized_pnl)||0)),exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);
  const positive=pnl>=0,green='#16c784',red='#f6465d';
  const bg=ctx.createLinearGradient(0,0,w,h);bg.addColorStop(0,'#101b2d');bg.addColorStop(1,'#070b14');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
  function rr(x,y,ww,hh,r,fill,stroke){ctx.beginPath();ctx.roundRect(x,y,ww,hh,r);ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}}
@@ -1698,7 +1698,7 @@ function drawShareCard(t){
  txt(closed?'REALIZED PNL':'TOTAL PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
  const rows=[['ENTRY PRICE',fmtPrice(t.entry)],[closed?'CLOSE PRICE':'MARK PRICE',fmtPrice(exit)],['POSITION SIZE','$'+fmt(t.notional||exit*(Number(t.qty)||0))],['QUANTITY',fmt(t.qty)],['LEVERAGE',(t.leverage||1)+'x'],['MARGIN','$'+fmt(t.margin)]];
  for(let i=0;i<rows.length;i++){const col=i%2,row=Math.floor(i/2),x=112+col*340,yy=565+row*112;txt(rows[i][0],x,yy,15,'#8191ad','700');txt(rows[i][1],x,yy+42,24,'#edf3ff','700');}
- const stamp=closed?(t.closed_at?new Date(t.closed_at).toLocaleString():''):(t.created_at?new Date(t.created_at).toLocaleString():'');
+ const openedStamp=t.created_at?new Date(t.created_at).toLocaleString():'—'; const closedStamp=t.closed_at?new Date(t.closed_at).toLocaleString():'—'; const stamp=closed?('Opened '+openedStamp+' · Closed '+closedStamp):('Opened '+openedStamp);
  ctx.strokeStyle='#25334a';ctx.beginPath();ctx.moveTo(112,925);ctx.lineTo(w-112,925);ctx.stroke();
  txt((t.hit||status)+'  ·  '+(t.margin_mode||'CROSS'),112,975,18,'#b6c4dc','600');txt(stamp||'Paper Trading',112,1018,15,'#8191ad');txt('SIMULATED PAPER TRADE · NOT AN EXCHANGE EXECUTION',112,1050,12,'#5d6e8c','600');
 }
@@ -1707,7 +1707,7 @@ function shareSummary(){const t=window._sharingTrade||{},closed=t.status==='CLOS
 function shareCardBlob(){return new Promise(resolve=>shareCanvas.toBlob(resolve,'image/png'));}
 async function saveShareCard(){const blob=await shareCardBlob();if(!blob){toast('Could not create image');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=shareFileName();a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
 async function shareTradeImage(){const blob=await shareCardBlob();if(!blob){toast('Could not create image');return;}const file=new File([blob],shareFileName(),{type:'image/png'});if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'Trade Card',text:shareSummary()});}catch(e){if(e.name!=='AbortError')toast('Share failed: '+e.message);}}else{await saveShareCard();if(navigator.share){try{await navigator.share({title:'Trade Card',text:shareSummary()});}catch(e){}}else if(navigator.clipboard){await navigator.clipboard.writeText(shareSummary());toast('Image saved; trade summary copied');}}}
-async function shareTradeWhatsApp(){const blob=await shareCardBlob();if(blob){const file=new File([blob],shareFileName(),{type:'image/png'});if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'Trade Card',text:shareSummary()});return;}catch(e){if(e.name==='AbortError')return;}}}window.open('https://wa.me/?text='+encodeURIComponent(shareSummary()),'_blank','noopener');}
+async function shareTradeWhatsApp(){await shareTradeImage();}
 
 async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
