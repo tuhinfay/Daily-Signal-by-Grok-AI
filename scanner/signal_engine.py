@@ -288,7 +288,7 @@ class SignalEngine:
             f"{side} {symbol} | Setup: {setup} | Quality {quality}\n"
             f"Entry ≈ {levels['entry']} | SL {levels['stop_loss']} ({levels['risk_pct']}%) | "
             f"TP1 {levels['tp1']} ({levels['tp1_pct']}%) | TP2 {levels['tp2']} ({levels['tp2_pct']}%)\n"
-            f"R:R 1:{levels['rr1']} | Risk only 0.5–1% account | Prefer partial TP1, trail rest"
+            f"R:R TP1 1:{levels['rr1']} · TP2 1:{levels['rr2']} | Risk only 0.5–1% account | Partial TP1, trail rest"
         )
 
         return {
@@ -306,6 +306,9 @@ class SignalEngine:
             "tp1_pct": levels["tp1_pct"],
             "tp2_pct": levels["tp2_pct"],
             "rr": levels["rr1"],
+            "rr_tp2": levels["rr2"],
+            "sl_basis": levels.get("sl_basis", "ATR"),
+            "tp_basis": levels.get("tp_basis", "ATR"),
             "reasons": reasons[:6],
             "atr": round(float(atr), 6),
             "rsi": round(float(rsi_val), 1),
