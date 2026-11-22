@@ -1449,7 +1449,7 @@ function updateOrderPreview(){
  else if(mode==='qty')notional=(+m_qty.value||0)*px;
  else if(mode==='risk'){const bal=+(sBal.textContent||'').replace(/[^0-9.]/g,'')||10000;const risk=(+m_risk.value||1)/100*bal,dist=Math.abs(px-(+m_sl.value||px));notional=dist>0?risk/dist*px:0;}
  const qty=px>0?notional/px:0,margin=lev>0?notional/lev:0;
- order_preview.textContent='Value  const n=parseInt(m_scale_n.value||'',10),sm=m_scale.value,sp=document.getElementById('scale_preview');
+ order_preview.textContent='Value $'+fmt(notional)+' · Margin $'+fmt(margin)+' · Qty '+qty.toFixed(6);
  if(sm&&Number.isInteger(n)&&n>=2&&n<=50&&notional>0&&px>0){
    const market=+(m_mkt.value||0),rows=[];let totalQty=0;
    if(actualOrderType()!=='LIMIT'){
