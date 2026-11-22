@@ -57,8 +57,8 @@ def simulate_trade(side: str, fill: float, stop: float, tp1: float, tp2: float,
         raise ValueError("fee_rate and slippage_rate must be non-negative")
     exit_cost_rate = fee_rate + slippage_rate
     partial = False
-    # Entry fee and adverse entry slippage are charged once on the full position.
-    realized_r = -(fill * exit_cost_rate) / risk
+    # Entry slippage is reflected in the slipped fill price; charge the entry fee once.
+    realized_r = -(fill * fee_rate) / risk
     rows = future.iloc[:max_bars]
     for offset, (_, candle) in enumerate(rows.iterrows(), start=1):
         high, low = float(candle["high"]), float(candle["low"])
