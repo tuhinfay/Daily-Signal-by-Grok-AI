@@ -11,6 +11,7 @@ import uvicorn, os, json, traceback, uuid, threading, time as time_mod
 
 from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
+from scanner.indicators import add_indicators, get_latest
 from scanner import db
 import config
 
@@ -53,6 +54,28 @@ def _symbol_leverage_cap(symbol: str) -> int:
     except (TypeError, ValueError):
         return 20
 
+
+
+def _classify_btc_regime(df):
+    """Classify broad BTC 4h conditions from completed candles only."""
+    if df is None or len(df) < 55:
+        return "UNKNOWN"
+    try:
+        enriched = add_indicators(df.iloc[:-1].copy())
+        row = get_latest(enriched)
+        close = float(row.get("close") or 0)
+        ema50 = float(row.get("ema50") or 0)
+        ema200 = float(row.get("ema200") or 0)
+        adx = float(row.get("adx") or 0)
+        if not all(map(lambda x: x == x and abs(x) != float("inf"), (close, ema50, ema200, adx))):
+            return "UNKNOWN"
+        if close > ema50 and ema50 > ema200 and adx >= 18:
+            return "BULL"
+        if close < ema50 and ema50 < ema200 and adx >= 18:
+            return "BEAR"
+        return "RANGE"
+    except (TypeError, ValueError, KeyError):
+        return "UNKNOWN"
 
 
 def _pause_scans_for_rate_limit(client):
@@ -231,6 +254,8 @@ def run_scan(top_n: int = 12):
         signals, prices = [], {}
         # BTC 24h relative-strength baseline is fetched once per scan.
         btc_df = client.fetch_ohlcv("BTCUSDT", timeframe="1h", limit=25)
+        btc_regime_df = client.fetch_ohlcv("BTCUSDT", timeframe="4h", limit=220)
+        btc_regime = _classify_btc_regime(btc_regime_df)
         btc_return = None
         if btc_df is not None and len(btc_df) >= 25 and float(btc_df["close"].iloc[-25]) > 0:
             btc_return = (float(btc_df["close"].iloc[-1]) / float(btc_df["close"].iloc[-25]) - 1.0) * 100.0
@@ -268,6 +293,7 @@ def run_scan(top_n: int = 12):
                         if base_close > 0:
                             coin_return = (float(coin_df["close"].iloc[-1]) / base_close - 1.0) * 100.0
                             relative_strength = coin_return - btc_return
+                            r["coin_return_24h_pct"] = round(coin_return, 2)
                             r["btc_relative_strength_pct"] = round(relative_strength, 2)
                             if r["side"] == "LONG" and relative_strength < -1.5:
                                 r["score"] = max(0, int(r["score"]) - 5)
@@ -290,22 +316,51 @@ def run_scan(top_n: int = 12):
         checked_derivatives = set()
         for candidate in sorted(signals, key=lambda x: x["score"], reverse=True):
             sym = candidate["symbol"]
-            if sym in checked_derivatives or len(checked_derivatives) >= 6 or client.rate_limited:
+            if sym in checked_derivatives or len(checked_derivatives) >= 4 or client.rate_limited:
                 continue
             checked_derivatives.add(sym)
             context = client.get_derivatives_context(sym)
+            book = client.get_order_book_context(sym) if not client.rate_limited else {}
             funding = context.get("funding_rate")
+            oi_change = context.get("oi_change_pct")
+            imbalance = book.get("book_imbalance_pct")
+            spread = book.get("spread_pct")
             for item in signals:
                 if item["symbol"] != sym:
                     continue
                 item["funding_rate"] = funding
                 item["open_interest"] = context.get("open_interest")
+                item["oi_change_1h_pct"] = round(oi_change, 2) if oi_change is not None else None
+                item["orderbook_imbalance_pct"] = round(imbalance, 2) if imbalance is not None else None
+                item["spread_pct"] = round(spread, 4) if spread is not None else None
+                item["market_regime"] = btc_regime
+                momentum = float(item.get("coin_return_24h_pct") or 0)
                 if funding is not None and funding >= 0.0005 and item["side"] == "LONG":
                     item["score"] = max(0, int(item["score"]) - 4)
                     item["reasons"].append("Crowded long funding")
                 elif funding is not None and funding <= -0.0005 and item["side"] == "SHORT":
                     item["score"] = max(0, int(item["score"]) - 4)
                     item["reasons"].append("Crowded short funding")
+                if oi_change is not None and oi_change >= 3:
+                    if (item["side"] == "LONG" and momentum > 0) or (item["side"] == "SHORT" and momentum < 0):
+                        item["score"] = min(100, int(item["score"]) + 2)
+                        item["reasons"].append("OI rising with price momentum")
+                    elif (item["side"] == "LONG" and momentum < 0) or (item["side"] == "SHORT" and momentum > 0):
+                        item["score"] = max(0, int(item["score"]) - 2)
+                        item["reasons"].append("OI/price divergence")
+                if imbalance is not None:
+                    if (item["side"] == "LONG" and imbalance <= -25) or (item["side"] == "SHORT" and imbalance >= 25):
+                        item["score"] = max(0, int(item["score"]) - 4)
+                        item["reasons"].append("Order-book pressure against signal")
+                if spread is not None and spread >= 0.10:
+                    item["score"] = max(0, int(item["score"]) - 4)
+                    item["reasons"].append("Wide order-book spread")
+                if (btc_regime == "BULL" and item["side"] == "SHORT") or (btc_regime == "BEAR" and item["side"] == "LONG"):
+                    item["score"] = max(0, int(item["score"]) - 7)
+                    item["reasons"].append(f"Against BTC {btc_regime} regime")
+                elif (btc_regime == "BULL" and item["side"] == "LONG") or (btc_regime == "BEAR" and item["side"] == "SHORT"):
+                    item["score"] = min(100, int(item["score"]) + 2)
+                    item["reasons"].append(f"Aligned BTC {btc_regime} regime")
         if client.rate_limited:
             _cache["error"] = "Binance Futures rate limit active during derivatives checks; remaining checks paused."
             _pause_scans_for_rate_limit(client)
