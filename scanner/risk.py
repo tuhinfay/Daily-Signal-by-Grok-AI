@@ -1,36 +1,76 @@
-"""Risk management - ATR based SL/TP"""
+"""Structure-aware risk management with ATR fallback."""
 
 from typing import Dict, Optional
+import math
+import pandas as pd
 import config
 
 
-def calculate_levels(side: str, entry: float, atr: float, rr_min: float = None) -> Optional[Dict]:
+def calculate_levels(side: str, entry: float, atr: float, rr_min: float = None,
+                     market_data: Optional[pd.DataFrame] = None) -> Optional[Dict]:
     if atr is None or atr <= 0 or entry <= 0:
         return None
+    side = str(side).upper()
+    if side not in ("LONG", "SHORT"):
+        return None
 
-    rr_min = rr_min or config.MIN_RR
+    rr_min = float(rr_min or config.MIN_RR)
+    risk_floor = max(atr * 0.8, entry * 0.0005)
+    risk_cap = atr * 3.0
+    sl_atr = atr * 1.5
+    tp1_atr = atr * 2.0
+    tp2_atr = atr * 3.5
 
-    if side.upper() == "LONG":
-        sl = entry - (atr * config.ATR_SL_MULTIPLIER)
-        tp1 = entry + (atr * config.ATR_TP1_MULTIPLIER)
-        tp2 = entry + (atr * config.ATR_TP2_MULTIPLIER)
+    # Use completed candles only; exclude the currently forming candle.
+    highs, lows = [], []
+    if market_data is not None and len(market_data) >= 22:
+        try:
+            sample = market_data.iloc[-49:-1] if len(market_data) >= 49 else market_data.iloc[:-1]
+            highs = [float(x) for x in sample["high"].dropna().tolist() if math.isfinite(float(x))]
+            lows = [float(x) for x in sample["low"].dropna().tolist() if math.isfinite(float(x))]
+        except (KeyError, TypeError, ValueError):
+            highs, lows = [], []
+
+    if side == "LONG":
+        structure_sl = min(lows[-20:]) - atr * 0.2 if lows else None
+        sl = entry - sl_atr
+        if structure_sl is not None and structure_sl < entry:
+            distance = entry - structure_sl
+            if risk_floor <= distance <= risk_cap:
+                sl = min(sl, structure_sl)
         risk = entry - sl
-        reward1 = tp1 - entry
-        reward2 = tp2 - entry
-    elif side.upper() == "SHORT":
-        sl = entry + (atr * config.ATR_SL_MULTIPLIER)
-        tp1 = entry - (atr * config.ATR_TP1_MULTIPLIER)
-        tp2 = entry - (atr * config.ATR_TP2_MULTIPLIER)
-        risk = sl - entry
-        reward1 = entry - tp1
-        reward2 = entry - tp2
+        if risk <= 0 or risk > risk_cap:
+            sl = entry - sl_atr
+            risk = sl_atr
+
+        resistances = [x for x in highs if x > entry]
+        near_resistance = min(resistances) if resistances else None
+        far_resistance = max(resistances) if resistances else None
+        tp1 = near_resistance if near_resistance and (near_resistance-entry) >= risk*rr_min else entry + tp1_atr
+        tp2 = far_resistance if far_resistance and far_resistance > tp1 + atr*0.25 else entry + max(tp2_atr, risk*2.5)
+        reward1, reward2 = tp1-entry, tp2-entry
     else:
-        return None
+        structure_sl = max(highs[-20:]) + atr * 0.2 if highs else None
+        sl = entry + sl_atr
+        if structure_sl is not None and structure_sl > entry:
+            distance = structure_sl - entry
+            if risk_floor <= distance <= risk_cap:
+                sl = max(sl, structure_sl)
+        risk = sl-entry
+        if risk <= 0 or risk > risk_cap:
+            sl = entry + sl_atr
+            risk = sl_atr
 
-    if risk <= 0:
-        return None
+        supports = [x for x in lows if x < entry]
+        near_support = max(supports) if supports else None
+        far_support = min(supports) if supports else None
+        tp1 = near_support if near_support and (entry-near_support) >= risk*rr_min else entry-tp1_atr
+        tp2 = far_support if far_support and far_support < tp1-atr*0.25 else entry-max(tp2_atr, risk*2.5)
+        reward1, reward2 = entry-tp1, entry-tp2
 
-    rr1 = reward1 / risk
+    if reward1 <= 0 or reward2 <= reward1:
+        return None
+    rr1, rr2 = reward1/risk, reward2/risk
     if rr1 < rr_min:
         return None
 
@@ -42,13 +82,11 @@ def calculate_levels(side: str, entry: float, atr: float, rr_min: float = None) 
         return round(x, 6)
 
     return {
-        "entry": rnd(entry),
-        "stop_loss": rnd(sl),
-        "tp1": rnd(tp1),
-        "tp2": rnd(tp2),
-        "risk_pct": round((risk / entry) * 100, 2),
-        "tp1_pct": round((reward1 / entry) * 100, 2),
-        "tp2_pct": round((reward2 / entry) * 100, 2),
-        "rr1": round(rr1, 2),
-        "rr2": round(reward2 / risk, 2),
+        "entry": rnd(entry), "stop_loss": rnd(sl), "tp1": rnd(tp1), "tp2": rnd(tp2),
+        "risk_pct": round((risk/entry)*100, 2),
+        "tp1_pct": round((reward1/entry)*100, 2),
+        "tp2_pct": round((reward2/entry)*100, 2),
+        "rr1": round(rr1, 2), "rr2": round(rr2, 2),
+        "sl_basis": "SWING+ATR" if structure_sl is not None and sl != (entry-sl_atr if side=="LONG" else entry+sl_atr) else "ATR",
+        "tp_basis": "STRUCTURE" if (near_resistance if side=="LONG" else near_support) == tp1 else "ATR",
     }
