@@ -1718,6 +1718,7 @@ async function loadTrades(){
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
         <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
+        ${t.auto_trade?'<span class="tag" style="background:#164e3b;color:#6ee7b7">BOT</span>':''}
         ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
