@@ -1687,7 +1687,7 @@ function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id
 function closeShare(){shareBg.style.display='none';}
 function drawShareCard(t){
  const c=shareCanvas,ctx=c.getContext('2d'),w=c.width,h=c.height;
- const pnl=Number(t.realized_pnl!==undefined?t.realized_pnl:t.unrealized_pnl)||0,closed=t.status==='CLOSED',exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);
+ const pnl=closed?(Number(t.realized_pnl)||0):((Number(t.realized_pnl)||0)+(Number(t.unrealized_pnl)||0)),closed=t.status==='CLOSED',exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);
  const positive=pnl>=0,green='#16c784',red='#f6465d';
  const bg=ctx.createLinearGradient(0,0,w,h);bg.addColorStop(0,'#101b2d');bg.addColorStop(1,'#070b14');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
  function rr(x,y,ww,hh,r,fill,stroke){ctx.beginPath();ctx.roundRect(x,y,ww,hh,r);ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}}
@@ -1697,7 +1697,7 @@ function drawShareCard(t){
  rr(82,192,w-164,132,20,'#101d31');txt(t.symbol||'—',112,250,42,'#f2f6ff','800');
  const side=String(t.side||'').toUpperCase();rr(112,270,side==='LONG'?130:140,34,10,side==='LONG'?'#123b35':'#421c2b');txt(side,132,295,19,side==='LONG'?'#16c784':'#f6465d','800');
  const status=closed?'CLOSED':'RUNNING';txt(status,w-245,295,17,closed?'#a8b4c8':'#22d3ee','800');
- txt(closed?'REALIZED PNL':'UNREALIZED PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
+ txt(closed?'REALIZED PNL':'TOTAL PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
  const rows=[['ENTRY PRICE',fmtPrice(t.entry)],[closed?'CLOSE PRICE':'MARK PRICE',fmtPrice(exit)],['POSITION SIZE','$'+fmt(t.notional||exit*(Number(t.qty)||0))],['QUANTITY',fmt(t.qty)],['LEVERAGE',(t.leverage||1)+'x'],['MARGIN','$'+fmt(t.margin)]];
  for(let i=0;i<rows.length;i++){const col=i%2,row=Math.floor(i/2),x=112+col*340,yy=565+row*112;txt(rows[i][0],x,yy,15,'#8191ad','700');txt(rows[i][1],x,yy+42,24,'#edf3ff','700');}
  const stamp=closed?(t.closed_at?new Date(t.closed_at).toLocaleString():''):(t.created_at?new Date(t.created_at).toLocaleString():'');
@@ -1705,7 +1705,7 @@ function drawShareCard(t){
  txt((t.hit||status)+'  ·  '+(t.margin_mode||'CROSS'),112,975,18,'#b6c4dc','600');txt(stamp||'Paper Trading',112,1018,15,'#8191ad');txt('SIMULATED PAPER TRADE · NOT AN EXCHANGE EXECUTION',112,1050,12,'#5d6e8c','600');
 }
 function shareFileName(){const t=window._sharingTrade||{};return (t.symbol||'trade')+'-'+(t.status||'trade').toLowerCase()+'.png';}
-function shareSummary(){const t=window._sharingTrade||{},closed=t.status==='CLOSED',pnl=Number(t.realized_pnl!==undefined?t.realized_pnl:t.unrealized_pnl)||0,exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);return (t.symbol||'Trade')+' '+(t.side||'')+' · '+(closed?'Closed':'Running')+' · Entry '+fmtPrice(t.entry)+' · '+(closed?'Close ':'Mark ')+fmtPrice(exit)+' · PnL '+(pnl>=0?'+':'-')+'$'+fmt(Math.abs(pnl))+' · Paper trade';}
+function shareSummary(){const t=window._sharingTrade||{},closed=t.status==='CLOSED',pnl=closed?(Number(t.realized_pnl)||0):((Number(t.realized_pnl)||0)+(Number(t.unrealized_pnl)||0)),exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);return (t.symbol||'Trade')+' '+(t.side||'')+' · '+(closed?'Closed':'Running')+' · Entry '+fmtPrice(t.entry)+' · '+(closed?'Close ':'Mark ')+fmtPrice(exit)+' · PnL '+(pnl>=0?'+':'-')+'$'+fmt(Math.abs(pnl))+' · Paper trade';}
 function shareCardBlob(){return new Promise(resolve=>shareCanvas.toBlob(resolve,'image/png'));}
 async function saveShareCard(){const blob=await shareCardBlob();if(!blob){toast('Could not create image');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=shareFileName();a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
 async function shareTradeImage(){const blob=await shareCardBlob();if(!blob){toast('Could not create image');return;}const file=new File([blob],shareFileName(),{type:'image/png'});if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'Trade Card',text:shareSummary()});}catch(e){if(e.name!=='AbortError')toast('Share failed: '+e.message);}}else{await saveShareCard();if(navigator.share){try{await navigator.share({title:'Trade Card',text:shareSummary()});}catch(e){}}else if(navigator.clipboard){await navigator.clipboard.writeText(shareSummary());toast('Image saved; trade summary copied');}}}
