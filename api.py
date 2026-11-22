@@ -298,6 +298,16 @@ def run_scan(top_n: int = 12):
         if client.rate_limited:
             _cache["error"] = "Binance Futures rate limit active during derivatives checks; remaining checks paused."
             _pause_scans_for_rate_limit(client)
+        # Re-apply the minimum threshold after relative-strength/funding adjustments.
+        filtered = []
+        for item in signals:
+            if int(item.get("score", 0)) < config.MIN_SCORE:
+                continue
+            aligned = ((item.get("side") == "LONG" and item.get("bias_1d") == "bull" and item.get("bias_4h") == "bull") or
+                       (item.get("side") == "SHORT" and item.get("bias_1d") == "bear" and item.get("bias_4h") == "bear"))
+            item["quality"] = "A+" if item["score"] >= 72 and aligned else ("A" if item["score"] >= 62 or aligned else "B")
+            filtered.append(item)
+        signals = filtered
         signals.sort(key=lambda x: x["score"], reverse=True)
         _cache["signals"] = signals
         _cache["prices"] = prices
