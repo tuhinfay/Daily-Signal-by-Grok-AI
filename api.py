@@ -45,6 +45,7 @@ _price_monitor_status: Dict[str, Any] = {
 _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
+_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True}
 
 def _symbol_leverage_cap(symbol: str) -> int:
     """Use a verified symbol tier; keep a conservative 20x cap when unknown."""
@@ -223,6 +224,48 @@ def _update_trade_liquidation_fields(trade: Dict[str, Any]) -> None:
         trade["liquidation_risk"] = "UNKNOWN"
 
 
+def _run_paper_auto_bot(signals):
+    cfg = _bot_config
+    if not cfg.get("enabled"): return
+    quality = {"B": 1, "A": 2, "A+": 3}
+    min_quality = quality.get(str(cfg.get("min_quality", "A")).upper(), 2)
+    symbols = {x.strip().upper().replace("/", "") for x in str(cfg.get("symbols") or "").split(",") if x.strip()}
+    try:
+        opened = [t for t in _trades.values() if t.get("status") == "OPEN"]
+        for sig in sorted(signals or [], key=lambda x: int(x.get("score") or 0), reverse=True):
+            if len(opened) >= int(cfg.get("max_open") or 2): break
+            sym, side = str(sig.get("symbol") or "").upper(), str(sig.get("side") or "").upper()
+            if not sym or (symbols and sym not in symbols): continue
+            if int(sig.get("score") or 0) < int(cfg.get("min_score") or 75): continue
+            if quality.get(str(sig.get("quality") or "B").upper(), 0) < min_quality: continue
+            if any(t.get("status") == "OPEN" and t.get("symbol") == sym for t in _trades.values()): continue
+            entry = float(sig.get("market_price") or sig.get("entry") or 0); sl = float(sig.get("stop_loss") or 0); tp = float(sig.get("tp1") or 0)
+            if entry <= 0 or sl <= 0 or tp <= 0: continue
+            if (side == "LONG" and not sl < entry < tp) or (side == "SHORT" and not tp < entry < sl): continue
+            before = set(_trades)
+            req = TradeCreate(symbol=sym, side=side, entry=entry, stop_loss=sl, tp1=tp, tp2=sig.get("tp2"), leverage=min(_symbol_leverage_cap(sym), int(sig.get("max_leverage") or 20)), amount_usd=float(cfg.get("amount_usd") or 50), note="Auto Bot · simulated paper trade")
+            result = create_trade(req)
+            if isinstance(result, dict) and result.get("ok"):
+                for tid in set(_trades) - before:
+                    trade = _trades.get(tid)
+                    if trade:
+                        trade["auto_trade"] = True
+                        rate = float(cfg.get("trailing_pct") or 0)
+                        if rate >= 0.1: trade["callback_rate"] = min(rate, 5.0)
+                        db.save_trade(trade); opened.append(trade)
+                        break
+        if cfg.get("exit_on_opposite"):
+            latest = {str(x.get("symbol")): x for x in signals or []}
+            for trade in list(_trades.values()):
+                sig = latest.get(str(trade.get("symbol")))
+                if trade.get("status") != "OPEN" or not trade.get("auto_trade") or not sig or sig.get("side") == trade.get("side") or int(sig.get("score") or 0) < int(cfg.get("min_score") or 75): continue
+                price = float(_cache.get("prices", {}).get(trade.get("symbol")) or trade.get("current_price") or trade.get("entry") or 0); qty = float(trade.get("qty") or 0); entry = float(trade.get("entry") or 0)
+                pnl = (price-entry)*qty if trade.get("side") == "LONG" else (entry-price)*qty
+                _account["balance"] = round(float(_account.get("balance") or 0)+pnl, 2); _account["realized_pnl"] = round(float(_account.get("realized_pnl") or 0)+pnl, 2)
+                trade.update({"status":"CLOSED", "hit":"AUTO_SIGNAL_EXIT", "close_price":price, "realized_pnl":round(float(trade.get("realized_pnl") or 0)+pnl,4), "unrealized_pnl":0.0, "closed_at":datetime.now(timezone.utc).isoformat(), "needs_alert":True}); db.save_trade(trade)
+        _calc_equity(); db.save_account(_account)
+    except Exception as exc: print("[auto-bot] safe cycle error:", exc)
+
 def run_scan(top_n: int = 12):
     global _scan_retry_after
     top_n = max(5, min(int(top_n or 26), 26))
@@ -382,6 +425,7 @@ def run_scan(top_n: int = 12):
         signals.sort(key=lambda x: x["score"], reverse=True)
         _cache["signals"] = signals
         _cache["prices"] = prices
+        _run_paper_auto_bot(signals)
         _cache["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         _cache["scanned_count"] = len(pairs)
     except Exception as e:
@@ -682,6 +726,9 @@ def startup():
     # Restore the user's saved preference; auto-scan state must not be reset on deploy.
     try:
         _cache["auto_scan"] = db.get_meta("auto_scan", "1") == "1"
+        try:
+            _bot_config.update(json.loads(db.get_meta("auto_trade_config", "{}") or "{}"))
+        except Exception: pass
         saved_ban_until = float(db.get_meta("binance_ban_until", "0") or 0)
         if saved_ban_until > time_mod.time():
             global _scan_retry_after
@@ -723,6 +770,19 @@ async def api_signals(style: str = Query("all")):
         "account": _account, "stats": _stats(),
     }
 
+
+@app.get("/api/auto-trade")
+async def get_auto_trade():
+    return {"config": _bot_config, "engine": "SIMULATED_PAPER_ONLY"}
+
+@app.post("/api/auto-trade")
+async def set_auto_trade(body: Dict[str, Any]):
+    try:
+        _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True))})
+        if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
+    except (TypeError,ValueError): return JSONResponse({"ok":False,"error":"Invalid Auto Trade settings"},status_code=400)
+    db.set_meta("auto_trade_config", json.dumps(_bot_config))
+    return {"ok":True,"config":_bot_config,"engine":"SIMULATED_PAPER_ONLY"}
 
 @app.post("/api/auto-scan")
 async def set_auto_scan(enabled: bool = Query(True)):
