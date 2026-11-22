@@ -194,6 +194,25 @@ class SignalEngine:
             long_p += 4
         else:
             short_p += 4
+
+        # Confirm a breakout retest on the completed entry candle, not a wick-only breakout.
+        retest_atr = atr or 0.0
+        prior_level_up = self._safe(prev, "swing_high_ref")
+        prior_level_down = self._safe(prev, "swing_low_ref")
+        bullish_retest = (
+            bool(prev.get("breakout_up", False)) and prior_level_up > 0 and retest_atr > 0
+            and self._safe(r, "low") <= prior_level_up + retest_atr * 0.25
+            and c > prior_level_up and c > self._safe(r, "open")
+        )
+        bearish_retest = (
+            bool(prev.get("breakout_down", False)) and prior_level_down > 0 and retest_atr > 0
+            and self._safe(r, "high") >= prior_level_down - retest_atr * 0.25
+            and c < prior_level_down and c < self._safe(r, "open")
+        )
+        if bullish_retest:
+            long_p += 8; lr.append("Breakout retest held")
+        elif bearish_retest:
+            short_p += 8; sr.append("Breakdown retest held")
         return long_p, short_p, lr, sr, atr, entry
 
     def analyze_pair(self, symbol: str, data: Dict[str, pd.DataFrame], volume_24h: float = 0,
