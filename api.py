@@ -1575,7 +1575,7 @@ function openModal(s){
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
   m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';
-  const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; mLevHint.textContent=''; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
+  const ml=s.max_leverage||150; m_lev.value=Math.min(20,ml); m_lev.max=ml; mLevHint.textContent='Paper-trading ceiling only; Binance account/symbol limits may be lower.'; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
 function closeModal(){modalBg.style.display='none';}
