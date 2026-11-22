@@ -5,7 +5,7 @@ MIN_VOLUME_USDT = 12_000_000
 MIN_SCORE = 50
 
 TIMEFRAMES = {"entry": "15m", "momentum": "1h", "trend": "4h", "regime": "1d"}
-CANDLE_LIMIT = {"5m": 120, "15m": 120, "1h": 120, "4h": 100, "1d": 90}
+CANDLE_LIMIT = {"5m": 120, "15m": 120, "1h": 120, "4h": 220, "1d": 220}
 
 # Style-specific entry TF preference (used by API filter)
 STYLE_ENTRY_TF = {
@@ -46,3 +46,9 @@ RISK_PER_TRADE_PCT = 1.0
 # CLI export settings (used by main.py)
 EXPORT_JSON = False
 JSON_FILENAME = "signals.json"
+
+# Market context indicators (rolling windows are measured in candles).
+VWAP_WINDOW = 48
+VOLUME_PROFILE_WINDOW = 48
+VOLUME_PROFILE_BINS = 24
+STRUCTURE_WINDOW = 20
