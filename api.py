@@ -219,6 +219,11 @@ def run_scan(top_n: int = 12):
             return
 
         signals, prices = [], {}
+        # BTC 24h relative-strength baseline is fetched once per scan.
+        btc_df = client.fetch_ohlcv("BTCUSDT", timeframe="1h", limit=25)
+        btc_return = None
+        if btc_df is not None and len(btc_df) >= 25 and float(btc_df["close"].iloc[-25]) > 0:
+            btc_return = (float(btc_df["close"].iloc[-1]) / float(btc_df["close"].iloc[-25]) - 1.0) * 100.0
         for symbol, vol in pairs:
             data = {}
             for tf in ("5m", "15m", "1h", "4h", "1d"):
@@ -244,6 +249,24 @@ def run_scan(top_n: int = 12):
                         continue
                     r["market_price"] = px or r["entry"]
                     r["max_leverage"] = max_leverage
+                    # Compare the coin's 24h return with BTC to avoid buying relative laggards.
+                    coin_df = data.get("1h")
+                    relative_strength = None
+                    if btc_return is not None and coin_df is not None and len(coin_df) >= 25:
+                        base_close = float(coin_df["close"].iloc[-25])
+                        if base_close > 0:
+                            coin_return = (float(coin_df["close"].iloc[-1]) / base_close - 1.0) * 100.0
+                            relative_strength = coin_return - btc_return
+                            r["btc_relative_strength_pct"] = round(relative_strength, 2)
+                            if r["side"] == "LONG" and relative_strength < -1.5:
+                                r["score"] = max(0, int(r["score"]) - 5)
+                                r["reasons"].append("BTC relative lag")
+                            elif r["side"] == "SHORT" and relative_strength > 1.5:
+                                r["score"] = max(0, int(r["score"]) - 5)
+                                r["reasons"].append("BTC relative strength")
+                            elif (r["side"] == "LONG" and relative_strength > 1.5) or (r["side"] == "SHORT" and relative_strength < -1.5):
+                                r["score"] = min(100, int(r["score"]) + 3)
+                                r["reasons"].append("BTC relative strength aligned")
                     r["styles"] = [style_name]
                     r["summary"] = f"{r.get('setup','')} · {style_name.upper()} · R:R 1:{r['rr']} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
                     signals.append(r)
@@ -251,6 +274,27 @@ def run_scan(top_n: int = 12):
                 print(f"scan {symbol}: {e}")
                 continue
 
+        # Query derivatives context only for the highest-ranked unique symbols to
+        # keep public API request weight bounded; funding is a mild crowding filter.
+        checked_derivatives = set()
+        for candidate in sorted(signals, key=lambda x: x["score"], reverse=True):
+            sym = candidate["symbol"]
+            if sym in checked_derivatives or len(checked_derivatives) >= 6 or client.rate_limited:
+                continue
+            checked_derivatives.add(sym)
+            context = client.get_derivatives_context(sym)
+            funding = context.get("funding_rate")
+            for item in signals:
+                if item["symbol"] != sym:
+                    continue
+                item["funding_rate"] = funding
+                item["open_interest"] = context.get("open_interest")
+                if funding is not None and funding >= 0.0005 and item["side"] == "LONG":
+                    item["score"] = max(0, int(item["score"]) - 4)
+                    item["reasons"].append("Crowded long funding")
+                elif funding is not None and funding <= -0.0005 and item["side"] == "SHORT":
+                    item["score"] = max(0, int(item["score"]) - 4)
+                    item["reasons"].append("Crowded short funding")
         signals.sort(key=lambda x: x["score"], reverse=True)
         _cache["signals"] = signals
         _cache["prices"] = prices
