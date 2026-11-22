@@ -39,7 +39,8 @@ def load_ohlcv_csv(path: str) -> pd.DataFrame:
 
 
 def simulate_trade(side: str, fill: float, stop: float, tp1: float, tp2: float,
-                   future: pd.DataFrame, max_bars: int = 96) -> Optional[Dict]:
+                   future: pd.DataFrame, max_bars: int = 96, fee_rate: float = 0.0005,
+                   slippage_rate: float = 0.0002) -> Optional[Dict]:
     """Simulate 50% at TP1 and remainder at TP2/SL; return realized R multiple."""
     side = str(side).upper()
     if side not in ("LONG", "SHORT") or fill <= 0:
@@ -52,44 +53,50 @@ def simulate_trade(side: str, fill: float, stop: float, tp1: float, tp2: float,
     if side == "SHORT" and not (tp1 < fill and tp2 < tp1):
         return None
 
+    if fee_rate < 0 or slippage_rate < 0:
+        raise ValueError("fee_rate and slippage_rate must be non-negative")
+    exit_cost_rate = fee_rate + slippage_rate
     partial = False
-    realized_r = 0.0
+    # Entry fee and adverse entry slippage are charged once on the full position.
+    realized_r = -(fill * exit_cost_rate) / risk
     rows = future.iloc[:max_bars]
     for offset, (_, candle) in enumerate(rows.iterrows(), start=1):
         high, low = float(candle["high"]), float(candle["low"])
         if side == "LONG":
             if low <= stop:
-                realized_r += -0.5 if partial else -1.0
+                realized_r += (-0.5 if partial else -1.0) - (0.5 if partial else 1.0) * stop * exit_cost_rate / risk
                 return {"r": realized_r, "exit": "SL_AFTER_TP1" if partial else "SL", "bars": offset}
             if not partial and high >= tp1:
                 partial = True
-                realized_r += 0.5 * ((tp1 - fill) / risk)
+                realized_r += 0.5 * ((tp1 - fill) / risk) - 0.5 * tp1 * exit_cost_rate / risk
                 continue
             if partial and high >= tp2:
-                realized_r += 0.5 * ((tp2 - fill) / risk)
+                realized_r += 0.5 * ((tp2 - fill) / risk) - 0.5 * tp2 * exit_cost_rate / risk
                 return {"r": realized_r, "exit": "TP2", "bars": offset}
         else:
             if high >= stop:
-                realized_r += -0.5 if partial else -1.0
+                realized_r += (-0.5 if partial else -1.0) - (0.5 if partial else 1.0) * stop * exit_cost_rate / risk
                 return {"r": realized_r, "exit": "SL_AFTER_TP1" if partial else "SL", "bars": offset}
             if not partial and low <= tp1:
                 partial = True
-                realized_r += 0.5 * ((fill - tp1) / risk)
+                realized_r += 0.5 * ((fill - tp1) / risk) - 0.5 * tp1 * exit_cost_rate / risk
                 continue
             if partial and low <= tp2:
-                realized_r += 0.5 * ((fill - tp2) / risk)
+                realized_r += 0.5 * ((fill - tp2) / risk) - 0.5 * tp2 * exit_cost_rate / risk
                 return {"r": realized_r, "exit": "TP2", "bars": offset}
 
     if rows.empty:
         return None
     last_close = float(rows.iloc[-1]["close"])
     remaining_r = ((last_close - fill) / risk) if side == "LONG" else ((fill - last_close) / risk)
-    realized_r += 0.5 * remaining_r if partial else remaining_r
+    remaining_fraction = 0.5 if partial else 1.0
+    realized_r += remaining_fraction * remaining_r - remaining_fraction * last_close * exit_cost_rate / risk
     return {"r": realized_r, "exit": "TIMEOUT_AFTER_TP1" if partial else "TIMEOUT", "bars": len(rows)}
 
 
 def run_backtest(files: Dict[str, str], style: str = "day", step: int = 4,
-                 max_bars: int = 96, min_score: Optional[int] = None) -> Dict:
+                 max_bars: int = 96, min_score: Optional[int] = None,
+                 fee_rate: float = 0.0005, slippage_rate: float = 0.0002) -> Dict:
     if style not in STYLE_TFS:
         raise ValueError("style must be scalp, day, or swing")
     required = STYLE_TFS[style]["required"]
@@ -123,13 +130,14 @@ def run_backtest(files: Dict[str, str], style: str = "day", step: int = 4,
         if not signal:
             continue
         fill_bar = entry_frame.iloc[i + 1]
-        fill = float(fill_bar["open"])
+        raw_fill = float(fill_bar["open"])
+        fill = raw_fill * (1.0 + slippage_rate if signal["side"] == "LONG" else 1.0 - slippage_rate)
         future = entry_frame.iloc[i + 1:i + 1 + max_bars]
         if future.empty:
             continue
         result = simulate_trade(
             signal["side"], fill, float(signal["stop_loss"]),
-            float(signal["tp1"]), float(signal["tp2"]), future, max_bars,
+            float(signal["tp1"]), float(signal["tp2"]), future, max_bars, fee_rate, slippage_rate,
         )
         if result is None:
             continue
@@ -175,10 +183,12 @@ def main():
     parser.add_argument("--step", type=int, default=4, help="Evaluate every N entry candles")
     parser.add_argument("--max-bars", type=int, default=96, help="Maximum forward entry candles per trade")
     parser.add_argument("--min-score", type=int, default=config.MIN_SCORE)
+    parser.add_argument("--fee-rate", type=float, default=0.0005, help="Taker fee per side as decimal (default 0.0005 = 0.05%%)")
+    parser.add_argument("--slippage-rate", type=float, default=0.0002, help="Slippage per side as decimal (default 0.0002 = 0.02%%)")
     parser.add_argument("--out", default="backtest_trades.csv")
     args = parser.parse_args()
     files = {"5m": args.tf5m, "15m": args.tf15m, "1h": args.tf1h, "4h": args.tf4h, "1d": args.tf1d}
-    result = run_backtest(files, args.style, args.step, args.max_bars, args.min_score)
+    result = run_backtest(files, args.style, args.step, args.max_bars, args.min_score, args.fee_rate, args.slippage_rate)
     trades = result.pop("trades")
     if trades:
         pd.DataFrame(trades).to_csv(args.out, index=False)
