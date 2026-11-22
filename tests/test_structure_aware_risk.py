@@ -27,7 +27,7 @@ class StructureAwareRiskTests(unittest.TestCase):
         rows = []
         for i in range(60):
             rows.append({
-                "high": 104.0 if i < 40 else 103.0,
+                "high": 105.0 if i >= 40 else 104.0,
                 "low": 96.0 if i < 40 else (92.0 if i < 55 else 88.0),
                 "close": 100.0,
             })
