@@ -1382,10 +1382,8 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><em>Realized</em><strong id="aReal">—</strong></div>
     </div>
     <div class="fund-tools">
-      <label for="fundAmount">Manual USDT balance adjustment</label>
-      <input id="fundAmount" type="number" min="0.01" step="any" placeholder="Enter any USDT amount">
+      <input id="fundAmount" type="number" min="0.01" step="any" placeholder="Enter USDT amount">
       <div class="actions"><button class="btn good" onclick="adjustFunds('add')">＋ Add Funds</button><button class="btn bad" onclick="adjustFunds('remove')">− Remove Funds</button></div>
-      <p class="hint">Paper account only · No reset option</p>
     </div>
   </div>
 </section>
