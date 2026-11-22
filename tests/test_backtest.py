@@ -8,7 +8,7 @@ from scanner.backtest import simulate_trade
 class BacktestSimulationTests(unittest.TestCase):
     def test_stop_loss_wins_if_stop_and_tp1_touch_same_candle(self):
         future = pd.DataFrame([{"high": 103.0, "low": 98.0, "close": 101.0}])
-        result = simulate_trade("LONG", 100.0, 99.0, 102.0, 104.0, future)
+        result = simulate_trade("LONG", 100.0, 99.0, 102.0, 104.0, future, fee_rate=0, slippage_rate=0)
         self.assertEqual(result["exit"], "SL")
         self.assertEqual(result["r"], -1.0)
 
