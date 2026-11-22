@@ -255,7 +255,8 @@ class SignalEngine:
 
         if entry is None or atr is None or atr <= 0:
             return None
-        entry_df = data.get("5m" if style == "scalp" else "1h" if style == "swing" else "15m")\n        levels = calculate_levels(side, float(entry), float(atr), market_data=entry_df)
+        entry_df = data.get("5m" if style == "scalp" else "1h" if style == "swing" else "15m")
+        levels = calculate_levels(side, float(entry), float(atr), market_data=entry_df)
         if not levels:
             return None
 
