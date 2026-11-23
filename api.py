@@ -45,7 +45,7 @@ _price_monitor_status: Dict[str, Any] = {
 _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
-_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True}
+_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5}
 
 def _symbol_leverage_cap(symbol: str) -> int:
     """Use a verified symbol tier; keep a conservative 20x cap when unknown."""
@@ -230,13 +230,35 @@ def _run_paper_auto_bot(signals):
     quality = {"B": 1, "A": 2, "A+": 3}
     min_quality = quality.get(str(cfg.get("min_quality", "A")).upper(), 2)
     symbols = {x.strip().upper().replace("/", "") for x in str(cfg.get("symbols") or "").split(",") if x.strip()}
+    strategy = str(cfg.get("trade_style") or "day").lower()
+    if strategy not in ("scalp", "day", "swing"): strategy = "day"
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    cooldown = max(0, min(int(cfg.get("cooldown_minutes") or 0), 1440))
+    max_symbol_day = max(1, min(int(cfg.get("max_symbol_trades_day") or 3), 30))
+    max_daily_loss = max(0.0, float(_account.get("start_balance") or _account.get("balance") or 0) * max(0.0, min(float(cfg.get("max_daily_loss_pct") or 0), 20.0)) / 100.0)
     try:
         opened = [t for t in _trades.values() if t.get("status") == "OPEN"]
+        bot_closed_today = [t for t in _trades.values() if t.get("auto_trade") and t.get("status") == "CLOSED" and str(t.get("closed_at") or "").startswith(today.isoformat())]
+        daily_bot_pnl = sum(float(t.get("realized_pnl") or 0) for t in bot_closed_today)
+        if max_daily_loss and daily_bot_pnl <= -max_daily_loss:
+            print(f"[auto-bot] daily loss guard active: {daily_bot_pnl:.2f} USDT")
+            return
         for sig in sorted(signals or [], key=lambda x: int(x.get("score") or 0), reverse=True):
             if len(opened) >= int(cfg.get("max_open") or 2): break
             sym, side = str(sig.get("symbol") or "").upper(), str(sig.get("side") or "").upper()
             if not sym or (symbols and sym not in symbols): continue
+            if strategy not in (sig.get("styles") or []): continue
             if int(sig.get("score") or 0) < int(cfg.get("min_score") or 75): continue
+            if float(sig.get("rr") or 0) < float(cfg.get("min_rr") or 1.5): continue
+            symbol_history = [t for t in _trades.values() if t.get("auto_trade") and t.get("symbol") == sym]
+            symbol_today = [t for t in symbol_history if str(t.get("created_at") or "").startswith(today.isoformat())]
+            if len(symbol_today) >= max_symbol_day: continue
+            recent_close = max((str(t.get("closed_at") or "") for t in symbol_history if t.get("closed_at")), default="")
+            if cooldown and recent_close:
+                try:
+                    if (now - datetime.fromisoformat(recent_close.replace("Z", "+00:00"))).total_seconds() < cooldown * 60: continue
+                except ValueError: pass
             if quality.get(str(sig.get("quality") or "B").upper(), 0) < min_quality: continue
             if any(t.get("status") == "OPEN" and t.get("symbol") == sym for t in _trades.values()): continue
             entry = float(sig.get("market_price") or sig.get("entry") or 0); sl = float(sig.get("stop_loss") or 0); tp = float(sig.get("tp1") or 0)
@@ -250,6 +272,8 @@ def _run_paper_auto_bot(signals):
                     trade = _trades.get(tid)
                     if trade:
                         trade["auto_trade"] = True
+                        trade["trade_style"] = strategy
+                        trade["entry_source"] = "BOT"
                         rate = float(cfg.get("trailing_pct") or 0)
                         if rate >= 0.1: trade["callback_rate"] = min(rate, 5.0)
                         db.save_trade(trade); opened.append(trade)
@@ -778,7 +802,8 @@ async def get_auto_trade():
 @app.post("/api/auto-trade")
 async def set_auto_trade(body: Dict[str, Any]):
     try:
-        _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True))})
+        _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0))})
+        if _bot_config["trade_style"] not in ("scalp","day","swing"): _bot_config["trade_style"] = "day"
         if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
     except (TypeError,ValueError): return JSONResponse({"ok":False,"error":"Invalid Auto Trade settings"},status_code=400)
     db.set_meta("auto_trade_config", json.dumps(_bot_config))
