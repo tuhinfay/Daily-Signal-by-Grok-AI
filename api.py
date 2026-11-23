@@ -236,6 +236,41 @@ def _run_paper_auto_bot(signals):
     max_daily_loss = max(0.0, float(_account.get("start_balance") or _account.get("balance") or 0) * max(0.0, min(float(cfg.get("max_daily_loss_pct") or 0), 20.0)) / 100.0)
     try:
         opened = [t for t in _trades.values() if t.get("status") == "OPEN"]
+        if cfg.get("dca_enabled"):
+            gap = max(0.1, min(float(cfg.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
+            max_adds = max(1, min(int(cfg.get("dca_max_orders") or 3), 5))
+            multiplier = max(1.0, min(float(cfg.get("dca_multiplier") or 2.0), 3.0))
+            for position in list(opened):
+                if not position.get("auto_trade") or position.get("status") != "OPEN": continue
+                adds = int(position.get("dca_count") or 0)
+                if adds >= max_adds: continue
+                mark = float(_cache.get("prices", {}).get(position.get("symbol")) or position.get("current_price") or 0)
+                entry0 = float(position.get("entry") or 0)
+                if mark <= 0 or entry0 <= 0: continue
+                history = position.get("dca_history") or []
+                anchor = float(history[-1].get("price") or entry0) if history else entry0
+                side0 = str(position.get("side") or "").upper()
+                triggered = mark <= anchor * (1-gap) if side0 == "LONG" else mark >= anchor * (1+gap)
+                if not triggered: continue
+                base_notional = float(position.get("auto_dca_base_usd") or cfg.get("amount_usd") or 50)
+                add_notional = base_notional * (multiplier ** adds)
+                lev0 = max(1, int(position.get("leverage") or 1))
+                add_margin = add_notional / lev0
+                if add_margin > max(0.0, float(_account.get("balance") or 0)): continue
+                old_qty = float(position.get("qty") or 0)
+                add_qty = add_notional / mark
+                new_qty = old_qty + add_qty
+                if new_qty <= 0: continue
+                position["entry"] = round((entry0 * old_qty + mark * add_qty) / new_qty, 8)
+                position["qty"] = round(new_qty, 8)
+                position["notional"] = round(float(position.get("notional") or 0) + add_notional, 2)
+                position["margin"] = round(float(position.get("margin") or 0) + add_margin, 2)
+                position["dca_count"] = adds + 1
+                position["auto_dca_base_usd"] = base_notional
+                position.setdefault("dca_history", []).append({"price": mark, "qty": round(add_qty, 8), "notional": round(add_notional, 2), "margin": round(add_margin, 2), "created_at": now.isoformat(), "auto": True})
+                position["current_price"] = mark
+                _update_trade_liquidation_fields(position)
+                db.save_trade(position)
         bot_closed_today = [t for t in _trades.values() if t.get("auto_trade") and t.get("status") == "CLOSED" and str(t.get("closed_at") or "").startswith(today.isoformat())]
         daily_bot_pnl = sum(float(t.get("realized_pnl") or 0) for t in bot_closed_today)
         if max_daily_loss and daily_bot_pnl <= -max_daily_loss:
@@ -274,6 +309,7 @@ def _run_paper_auto_bot(signals):
                         trade["auto_trade"] = True
                         trade["trade_style"] = strategy
                         trade["entry_source"] = "BOT"
+                        trade["auto_dca_base_usd"] = float(cfg.get("amount_usd") or 50)
                         rate = float(cfg.get("trailing_pct") or 0)
                         if rate >= 0.1: trade["callback_rate"] = min(rate, 5.0)
                         db.save_trade(trade); opened.append(trade)
