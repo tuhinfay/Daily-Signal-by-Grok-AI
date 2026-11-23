@@ -70,7 +70,7 @@ When a PostgreSQL URL is configured but the database cannot be reached, startup 
 4. Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`
 5. Redeploy
 
-Logs should show: `[db] Using PostgreSQL (DATABASE_URL)`
+Logs should show: `[db] Using PostgreSQL with warm connection pool (DATABASE_URL)`
 
 If the URL is wrong or Neon is temporarily unavailable, check the Render logs and restore the database connection; the app intentionally does not fall back to SQLite.
 
