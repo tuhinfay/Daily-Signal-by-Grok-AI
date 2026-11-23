@@ -1850,7 +1850,12 @@ async function loadTrades(){
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
       <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){const closedTotal=closed.length;const closedNotional=closed.reduce((sum,t)=>sum+(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0))),0);const closedPnl=closed.reduce((sum,t)=>sum+(Number(t.realized_pnl)||0),0);h+='<div class="sec">Closed Trades ('+closedTotal+')</div><div class="card"><div class="vals"><div><em>Total Closed</em><strong>'+closedTotal+'</strong></div><div><em>Total Trade Amount</em><strong>
+  if(closed.length){
+    const closedTotal=closed.length;
+    const closedNotional=closed.reduce((sum,t)=>sum+(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0))),0);
+    const closedPnl=closed.reduce((sum,t)=>sum+(Number(t.realized_pnl)||0),0);
+    h+='<div class="sec">Closed Trades ('+closedTotal+')</div><div class="card"><div class="vals"><div><em>Total Closed</em><strong>'+closedTotal+'</strong></div><div><em>Total Trade Amount</em><strong>$'+fmt(closedNotional)+' USDT</strong></div><div><em>Total Realized PnL</em><strong class="'+(closedPnl>=0?'up':'dn')+'">'+(closedPnl>=0?'+':'')+'$'+fmt(closedPnl)+'</strong></div></div>';
+    h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
     const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const qty=Number(t.qty)||0;const notional=Number(t.notional)||((Number(t.entry)||0)*qty);const margin=Number(t.margin)||(notional/(Number(t.leverage)||1));const pnlPct=margin>0?(pnl/margin)*100:0;const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';const leverage=Number(t.leverage)||1;
