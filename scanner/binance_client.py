@@ -159,7 +159,7 @@ class BinanceClient:
         ][:top_n]
 
     def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
-        """Rank liquid USDT-M contracts from the current UTC daily candle (00:00 UTC = 06:00 Bangladesh)."""
+        """Rank liquid USDT-M contracts from the current UTC+6 daily candle (00:00 Bangladesh)."""
         gainers, losers = [], []
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
@@ -187,14 +187,14 @@ class BinanceClient:
                     candidates.append((clean, volume, last))
             candidates.sort(key=lambda row: row[1], reverse=True)
 
-            # Check the top 40 contracts by quote volume using their current UTC daily candle (BD 06:00).
+            # Check the top 40 contracts by quote volume using their Binance UTC+6 daily candle (BD midnight).
             rows = []
             for clean, volume, last in candidates[:40]:
                 if self.rate_limited:
                     break
                 try:
                     candles = self.exchange.fetch_ohlcv(
-                        self._ccxt_symbol(clean), timeframe="1d", limit=1
+                        self._ccxt_symbol(clean), timeframe="1d", limit=1, params={"timeZone": "6"}
                     )
                     if not candles:
                         continue
@@ -207,7 +207,7 @@ class BinanceClient:
                         "change": round(change, 4),
                         "volume": volume,
                         "price": last,
-                        "period": "UTC daily candle (BD 06:00)",
+                        "period": "Binance UTC+6 daily candle (BD 00:00)",
                     })
                 except Exception as e:
                     self._mark_rate_limit(e)
