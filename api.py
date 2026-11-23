@@ -1855,7 +1855,7 @@ async function loadTrades(){
     h+='<div class="sec">Closed Trades ('+closedTotal+')</div><div class="card">';
     h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
       const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
-      const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
+
       const qty=Number(t.qty)||0;
       const notional=Number(t.notional)||((Number(t.entry)||0)*qty);
       const margin=Number(t.margin)||(notional/(Number(t.leverage)||1));
