@@ -35,6 +35,14 @@ if not exist .venv\Scripts\python.exe (
   exit /b 1
 )
 
+echo Checking Python startup syntax...
+".venv\Scripts\python.exe" -m py_compile api.py
+if errorlevel 1 (
+  echo Python startup check failed. Fix the error shown above before launching.
+  pause
+  exit /b 1
+)
+
 echo Starting Daily Signal on port 8083...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Start-Process -FilePath '%~dp0.venv\Scripts\python.exe' -ArgumentList @('-m','uvicorn','api:app','--host','0.0.0.0','--port','8083') -WorkingDirectory '%~dp0' -WindowStyle Hidden -RedirectStandardOutput '%~dp0logs\server.log' -RedirectStandardError '%~dp0logs\error.log' -PassThru; Set-Content -Path '%~dp0runtime.pid' -Value $p.Id -Encoding ascii"
 
