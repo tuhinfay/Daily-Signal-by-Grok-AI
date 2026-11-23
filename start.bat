@@ -41,8 +41,8 @@ if not exist .venv\Scripts\python.exe (
   exit /b 1
 )
 
-echo Checking Python startup syntax...
-".venv\Scripts\python.exe" -m py_compile api.py
+echo Checking Python syntax across the project...
+".venv\Scripts\python.exe" -m compileall -q .
 if errorlevel 1 (
   echo Python startup check failed. Fix the error shown above before launching.
   pause
