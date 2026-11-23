@@ -220,7 +220,7 @@ def _update_trade_liquidation_fields(trade: Dict[str, Any]) -> None:
             raise ValueError("missing current price")
         distance = abs(current - price) / current * 100
         trade["liquidation_distance_pct"] = round(distance, 2)
-     except (TypeError, ValueError):
+    except (TypeError, ValueError):
         trade["liquidation_distance_pct"] = None
  
 
