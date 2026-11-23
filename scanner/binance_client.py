@@ -4,7 +4,7 @@ import ccxt
 import os
 import re
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import pandas as pd
 from typing import List, Optional, Tuple, Dict
 
@@ -160,7 +160,7 @@ class BinanceClient:
         ][:top_n]
 
     def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
-        """Rank movers from the 1h candle that opens at Bangladesh midnight (UTC+6)."""
+        """Rank movers from Binance UTC daily candle (06:00 Bangladesh time)."""
         gainers, losers = [], []
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
@@ -188,26 +188,19 @@ class BinanceClient:
                     candidates.append((clean, volume, last))
             candidates.sort(key=lambda row: row[1], reverse=True)
 
-            # Binance Futures 1h candles are UTC-aligned. Bangladesh midnight is 18:00 UTC.
-            # Find today's exact UTC+6 midnight candle, then compare its open with the live price.
-            now_bd = datetime.now(timezone.utc) + timedelta(hours=6)
-            midnight_utc = (now_bd.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=6))
-            midnight_ms = int(midnight_utc.timestamp() * 1000)
+            # Binance's standard 1d candle opens at 00:00 UTC = 06:00 Bangladesh time.
+            # Use that daily candle's open to match Binance's standard daily boundary.
             rows = []
             for clean, volume, last in candidates[:40]:
                 if self.rate_limited:
                     break
                 try:
                     candles = self.exchange.fetch_ohlcv(
-                        self._ccxt_symbol(clean), timeframe="1h", limit=30
+                        self._ccxt_symbol(clean), timeframe="1d", limit=1
                     )
                     if not candles:
                         continue
-                    midnight_candle = next((c for c in candles if int(c[0]) == midnight_ms), None)
-                    if midnight_candle is None:
-                        print(f"mover {clean}: Bangladesh midnight 1h candle not found ({midnight_utc.isoformat()})")
-                        continue
-                    daily_open = float(midnight_candle[1])
+                    daily_open = float(candles[-1][1])
                     if daily_open <= 0:
                         continue
                     change = ((last - daily_open) / daily_open) * 100
@@ -216,11 +209,11 @@ class BinanceClient:
                         "change": round(change, 4),
                         "volume": volume,
                         "price": last,
-                        "period": "Bangladesh day (00:00 UTC+6)",
+                        "period": "Binance UTC daily (BD 06:00)",
                     })
                 except Exception as e:
                     self._mark_rate_limit(e)
-                    print(f"mover Bangladesh-day candle {clean}: {e}")
+                    print(f"mover Binance UTC daily candle {clean}: {e}")
                     if self.rate_limited:
                         break
             rows.sort(key=lambda row: row["change"], reverse=True)
