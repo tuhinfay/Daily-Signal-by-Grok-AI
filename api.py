@@ -1453,7 +1453,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
   <details class="bot-panel" id="botPanel">
     <summary class="bot-summary">
       <span class="bot-mark">✦</span>
-      <span class="bot-summary-copy"><b>Auto Trade</b><small>Paper trading · Strategy & risk controls</small></span>
+      <span class="bot-summary-copy"><b>Auto Trade</b><small>Strategy & risk controls</small></span>
       <span id="botState" class="bot-status">OFF</span>
       <span class="bot-chevron">⌄</span>
     </summary>
@@ -1484,8 +1484,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
         <div class="row2"><div><label>Daily loss limit (%)</label><input id="botDailyLoss" type="number" min="0" max="20" step="0.1" value="2"></div><div><label>Trailing stop (%) <small class="bot-help">0 = off</small></label><input id="botTrail" type="number" min="0" max="5" step="0.1" value="0.8"></div></div>
       </div>
       <div class="bot-safety"><label><input id="botOpposite" type="checkbox" checked> Exit if a strong opposite signal appears</label><small>Daily loss guard pauses new entries after the configured bot loss limit. Existing positions still follow their SL/TP and trailing rules.</small></div>
-      <div class="bot-footer"><span class="bot-paper-note">● SIMULATED PAPER TRADING</span><button class="btn good" onclick="saveBotSettings()">Save bot settings</button></div>
-      <p class="hint">No real Binance orders are placed. Bot starts OFF until you enable it.</p>
+      <div class="bot-footer"><button class="btn good" onclick="saveBotSettings()">Save bot settings</button></div>
     </div>
   </details>
   <div class="note" id="status">Loading…</div>
