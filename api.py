@@ -45,7 +45,7 @@ _price_monitor_status: Dict[str, Any] = {
 _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
-_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5}
+_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both"}
 
 def _symbol_leverage_cap(symbol: str) -> int:
     """Use a verified symbol tier; keep a conservative 20x cap when unknown."""
@@ -248,6 +248,9 @@ def _run_paper_auto_bot(signals):
             if len(opened) >= int(cfg.get("max_open") or 2): break
             sym, side = str(sig.get("symbol") or "").upper(), str(sig.get("side") or "").upper()
             if not sym or (symbols and sym not in symbols): continue
+            direction = str(cfg.get("direction") or "both").lower()
+            if direction == "long" and side != "LONG": continue
+            if direction == "short" and side != "SHORT": continue
             if strategy not in (sig.get("styles") or []): continue
             if int(sig.get("score") or 0) < int(cfg.get("min_score") or 75): continue
             if float(sig.get("rr") or 0) < float(cfg.get("min_rr") or 1.5): continue
@@ -802,9 +805,10 @@ async def get_auto_trade():
 @app.post("/api/auto-trade")
 async def set_auto_trade(body: Dict[str, Any]):
     try:
-        _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0))})
+        _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower()})
         if _bot_config["trade_style"] not in ("scalp","day","swing"): _bot_config["trade_style"] = "day"
         if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
+        if _bot_config["direction"] not in ("both","long","short"): _bot_config["direction"] = "both"
     except (TypeError,ValueError): return JSONResponse({"ok":False,"error":"Invalid Auto Trade settings"},status_code=400)
     db.set_meta("auto_trade_config", json.dumps(_bot_config))
     return {"ok":True,"config":_bot_config,"engine":"SIMULATED_PAPER_ONLY"}
@@ -1409,6 +1413,9 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .mv .i b{display:block;font-size:12px}.mv .up{color:var(--gn)}.mv .dn{color:var(--rd)}
 .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:0 10px 8px}
 .stats .metric{text-align:center}
+
+.bot-panel{margin:14px 0;border:1px solid #29364a;border-radius:18px;overflow:hidden;background:linear-gradient(145deg,rgba(24,37,57,.98),rgba(12,20,34,.98));box-shadow:0 12px 32px rgba(0,0,0,.18)}
+.bot-summary{list-style:none;display:flex;align-items:center;gap:12px;padding:16px;cursor:pointer}.bot-summary::-webkit-details-marker{display:none}.bot-mark{width:40px;height:40px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,#173d4b,#1d2b52);color:#63d8cf;font-size:22px}.bot-summary-copy{display:grid;gap:3px;flex:1}.bot-summary-copy b{font-size:16px}.bot-summary-copy small,.bot-enable-row small,.bot-style small,.bot-help{display:block;color:var(--muted,#8995a8);font-size:11px;font-weight:400}.bot-status{font-size:11px;font-weight:800;letter-spacing:.08em;padding:6px 10px;border-radius:20px;background:#303b4d;color:#aab5c6}.bot-chevron{color:#98a7ba;font-size:20px}.bot-panel[open] .bot-chevron{transform:rotate(180deg)}.bot-content{padding:0 16px 16px;border-top:1px solid #29364a}.bot-enable-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid #29364a}.bot-enable-row small{margin-top:4px}.bot-section{padding:15px 0;border-bottom:1px solid #29364a}.bot-section-title{font-size:13px;font-weight:750;margin-bottom:12px}.bot-section-title span{color:#59cfc2;margin-right:8px;font-size:11px}.bot-style-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px}.bot-style{display:flex;align-items:flex-start;gap:6px;padding:10px 8px;border:1px solid #35445a;border-radius:12px;background:#111d2d;min-width:0}.bot-style:has(input:checked){border-color:#45bfb4;background:rgba(31,112,108,.2);box-shadow:inset 0 0 0 1px rgba(69,191,180,.2)}.bot-style input{margin:2px 0 0;accent-color:#4bd0c2}.bot-style b{font-size:11px;display:block}.bot-style small{font-size:9px;line-height:1.35;margin-top:4px}.bot-content .row2{gap:10px;margin:10px 0}.bot-content label{font-size:12px;color:#c2ccda}.bot-content input:not([type=checkbox]):not([type=radio]),.bot-content select{margin-top:6px;border:1px solid #34445a;border-radius:10px;background:#0d1828;color:#eef4ff;padding:11px 12px;min-height:42px;width:100%;box-sizing:border-box}.bot-content> .bot-section>label{display:block;margin-top:12px}.bot-help{display:inline;font-size:10px;margin-left:4px}.bot-safety{padding:14px 0}.bot-safety label{display:flex;gap:9px;align-items:center;font-size:12px}.bot-safety input{accent-color:#4bd0c2}.bot-safety small{display:block;color:#8995a8;font-size:10px;line-height:1.5;margin:8px 0 0 24px}.bot-footer{display:flex;align-items:center;justify-content:space-between;gap:10px}.bot-paper-note{font-size:9px;color:#55c8b4;letter-spacing:.07em;font-weight:800}.bot-footer .btn{border-radius:11px;padding:11px 16px}.bot-panel[open] .bot-status{background:rgba(32,180,132,.16);color:#53d5aa}
 </style>
 </head>
 <body>
@@ -1443,19 +1450,43 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
     <button data-s="day" onclick="setStyle('day')">Day</button>
     <button data-s="swing" onclick="setStyle('swing')">Swing</button>
   </div>
-  <details class="card" id="botPanel">
-    <summary class="sec" style="cursor:pointer">Auto Trade · Bot <span id="botState" class="tag">OFF</span></summary>
-    <div class="row2"><div><label>Bot</label><select id="botEnabled"><option value="false">OFF</option><option value="true">ON</option></select></div><div><label>Minimum Score</label><input id="botScore" type="number" min="60" max="100" value="75"></div></div>
-    <div class="row2"><div><label>Trade Style</label><select id="botStyle"><option value="scalp">Scalping</option><option value="day" selected>Day Trading</option><option value="swing">Swing Trading</option></select></div><div><label>Minimum Quality</label><select id="botQuality"><option>A+</option><option selected>A</option><option>B</option></select></div></div>
-    <div class="row2"><div><label>Position Value (USDT)</label><input id="botAmount" type="number" min="5" step="any" value="50"></div><div><label>Max Open Bot Trades</label><input id="botMaxOpen" type="number" min="1" max="10" value="2"></div></div>
-    <div class="row2"><div><label>Trailing Stop (%) · 0 = Off</label><input id="botTrail" type="number" min="0" max="5" step="0.1" value="0.8"></div><div><label>Minimum TP1 RR</label><input id="botMinRR" type="number" min="1" max="10" step="0.1" value="1.5"></div></div>
-    <div class="row2"><div><label>Same-Coin Cooldown (min)</label><input id="botCooldown" type="number" min="0" max="1440" value="30"></div><div><label>Max Trades / Coin / Day</label><input id="botMaxSymbolDay" type="number" min="1" max="30" value="3"></div></div>
-    <div class="row2"><div><label>Daily Bot Loss Limit (%)</label><input id="botDailyLoss" type="number" min="0" max="20" step="0.1" value="2"></div><div><label>Minimum Score</label><input id="botScore" type="number" min="60" max="100" value="75"></div></div>
-    <div class="row2"><div><label>Max Open Bot Trades</label><input id="botMaxOpen" type="number" min="1" max="10" value="2"></div><div><label>Trailing Stop (%) · 0 = Off</label><input id="botTrail" type="number" min="0" max="5" step="0.1" value="0.8"></div></div>
-    <label>Target Coins (comma-separated, blank = all)</label><input id="botSymbols" placeholder="BTCUSDT, ETHUSDT">
-    <label><input id="botOpposite" type="checkbox" checked> Close on strong opposite signal</label>
-    <div class="actions"><button class="btn good" onclick="saveBotSettings()">Save Auto Trade</button></div>
-    <p class="hint">Simulated paper trades only — no Binance orders. Bot starts OFF. Existing SL/TP and trailing logic manage positions.</p>
+  <details class="bot-panel" id="botPanel">
+    <summary class="bot-summary">
+      <span class="bot-mark">✦</span>
+      <span class="bot-summary-copy"><b>Auto Trade</b><small>Paper trading · Strategy & risk controls</small></span>
+      <span id="botState" class="bot-status">OFF</span>
+      <span class="bot-chevron">⌄</span>
+    </summary>
+    <div class="bot-content">
+      <div class="bot-enable-row">
+        <div><b>Bot engine</b><small>Automatically enter qualified signals</small></div>
+        <select id="botEnabled" aria-label="Bot status"><option value="false">OFF</option><option value="true">ON</option></select>
+      </div>
+      <div class="bot-section">
+        <div class="bot-section-title"><span>01</span> Strategy</div>
+        <div class="bot-style-grid">
+          <label class="bot-style"><input type="radio" name="botStyleChoice" value="scalp"><span><b>Scalping</b><small>Short moves · 5m–15m</small></span></label>
+          <label class="bot-style"><input type="radio" name="botStyleChoice" value="day" checked><span><b>Day trade</b><small>Intraday · 15m–4h</small></span></label>
+          <label class="bot-style"><input type="radio" name="botStyleChoice" value="swing"><span><b>Swing</b><small>Multi-session · 4h–1d</small></span></label>
+        </div>
+        <input type="hidden" id="botStyle" value="day">
+        <div class="row2"><div><label>Trade direction</label><select id="botDirection"><option value="both">Long + Short</option><option value="long">Long only</option><option value="short">Short only</option></select></div><div><label>Minimum quality</label><select id="botQuality"><option>A+</option><option selected>A</option><option>B</option></select></div></div>
+      </div>
+      <div class="bot-section">
+        <div class="bot-section-title"><span>02</span> Entry filters</div>
+        <div class="row2"><div><label>Minimum signal score</label><input id="botScore" type="number" min="60" max="100" value="75"></div><div><label>Minimum TP1 R:R</label><input id="botMinRR" type="number" min="1" max="10" step="0.1" value="1.5"></div></div>
+        <label>Coin watchlist <small class="bot-help">Blank means all eligible coins</small></label><input id="botSymbols" placeholder="BTCUSDT, ETHUSDT, SOLUSDT">
+      </div>
+      <div class="bot-section">
+        <div class="bot-section-title"><span>03</span> Position & limits</div>
+        <div class="row2"><div><label>Position value (USDT)</label><input id="botAmount" type="number" min="5" max="1000000" step="any" value="50"></div><div><label>Max open bot trades</label><input id="botMaxOpen" type="number" min="1" max="10" value="2"></div></div>
+        <div class="row2"><div><label>Max trades / coin / day</label><input id="botMaxSymbolDay" type="number" min="1" max="30" value="3"></div><div><label>Coin cooldown (minutes)</label><input id="botCooldown" type="number" min="0" max="1440" value="30"></div></div>
+        <div class="row2"><div><label>Daily loss limit (%)</label><input id="botDailyLoss" type="number" min="0" max="20" step="0.1" value="2"></div><div><label>Trailing stop (%) <small class="bot-help">0 = off</small></label><input id="botTrail" type="number" min="0" max="5" step="0.1" value="0.8"></div></div>
+      </div>
+      <div class="bot-safety"><label><input id="botOpposite" type="checkbox" checked> Exit if a strong opposite signal appears</label><small>Daily loss guard pauses new entries after the configured bot loss limit. Existing positions still follow their SL/TP and trailing rules.</small></div>
+      <div class="bot-footer"><span class="bot-paper-note">● SIMULATED PAPER TRADING</span><button class="btn good" onclick="saveBotSettings()">Save bot settings</button></div>
+      <p class="hint">No real Binance orders are placed. Bot starts OFF until you enable it.</p>
+    </div>
   </details>
   <div class="note" id="status">Loading…</div>
   <div id="signalList"></div>
@@ -1545,8 +1576,9 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <script>
 let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
-async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score||75;botQuality.value=c.min_quality||'A';botStyle.value=c.trade_style||'day';botAmount.value=c.amount_usd||50;botMaxOpen.value=c.max_open||2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';}catch(e){}}
-async function saveBotSettings(){const p={enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,trade_style:botStyle.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,min_rr:+botMinRR.value,cooldown_minutes:+botCooldown.value,max_symbol_trades_day:+botMaxSymbolDay.value,max_daily_loss_pct:+botDailyLoss.value,symbols:botSymbols.value,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
+async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score??75;botQuality.value=c.min_quality||'A';botStyle.value=c.trade_style||'day';document.querySelectorAll('input[name="botStyleChoice"]').forEach(x=>x.checked=x.value===botStyle.value);botDirection.value=c.direction||'both';botAmount.value=c.amount_usd??50;botMaxOpen.value=c.max_open??2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';botState.style.color=c.enabled?'#53d5aa':'';}catch(e){}}
+document.addEventListener('change',e=>{if(e.target.matches('input[name="botStyleChoice"]'))botStyle.value=e.target.value;});
+async function saveBotSettings(){const p={enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,trade_style:botStyle.value,direction:botDirection.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,min_rr:+botMinRR.value,cooldown_minutes:+botCooldown.value,max_symbol_trades_day:+botMaxSymbolDay.value,max_daily_loss_pct:+botDailyLoss.value,symbols:botSymbols.value,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';botState.style.color=d.config.enabled?'#53d5aa':'';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
 if('Notification'in window && Notification.permission==='default') Notification.requestPermission();
 
 function speak(text){if(!voiceOn||!('speechSynthesis'in window))return;try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.rate=1;u.lang='en-US';speechSynthesis.speak(u);}catch(e){}}
