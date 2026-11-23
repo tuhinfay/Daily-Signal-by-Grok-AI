@@ -16,6 +16,7 @@ class DailyMoverBoundaryTests(unittest.TestCase):
     def test_movers_use_binance_standard_daily_candle(self):
         client = BinanceClient.__new__(BinanceClient)
         client.rate_limited = False
+        client.futures = True
         client._markets_loaded = True
         client._tickers_cache = {
             "BTC/USDT:USDT": {"quoteVolume": 20_000_000, "last": 110.0}
