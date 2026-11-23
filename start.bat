@@ -60,7 +60,7 @@ if errorlevel 1 (
 REM Wait up to 30 seconds for the API to become healthy before opening the browser.
 set "READY=0"
 for /L %%i in (1,1,30) do (
-  powershell -NoProfile -Command "try { $r=Invoke-WebRequest -UseBasicParsing '%DASHBOARD%/health' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+  powershell -NoProfile -Command "try { $r=Invoke-WebRequest -UseBasicParsing '%DASHBOARD%/health' -TimeoutSec 2; if ($r.StatusCode -eq 200 -and $r.Content -match '"status"\s*:\s*"ok"') { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
   if not errorlevel 1 (
     set "READY=1"
     goto :OPEN_DASHBOARD
@@ -71,6 +71,7 @@ for /L %%i in (1,1,30) do (
 echo Daily Signal did not become healthy within 30 seconds.
 echo Check logs\error.log and logs\server.log for the startup error.
 if exist logs\error.log type logs\error.log
+call "%~dp0stop.bat"
 pause
 exit /b 1
 
