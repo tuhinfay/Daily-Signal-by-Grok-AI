@@ -1732,6 +1732,8 @@ async function loadTrades(){
   if(window._loadingTrades)return;window._loadingTrades=true;
   try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
   const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
+  const selection=window.getSelection();
+  if(selection&&!selection.isCollapsed){window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));return;}
   const chartIsOpen=!!document.querySelector('#tradeList .chartbox[style*="display: block"]');
   const manageIsOpen=document.getElementById('manageBg')?.style.display==='flex';
   if(chartIsOpen||manageIsOpen)return;
