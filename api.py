@@ -1539,6 +1539,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 </section>
 
 <section id="tab-movers" style="display:none">
+  <p class="hint">Change since 06:00 Bangladesh time (daily candle) · Not rolling 24 hours</p>
   <div class="sec">Top gainers</div><div class="mv" id="gainers"></div>
   <div class="sec">Top losers</div><div class="mv" id="losers"></div>
 </section>
