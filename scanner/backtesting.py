@@ -14,7 +14,8 @@ import pandas as pd
 def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
                  fee_rate: float = 0.0005, slippage_rate: float = 0.0002,
                  funding_rate_per_bar=0.0,
-                 risk_fraction: float = 0.005) -> Dict:
+                 risk_fraction: float = 0.005, min_rr: float = 0.0,
+                 max_entry_deviation_atr: Optional[float] = None) -> Dict:
     required = {"open", "high", "low", "close"}
     if frame is None or not required.issubset(frame.columns) or len(frame) < 3:
         raise ValueError("At least three OHLCV bars with OHLC columns are required")
@@ -39,9 +40,20 @@ def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
             continue
         entry = entry_raw * (1 + slippage_rate if side == "LONG" else 1 - slippage_rate)
         risk = abs(entry - stop)
-        if risk <= 0:
+        reward = (target-entry) if side == "LONG" else (entry-target)
+        if risk <= 0 or reward <= 0 or (min_rr > 0 and reward/risk < min_rr):
             i += 1
             continue
+        if max_entry_deviation_atr is not None:
+            try:
+                reference = float(signal.get("reference_entry"))
+                atr_value = float(signal.get("atr"))
+                if atr_value <= 0 or abs(entry_raw-reference)/atr_value > max_entry_deviation_atr:
+                    i += 1
+                    continue
+            except (TypeError, ValueError):
+                i += 1
+                continue
         exit_price, reason, exit_i = None, "END_OF_DATA", len(data)-1
         for j in range(i+1, len(data)):
             bar = data.iloc[j]
