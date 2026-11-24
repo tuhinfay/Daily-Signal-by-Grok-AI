@@ -8,6 +8,7 @@ from .indicators import add_indicators, get_latest
 from .market_regime import classify_regime
 from .scoring import score_candidate, qualify_candidate
 from .data_validator import is_fresh
+from .market_structure import analyze_structure
 
 
 def _num(row, key, default=None):
@@ -55,16 +56,12 @@ def build_v5_evidence(data: Dict, side: str, bias_1d: str, bias_4h: str,
     regime_match = (regime["bias"] == "bull" and direction == "LONG") or (regime["bias"] == "bear" and direction == "SHORT")
     regime_score = min(1.0, float(regime.get("confidence", 0)) / 70.0) if regime_match else 0.0
 
-    close4 = _num(four_h, "close", 0) or 0
-    high4 = _num(four_h, "swing_high_ref", 0) or 0
-    low4 = _num(four_h, "swing_low_ref", 0) or 0
-    ema4 = (_num(four_h, "ema9", 0) or 0) > (_num(four_h, "ema21", 0) or 0)
-    if direction == "SHORT":
-        ema4 = not ema4
-        structure = close4 < low4 if low4 > 0 else False
-    else:
-        structure = close4 > high4 if high4 > 0 else False
-    structure_score = (0.65 if ema4 else 0.0) + (0.35 if structure else 0.0)
+    structure_data = analyze_structure(data.get("4h"))
+    ema_bull = (_num(four_h, "ema9", 0) or 0) > (_num(four_h, "ema21", 0) or 0)
+    ema_aligned = ema_bull if direction == "LONG" else not ema_bull
+    structure_score = (0.30 if ema_aligned else 0.0) + (
+        structure_data["long_score"] if direction == "LONG" else structure_data["short_score"]
+    ) * 0.70
 
     rsi = _num(one_h, "rsi")
     macd = _num(one_h, "macd")
@@ -93,6 +90,7 @@ def build_v5_evidence(data: Dict, side: str, bias_1d: str, bias_4h: str,
         "momentum": momentum_score,
         "volume_futures": volume_score,
         "entry_risk": entry_risk,
+        "structure_detail": structure_data,
     }
 
 
