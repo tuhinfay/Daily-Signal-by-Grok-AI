@@ -47,6 +47,20 @@ _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
 _bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both"}
 
+def _utc_daily_change_pct(df, current_price=None):
+    """Calculate change from Binance Futures' active UTC 1d candle open (BD 06:00)."""
+    if df is None or len(df) == 0:
+        return None
+    try:
+        daily_open = float(df["open"].iloc[-1])
+        daily_price = float(current_price or df["close"].iloc[-1])
+        if daily_open <= 0 or daily_price <= 0:
+            return None
+        return round((daily_price / daily_open - 1.0) * 100.0, 2)
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+
 def _symbol_leverage_cap(symbol: str) -> int:
     """Use a verified symbol tier; keep a conservative 20x cap when unknown."""
     value = _scan_max_leverage.get(str(symbol).upper().replace("/", "").split(":")[0])
@@ -391,11 +405,9 @@ def run_scan(top_n: int = 12):
                     if not r:
                         continue
                     r["market_price"] = px or r["entry"]
-                    daily_df = data.get("1d")
-                    if daily_df is not None and len(daily_df) and float(daily_df["open"].iloc[-1]) > 0:
-                        daily_open = float(daily_df["open"].iloc[-1])
-                        daily_price = float(px or daily_df["close"].iloc[-1])
-                        r["daily_change_pct"] = round((daily_price / daily_open - 1.0) * 100.0, 2)
+                    daily_change_pct = _utc_daily_change_pct(data.get("1d"), px)
+                    if daily_change_pct is not None:
+                        r["daily_change_pct"] = daily_change_pct
                     r["max_leverage"] = max_leverage
                     # Compare the coin's 24h return with BTC to avoid buying relative laggards.
                     coin_df = data.get("1h")
@@ -909,11 +921,9 @@ def analyze_one(symbol: str, style: str = Query("day")):
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
                 "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
     r["market_price"] = px or r["entry"]
-    daily_df = data.get("1d")
-    if daily_df is not None and len(daily_df) and float(daily_df["open"].iloc[-1]) > 0:
-        daily_open = float(daily_df["open"].iloc[-1])
-        daily_price = float(px or daily_df["close"].iloc[-1])
-        r["daily_change_pct"] = round((daily_price / daily_open - 1.0) * 100.0, 2)
+    daily_change_pct = _utc_daily_change_pct(data.get("1d"), px)
+    if daily_change_pct is not None:
+        r["daily_change_pct"] = daily_change_pct
     r["max_leverage"] = lev
     r["liquidity"] = liq
     r["styles"] = [selected_style]
