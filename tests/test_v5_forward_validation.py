@@ -21,6 +21,15 @@ class ForwardValidationTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertEqual(result["closed_trades"], 29)
 
+    def test_forward_metrics_subtract_estimated_round_trip_fees(self):
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=35)
+        trades = [{"status":"CLOSED","closed_at":(start+timedelta(days=i+1)).isoformat(),
+                   "realized_pnl":2.0,"qty":1.0,"entry":100.0,"close_price":100.0}
+                  for i in range(30)]
+        result = evaluate_forward_trades(trades, start=start, end=end, fee_rate=0.0005)
+        self.assertAlmostEqual(result["expectancy_usd"], 1.9, places=4)
+
     def test_mature_sample_reports_metrics(self):
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=35)
