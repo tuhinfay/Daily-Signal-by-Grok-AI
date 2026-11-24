@@ -36,7 +36,7 @@ Implemented on `v5-development`:
 - REST OHLCV ingestion drops the final potentially-forming candle, validates OHLCV values, and requires fresh timestamped 1D/4H/1H/15M history.
 - UNKNOWN market regime fails closed. Hybrid uses 1D bias, 4H structure, 1H setup and 15M confirmed entry.
 - Six weighted evidence categories total 100 points; score bands and the minimum 75 score are enforced independently from hard filters.
-- Causal market-structure module detects prior-range break of structure and liquidity sweep/reclaim patterns using only prior bars for reference.
+- Causal market-structure module detects prior-range break of structure, liquidity sweep/reclaim and confirmed HH/HL or LH/LL swing sequences; pivot labels require right-side confirmation bars to avoid lookahead.
 - Funding, OI and order-book evidence is used only when returned. OI expansion is treated as participation, not directional proof.
 - Final V5 qualification requires fresh data, completed candles, score >=75, mark price within 0.5 ATR of planned entry, mark-referenced RR >=2 and known spread <=0.10%. Missing mark/spread fails closed.
 - Auto scan requests V5-specific mark and exchange lot metadata only for a bounded set of top candidates; V4 scan does not pay those extra requests.
