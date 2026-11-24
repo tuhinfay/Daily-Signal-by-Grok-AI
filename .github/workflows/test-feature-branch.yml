@@ -1,8 +1,9 @@
-name: Test feature branch
+name: Test main and feature branch
 
 on:
   push:
     branches:
+      - main
       - test/feature-fixes
 
 jobs:
