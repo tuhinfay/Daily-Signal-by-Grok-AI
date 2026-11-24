@@ -193,9 +193,10 @@ class BinanceClient:
                 if self.rate_limited:
                     break
                 try:
+                    # USD-M Futures 1d klines use UTC 00:00 by default
+                    # (= Bangladesh 06:00); do not pass Spot-only timezone params.
                     candles = self.exchange.fetch_ohlcv(
-                        self._ccxt_symbol(clean), timeframe="1d", limit=1,
-                        params={"timezone": "0"}
+                        self._ccxt_symbol(clean), timeframe="1d", limit=1
                     )
                     if not candles:
                         continue
@@ -228,12 +229,9 @@ class BinanceClient:
             if self.rate_limited:
                 return None
             ccxt_symbol = self._ccxt_symbol(symbol)
-            # Binance Futures daily candles are aligned to UTC 00:00,
-            # which is Bangladesh time 06:00 (UTC+6). Keep this identical to Binance.
-            candle_params = {"timezone": "0"} if timeframe == "1d" else {}
-            ohlcv = self.exchange.fetch_ohlcv(
-                ccxt_symbol, timeframe=timeframe, limit=limit, params=candle_params
-            )
+            # USD-M Futures 1d klines default to UTC 00:00
+            # (= Bangladesh 06:00); other timeframes use their normal intervals.
+            ohlcv = self.exchange.fetch_ohlcv(ccxt_symbol, timeframe=timeframe, limit=limit)
             if not ohlcv or len(ohlcv) < 30:
                 return None
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
