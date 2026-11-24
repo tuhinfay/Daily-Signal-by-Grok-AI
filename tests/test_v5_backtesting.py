@@ -69,7 +69,7 @@ class V5BacktestingTests(unittest.TestCase):
     def test_below_exchange_minimum_rejected(self):
         result = calculate_position_size(
             balance=10, risk_pct=0.5, entry=100, stop_loss=99,
-            qty_step=0.001, min_qty=0.01, min_notional=5,
+            qty_step=0.001, min_qty=0.01, min_notional=6,
         )
         self.assertFalse(result["ok"])
         self.assertEqual(result["reason"], "BELOW_EXCHANGE_MINIMUM")
