@@ -35,10 +35,19 @@ def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
             continue
         entry_raw = float(data.iloc[i+1]["open"])
         stop, target = float(signal["stop_loss"]), float(signal["take_profit"])
+        try:
+            spread_rate = float(signal.get("spread_pct") or 0.0) / 100.0
+        except (TypeError, ValueError):
+            i += 1
+            continue
+        if not math.isfinite(spread_rate) or spread_rate < 0 or spread_rate >= 0.1:
+            i += 1
+            continue
+        half_cost = slippage_rate + spread_rate/2
         if entry_raw <= 0 or (side == "LONG" and not stop < entry_raw < target) or (side == "SHORT" and not target < entry_raw < stop):
             i += 1
             continue
-        entry = entry_raw * (1 + slippage_rate if side == "LONG" else 1 - slippage_rate)
+        entry = entry_raw * (1 + half_cost if side == "LONG" else 1 - half_cost)
         risk = abs(entry - stop)
         reward = (target-entry) if side == "LONG" else (entry-target)
         if risk <= 0 or reward <= 0 or (min_rr > 0 and reward/risk < min_rr):
@@ -68,7 +77,7 @@ def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
                 break
         if exit_price is None:
             exit_price = float(data.iloc[-1]["close"])
-        exit_price *= (1 - slippage_rate if side == "LONG" else 1 + slippage_rate)
+        exit_price *= (1 - half_cost if side == "LONG" else 1 + half_cost)
         direction = 1 if side == "LONG" else -1
         gross_return = direction * (exit_price-entry) / entry
         bars_held = exit_i - (i+1)
