@@ -18,7 +18,7 @@ class V5CoreTests(unittest.TestCase):
         frame=self.make_frame()
         self.assertEqual(len(closed_candles(frame,last_candle_closed=True)),len(frame))
     def test_bad_ohlc_rejected(self):
-        frame=self.make_frame(); frame.iloc[-2,frame.columns.get_loc("high")]=1
+        frame=self.make_frame(); frame.iloc[-3,frame.columns.get_loc("high")]=1
         self.assertIsNone(closed_candles(frame))
     def test_insufficient_history_rejected(self):
         self.assertIsNone(closed_candles(self.make_frame(20)))
