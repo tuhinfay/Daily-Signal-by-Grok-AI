@@ -61,7 +61,7 @@ def make_v5_signal_fn(symbol: str, frames: Dict[str, pd.DataFrame], *,
             "reference_entry": float(signal["entry"]),
             "atr": float(signal["atr"]),
             "score": int(signal["score"]),
-            "assumed_spread_pct": float(assumed_spread_pct),
+            "spread_pct": float(assumed_spread_pct),
         }
 
     return signal_fn
