@@ -108,7 +108,8 @@ def apply_futures_evidence(evidence: Dict[str, float], side: str,
         observations.append(1.0 if ((direction == "LONG" and funding <= 0.0002) or
                                     (direction == "SHORT" and funding >= -0.0002)) else 0.0)
     if oi_change is not None:
-        observations.append(1.0 if oi_change > 0 else 0.25)
+        # OI expansion signals participation, not direction by itself.
+        observations.append(0.5 if oi_change > 0 else 0.25)
     if imbalance is not None:
         observations.append(1.0 if ((direction == "LONG" and imbalance > 0) or
                                     (direction == "SHORT" and imbalance < 0)) else 0.0)
