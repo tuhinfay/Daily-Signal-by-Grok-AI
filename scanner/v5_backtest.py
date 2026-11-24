@@ -54,6 +54,9 @@ def make_v5_signal_fn(symbol: str, frames: Dict[str, pd.DataFrame], *,
         )
         if not signal or int(signal.get("score") or 0) < config.V5_MIN_SCORE:
             return None
+        regime = ((signal.get("v5_evidence") or {}).get("regime_detail") or {}).get("regime", "UNKNOWN")
+        if str(regime).upper() in ("UNKNOWN", "HIGH_VOLATILITY"):
+            return None
         return {
             "side": signal["side"],
             "stop_loss": float(signal["stop_loss"]),
