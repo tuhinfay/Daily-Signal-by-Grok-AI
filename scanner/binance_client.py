@@ -368,6 +368,31 @@ class BinanceClient:
             print(f"order book {symbol}: {e}")
         return result
 
+
+    def get_order_constraints(self, symbol: str) -> Dict[str, Optional[float]]:
+        """Return public market lot/notional limits without placing or signing an order."""
+        result = {"qty_step": None, "min_qty": None, "max_qty": None, "min_notional": None}
+        try:
+            self._ensure_markets()
+            market = self.exchange.market(self._ccxt_symbol(symbol))
+            precision = (market.get("precision") or {}).get("amount")
+            if precision is not None:
+                if getattr(self.exchange, "precisionMode", None) == getattr(ccxt, "TICK_SIZE", object()):
+                    step = float(precision)
+                else:
+                    step = 10.0 ** (-int(precision))
+                if step > 0:
+                    result["qty_step"] = step
+            limits = market.get("limits") or {}
+            amount_limits = limits.get("amount") or {}
+            cost_limits = limits.get("cost") or {}
+            result["min_qty"] = float(amount_limits["min"]) if amount_limits.get("min") is not None else None
+            result["max_qty"] = float(amount_limits["max"]) if amount_limits.get("max") is not None else None
+            result["min_notional"] = float(cost_limits["min"]) if cost_limits.get("min") is not None else None
+        except Exception as e:
+            print(f"order constraints {symbol}: {e}")
+        return result
+
     def get_market_liquidity(self, symbol: str) -> str:
         """Classify liquidity from the contract's current 24h USDT quote turnover."""
         try:
