@@ -1,6 +1,7 @@
 """Tests for V5 evidence aggregation and hard execution filters."""
 import unittest
-from scanner.v5_analysis import apply_futures_evidence, finalize_v5
+import pandas as pd
+from scanner.v5_analysis import apply_futures_evidence, finalize_v5, validate_v5_frames
 
 
 class V5AnalysisTests(unittest.TestCase):
@@ -39,6 +40,19 @@ class V5AnalysisTests(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertEqual(reason, "SPREAD_TOO_WIDE")
+
+    def test_v5_requires_recent_timestamped_frames(self):
+        now = pd.Timestamp.now(tz="UTC")
+        frames = {}
+        for timeframe, seconds in (("1d", 86400), ("4h", 14400), ("1h", 3600), ("15m", 900)):
+            index = pd.date_range(end=now - pd.Timedelta(minutes=1), periods=55, freq=pd.Timedelta(seconds=seconds))
+            frames[timeframe] = pd.DataFrame({
+                "open": [100.0] * 55, "high": [102.0] * 55,
+                "low": [99.0] * 55, "close": [101.0] * 55, "volume": [10.0] * 55,
+            }, index=index)
+        self.assertTrue(validate_v5_frames(frames))
+        frames["15m"].index = frames["15m"].index - pd.Timedelta(hours=2)
+        self.assertFalse(validate_v5_frames(frames))
 
     def test_rr_below_two_fails(self):
         evidence = {k: 1.0 for k in (
