@@ -21,6 +21,12 @@ def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
         raise ValueError("At least three OHLCV bars with OHLC columns are required")
     if not (0 <= fee_rate < 0.1 and 0 <= slippage_rate < 0.1 and 0 <= risk_fraction <= 1):
         raise ValueError("Invalid fee, slippage or risk settings")
+    if not math.isfinite(float(min_rr)) or min_rr < 0:
+        raise ValueError("min_rr must be finite and non-negative")
+    if max_entry_deviation_atr is not None and (
+        not math.isfinite(float(max_entry_deviation_atr)) or max_entry_deviation_atr < 0
+    ):
+        raise ValueError("max_entry_deviation_atr must be finite and non-negative")
     data = frame.sort_index()
     trades, equity, peak, max_dd = [], 1.0, 1.0, 0.0
     i = 0
