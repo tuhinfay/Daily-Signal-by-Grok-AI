@@ -9,6 +9,7 @@ from .market_regime import classify_regime
 from .scoring import score_candidate, qualify_candidate
 from .data_validator import is_fresh
 from .market_structure import analyze_structure
+import config
 
 
 def _num(row, key, default=None):
@@ -176,6 +177,12 @@ def qualify_v5_signal(signal: Dict, derivatives: Optional[Dict] = None):
     raw_evidence = result.get("v5_evidence") or {}
     regime_detail = raw_evidence.get("regime_detail") or {}
     regime_name = str(regime_detail.get("regime") or "UNKNOWN").upper()
+    try:
+        quote_volume = float(result.get("volume_24h") or 0)
+    except (TypeError, ValueError):
+        quote_volume = 0.0
+    if not math.isfinite(quote_volume) or quote_volume < config.MIN_VOLUME_USDT:
+        return result, False, "INSUFFICIENT_24H_QUOTE_VOLUME"
     if regime_name == "UNKNOWN":
         return result, False, "REGIME_UNAVAILABLE"
     if regime_name == "HIGH_VOLATILITY":
