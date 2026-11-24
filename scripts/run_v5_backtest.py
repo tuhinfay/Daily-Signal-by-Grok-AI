@@ -9,8 +9,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from scanner.backtesting import run_backtest
 from scanner.v5_backtest import make_v5_signal_fn
