@@ -117,6 +117,23 @@ def apply_futures_evidence(evidence: Dict[str, float], side: str,
     return result
 
 
+
+def validate_mark_price(entry: float, mark_price: Optional[float], atr: float,
+                        max_deviation_atr: float = 0.5) -> tuple[bool, str, Optional[float]]:
+    """Reject stale entry plans when a genuine futures mark price is unavailable or too far away."""
+    try:
+        entry, atr = float(entry), float(atr)
+        mark = float(mark_price)
+        if not all(math.isfinite(x) and x > 0 for x in (entry, atr, mark)):
+            return False, "MARK_PRICE_UNAVAILABLE", None
+        deviation = abs(mark-entry)/atr
+        if deviation > max_deviation_atr:
+            return False, "MARK_PRICE_DEVIATION_TOO_LARGE", deviation
+        return True, "MARK_PRICE_CONFIRMED", deviation
+    except (TypeError, ValueError):
+        return False, "MARK_PRICE_UNAVAILABLE", None
+
+
 def finalize_v5(evidence: Dict[str, float], *, rr: float, spread_pct: Optional[float],
                 data_valid: bool, candle_closed: bool):
     """Fail closed if spread is unavailable; never let score override execution-quality filters."""
