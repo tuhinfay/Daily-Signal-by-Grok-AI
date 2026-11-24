@@ -11,7 +11,7 @@ import uvicorn, os, json, traceback, uuid, threading, time as time_mod
 
 from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
-from scanner.v5_analysis import apply_futures_evidence, finalize_v5
+from scanner.v5_analysis import apply_futures_evidence, finalize_v5, reward_risk_at_price
 from scanner.risk_sizing import calculate_position_size
 from scanner.indicators import add_indicators, get_latest
 from scanner import db
@@ -547,13 +547,15 @@ def run_scan(top_n: int = 12):
                     "book_imbalance_pct": item.get("orderbook_imbalance_pct"),
                 }
                 evidence = apply_futures_evidence(item.get("v5_evidence") or {}, item.get("side"), context)
+                actual_rr = reward_risk_at_price(item.get("side"), item.get("mark_price"), item.get("stop_loss"), item.get("tp1"))
                 scored, qualified, reason = finalize_v5(
-                    evidence, rr=float(item.get("rr") or 0),
+                    evidence, rr=actual_rr,
                     spread_pct=item.get("spread_pct"),
                     data_valid=bool(item.get("v5_data_valid") and item.get("v5_evidence")),
                     candle_closed=True, mark_price=item.get("mark_price"),
                     entry=item.get("entry"), atr=item.get("atr"), require_mark_price=True,
                 )
+                item["rr"] = round(actual_rr, 2)
                 item["score"] = scored["score"]
                 item["v5_score_breakdown"] = scored["breakdown"]
                 item["v5_qualification"] = reason
@@ -993,12 +995,16 @@ def analyze_one(symbol: str, style: str = Query("day")):
             {"funding_rate": r["funding_rate"], "oi_change_pct": r["oi_change_1h_pct"],
              "book_imbalance_pct": r["orderbook_imbalance_pct"]},
         )
+        mark_price = client.get_mark_price(sym)
+        actual_rr = reward_risk_at_price(r.get("side"), mark_price, r.get("stop_loss"), r.get("tp1"))
         scored, qualified, reason = finalize_v5(
-            evidence, rr=float(r.get("rr") or 0), spread_pct=r.get("spread_pct"),
+            evidence, rr=actual_rr, spread_pct=r.get("spread_pct"),
             data_valid=bool(r.get("v5_data_valid")), candle_closed=True,
-            mark_price=client.get_mark_price(sym), entry=r.get("entry"),
+            mark_price=mark_price, entry=r.get("entry"),
             atr=r.get("atr"), require_mark_price=True,
         )
+        r["rr"] = round(actual_rr, 2)
+        r["mark_price"] = mark_price
         r["score"] = scored["score"]
         r["quality"] = scored["grade"]
         r["v5_score_breakdown"] = scored["breakdown"]
