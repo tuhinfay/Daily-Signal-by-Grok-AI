@@ -10,7 +10,8 @@ class StubEngine:
     seen = None
     def analyze_pair(self, symbol, data, **kwargs):
         StubEngine.seen = data
-        return {"score":80,"side":"LONG","stop_loss":95,"tp1":110,"entry":100,"atr":2}
+        return {"score":80,"side":"LONG","stop_loss":95,"tp1":110,"entry":100,"atr":2,
+                "v5_evidence":{"regime_detail":{"regime":"STRONG_BULL"}}}
 
 
 class V5BacktestAdapterTests(unittest.TestCase):
