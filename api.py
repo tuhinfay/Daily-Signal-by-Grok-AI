@@ -518,7 +518,7 @@ def run_scan(top_n: int = 12):
                 scored, qualified, reason = finalize_v5(
                     evidence, rr=float(item.get("rr") or 0),
                     spread_pct=item.get("spread_pct"),
-                    data_valid=bool(item.get("v5_evidence")),
+                    data_valid=bool(item.get("v5_data_valid") and item.get("v5_evidence")),
                     candle_closed=True,
                 )
                 item["score"] = scored["score"]
