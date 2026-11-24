@@ -200,6 +200,7 @@ def qualify_v5_signal(signal: Dict, derivatives: Optional[Dict] = None):
     )
     result.update({
         "rr": round(actual_rr, 2), "mark_price": mark,
+        "market_price": mark or result.get("market_price"),
         "score": scored["score"], "quality": scored["grade"],
         "v5_score_breakdown": scored["breakdown"], "v5_qualification": reason,
         "v5_structure": (result.get("v5_evidence") or {}).get("structure_detail"),
