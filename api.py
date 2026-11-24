@@ -996,7 +996,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
             {"funding_rate": r["funding_rate"], "oi_change_pct": r["oi_change_1h_pct"],
              "book_imbalance_pct": r["orderbook_imbalance_pct"]},
         )
-        mark_price = client.get_mark_price(sym)
+        mark_price = derivatives.get("mark_price") or client.get_mark_price(sym)
         actual_rr = reward_risk_at_price(r.get("side"), mark_price, r.get("stop_loss"), r.get("tp1"))
         scored, qualified, reason = finalize_v5(
             evidence, rr=actual_rr, spread_pct=r.get("spread_pct"),
