@@ -849,6 +849,35 @@ def price_monitor_loop():
         time_mod.sleep(2)
 
 
+def daily_open_cache_loop():
+    """Refresh daily-open context off the request path so My Trades stays responsive."""
+    client = None
+    while _monitor_running:
+        try:
+            symbols = sorted({
+                str(t.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
+                for t in _trades.values()
+                if t.get("status") == "OPEN" and t.get("symbol")
+            })
+            now = time_mod.time()
+            for symbol in symbols:
+                cached = _daily_open_cache.get(symbol)
+                if cached and now - float(cached.get("ts", 0)) < 60:
+                    continue
+                try:
+                    client = client or BinanceClient(futures=True)
+                    daily_df = client.fetch_ohlcv(symbol, timeframe="1d", limit=31)
+                    if daily_df is not None and len(daily_df):
+                        daily_open = float(daily_df["open"].iloc[-1])
+                        if daily_open > 0:
+                            _daily_open_cache[symbol] = {"open": daily_open, "ts": now}
+                except Exception as exc:
+                    print(f"[trade-daily-change] {symbol}: {exc}")
+        except Exception as exc:
+            print(f"[trade-daily-cache] cycle failed: {exc}")
+        time_mod.sleep(15)
+
+
 @app.on_event("startup")
 def startup():
     global _monitor_running, _account, _trades
@@ -872,6 +901,7 @@ def startup():
     _monitor_running = True
     threading.Thread(target=auto_scan_loop, daemon=True).start()
     threading.Thread(target=price_monitor_loop, daemon=True).start()
+    threading.Thread(target=daily_open_cache_loop, daemon=True).start()
 
 
 @app.on_event("shutdown")
