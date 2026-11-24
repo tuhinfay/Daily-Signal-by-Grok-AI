@@ -6,6 +6,7 @@ from scanner.market_structure import analyze_structure
 from scanner.backtesting import run_backtest, walk_forward_splits, run_walk_forward
 from scanner.risk_sizing import calculate_position_size
 from scanner.v5_analysis import validate_mark_price, reward_risk_at_price
+from scanner.binance_client import BinanceClient
 
 
 class V5BacktestingTests(unittest.TestCase):
@@ -91,6 +92,34 @@ class V5BacktestingTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "MARK_PRICE_DEVIATION_TOO_LARGE")
         self.assertEqual(reward_risk_at_price("LONG", 101, 95, 113), 2.0)
+
+    def test_mark_price_never_falls_back_to_last_trade(self):
+        class Exchange:
+            has = {}
+        client = object.__new__(BinanceClient)
+        client.rate_limited = False
+        client.exchange = Exchange()
+        client._tickers_cache = {"BTC/USDT:USDT": {"last": 100.0, "info": {}}}
+        self.assertIsNone(client.get_mark_price("BTCUSDT"))
+        client._tickers_cache["BTC/USDT:USDT"]["mark"] = 99.5
+        self.assertEqual(client.get_mark_price("BTCUSDT"), 99.5)
+
+    def test_exchange_lot_rules_are_extracted(self):
+        class Exchange:
+            precisionMode = 2
+            has = {}
+            def market(self, symbol):
+                return {
+                    "precision":{"amount":3},
+                    "limits":{"amount":{"min":0.01,"max":1000},"cost":{"min":5}},
+                }
+        client = object.__new__(BinanceClient)
+        client._markets_loaded = True
+        client.exchange = Exchange()
+        result = client.get_order_constraints("BTCUSDT")
+        self.assertEqual(result["qty_step"], 0.001)
+        self.assertEqual(result["min_qty"], 0.01)
+        self.assertEqual(result["min_notional"], 5.0)
 
     def test_liquidity_sweep_is_detected(self):
         df = self.frame(30)
