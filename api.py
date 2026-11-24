@@ -45,6 +45,7 @@ _price_monitor_status: Dict[str, Any] = {
 _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
+_daily_open_cache: Dict[str, Dict[str, float]] = {}
 _bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both"}
 
 def _utc_daily_change_pct(df, current_price=None):
@@ -58,6 +59,17 @@ def _utc_daily_change_pct(df, current_price=None):
             return None
         return round((daily_price / daily_open - 1.0) * 100.0, 2)
     except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+
+def _daily_change_from_open(daily_open, current_price):
+    try:
+        daily_open = float(daily_open or 0)
+        current_price = float(current_price or 0)
+        if daily_open <= 0 or current_price <= 0:
+            return None
+        return round((current_price / daily_open - 1.0) * 100.0, 2)
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -980,7 +992,36 @@ async def clear_trade_history():
 @app.get("/api/trades")
 async def api_trades():
     _calc_equity()
-    return {"trades": list(_trades.values()), "account": _account, "stats": _stats()}
+    trades = [dict(trade) for trade in _trades.values()]
+    open_symbols = sorted({str(t.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
+                           for t in trades if t.get("status") == "OPEN" and t.get("symbol")})
+    client = None
+    now = time_mod.time()
+    for symbol in open_symbols:
+        cached = _daily_open_cache.get(symbol)
+        if not cached or now - float(cached.get("ts", 0)) >= 60:
+            try:
+                client = client or BinanceClient(futures=True)
+                daily_df = client.fetch_ohlcv(symbol, timeframe="1d", limit=31)
+                if daily_df is not None and len(daily_df):
+                    daily_open = float(daily_df["open"].iloc[-1])
+                    if daily_open > 0:
+                        _daily_open_cache[symbol] = {"open": daily_open, "ts": now}
+            except Exception as e:
+                print(f"[trade-daily-change] {symbol}: {e}")
+    for trade in trades:
+        if trade.get("status") != "OPEN":
+            continue
+        symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
+        cached = _daily_open_cache.get(symbol)
+        if cached:
+            price = trade.get("current_price")
+            if not price and client is not None:
+                price = client.get_current_price(symbol)
+            daily_pct = _daily_change_from_open(cached.get("open"), price)
+            if daily_pct is not None:
+                trade["daily_change_pct"] = daily_pct
+    return {"trades": trades, "account": _account, "stats": _stats()}
 
 
 @app.get("/api/market-price/{symbol}")
@@ -1843,6 +1884,7 @@ async function loadTrades(){
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
         <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
+        <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'% 1D'}</span>
         ${t.auto_trade?'<span class="tag" style="background:#164e3b;color:#6ee7b7">BOT</span>':''}
         ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
