@@ -43,6 +43,24 @@ class V5BacktestingTests(unittest.TestCase):
         )
         self.assertEqual(result["trades"][0]["reason"], "STOP")
 
+    def test_backtest_rejects_next_open_rr_degradation(self):
+        df = self.frame(4)
+        df.iloc[1, df.columns.get_loc("open")] = 101
+        fn = lambda prefix, i: {"side":"LONG","stop_loss":95,"take_profit":110} if i == 0 else None
+        result = run_backtest(df, fn, fee_rate=0, slippage_rate=0, min_rr=2.0)
+        self.assertEqual(result["trade_count"], 0)
+
+    def test_backtest_rejects_large_gap_from_signal_close(self):
+        df = self.frame(4)
+        df.iloc[1, df.columns.get_loc("open")] = 103
+        fn = lambda prefix, i: {"side":"LONG","stop_loss":95,"take_profit":115,
+                                "reference_entry":100,"atr":1} if i == 0 else None
+        result = run_backtest(
+            df, fn, fee_rate=0, slippage_rate=0,
+            min_rr=2.0, max_entry_deviation_atr=0.5,
+        )
+        self.assertEqual(result["trade_count"], 0)
+
     def test_fees_reduce_net_return(self):
         df = self.frame(4)
         df.iloc[1, df.columns.get_loc("high")] = 106
