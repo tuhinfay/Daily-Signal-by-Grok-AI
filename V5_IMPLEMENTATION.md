@@ -33,24 +33,24 @@ Do not promote V5 to the default scanner until integration tests and out-of-samp
 ## Current branch status
 
 Implemented on `v5-development`:
-- REST OHLCV ingestion drops the final, potentially-forming candle and validates OHLCV values.
-- V5 requires recent timestamped 1D/4H/1H/15M frames before producing a Hybrid signal.
-- Added regime classification with UNKNOWN fail-safe.
-- Wired six weighted evidence categories into Hybrid scoring: regime, HTF alignment, structure, momentum, volume/futures and entry/risk.
-- Added bounded futures evidence blending for funding, open-interest change and order-book imbalance when those observations are returned by Binance.
-- Final V5 qualification enforces score >=75, RR >=2, closed/valid data and a known spread <=0.10%. Missing spread fails closed.
-- Existing scan pipeline requests derivatives/order-book context for at most four unique top-ranked symbols to bound API use. Other symbols without spread observations are intentionally not qualified for V5.
-- Hybrid is available in manual analysis and paper-trading selection; both automatic and manual Hybrid analysis use the same final spread/RR/data qualification.
-- Hybrid paper bot uses the configured 0.5% balance risk sizing, caps concurrent V5 paper positions at two, and skips DCA. Paper trades remain simulated; no live order placement was added.
-- Signal cards expose the six-category V5 score breakdown.
-- Added unit tests for core validation, weighted evidence and hard-filter behavior; GitHub Actions runs unittest discovery.
+- REST OHLCV ingestion drops the final potentially-forming candle, validates OHLCV values, and requires fresh timestamped 1D/4H/1H/15M history.
+- UNKNOWN market regime fails closed. Hybrid uses 1D bias, 4H structure, 1H setup and 15M confirmed entry.
+- Six weighted evidence categories total 100 points; score bands and the minimum 75 score are enforced independently from hard filters.
+- Causal market-structure module detects prior-range break of structure and liquidity sweep/reclaim patterns using only prior bars for reference.
+- Funding, OI and order-book evidence is used only when returned. OI expansion is treated as participation, not directional proof.
+- Final V5 qualification requires fresh data, completed candles, score >=75, mark price within 0.5 ATR of planned entry, mark-referenced RR >=2 and known spread <=0.10%. Missing mark/spread fails closed.
+- Auto scan requests V5-specific mark and exchange lot metadata only for a bounded set of top candidates; V4 scan does not pay those extra requests.
+- Hybrid paper bot uses mark-referenced entry, 0.5% risk sizing rounded down to exchange quantity step, minimum quantity/notional checks, maximum two open V5 paper positions and no DCA.
+- No live order execution has been introduced. Signal cards expose the six-category score breakdown.
+- Added fee/slippage/funding-aware causal backtest engine. It enters at the next bar open, uses conservative stop-first handling if SL and TP hit in one bar, and reports win rate, profit factor, expectancy and max drawdown.
+- Added expanding-window walk-forward folds and a runner that fits on train/validation windows and reports untouched test windows.
+- Added a 30-day forward-paper validation endpoint: `GET /api/v5/forward-validation`. It requires at least 30 elapsed days and 30 closed paper trades before reporting READY_FOR_REVIEW; it cannot be pre-completed by code.
+- Added unit tests for data validation, regime/scoring, structure, backtest costs/lookahead, walk-forward, mark-price behavior, lot constraints, risk sizing and forward validation.
 
-Still outstanding before V5 can be enabled by default:
-- Add end-to-end integration tests for the API scan and paper-bot path with mocked Binance responses (the current 28-test unit suite passes in Python 3.12).
-- Improve structure analysis beyond the current confirmed rolling swing/breakout references (e.g. swing sequence, liquidity sweeps and retests).
-- Add mark-price-aware entry checks and verify risk sizing against exchange precision/minimum-notional constraints.
-- Add historical backtesting with fees, slippage and funding; add walk-forward and 30-day paper-forward evaluation.
-- Expand analysis output/dashboard to expose hard-filter rejection reasons and full regime/futures context more clearly.
-- Calibrate score thresholds, RR and spread limits using out-of-sample results rather than treating initial values as proven.
+## Remaining operational validation
+- Deploy this branch to a staging Render/VPS environment and run the paper bot with V5 enabled only in that isolated staging environment.
+- Collect at least 30 real elapsed days and 30 closed V5 paper trades using `/api/v5/forward-validation`; inspect results by side, grade and market regime before promotion.
+- Run end-to-end tests against a mocked full Binance scan + paper-bot cycle. The current automated suite covers individual components but does not yet replace staging validation.
+- Threshold calibration still requires a separate out-of-sample dataset; initial score, RR, spread and mark-deviation thresholds are not proven profitable.
 
-Keep `V5_ENABLED=false` until integration tests and out-of-sample validation pass. Score is a heuristic, not a win-probability estimate. No live exchange order execution is part of this branch.
+Keep `V5_ENABLED=false` in the production branch until the operational and out-of-sample gates above are satisfied. Score is a heuristic, not a win-probability estimate. No live exchange order execution is part of this branch.
