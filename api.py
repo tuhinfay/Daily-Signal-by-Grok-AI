@@ -992,7 +992,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     if not r:
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
                 "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
-    r["market_price"] = px or r["entry"]
+    r["market_price"] = (r.get("mark_price") if selected_style == "hybrid" else None) or px or r["entry"]
     daily_change_pct = _utc_daily_change_pct(data.get("1d"), px)
     if daily_change_pct is not None:
         r["daily_change_pct"] = daily_change_pct
