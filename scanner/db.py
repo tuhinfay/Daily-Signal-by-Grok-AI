@@ -44,11 +44,9 @@ def _detect_backend() -> str:
     if _backend:
         return _backend
     url = _database_url()
-    if url:
-        if not url.startswith(("postgres://", "postgresql://")):
-            raise RuntimeError("DATABASE_URL must use postgres:// or postgresql://; refusing to switch databases.")
-        pool = None
+    if url.startswith("postgres"):
         try:
+            import psycopg
             from psycopg.rows import dict_row
             from psycopg_pool import ConnectionPool
 
@@ -67,14 +65,7 @@ def _detect_backend() -> str:
             print("[db] Using PostgreSQL with warm connection pool (DATABASE_URL)")
             return _backend
         except Exception as e:
-            if pool is not None:
-                try:
-                    pool.close()
-                except Exception:
-                    pass
-            # Never silently switch a configured Neon/Postgres app to an empty
-            # local SQLite file; fail startup so the database problem is visible.
-            raise RuntimeError(f"Configured PostgreSQL database is unavailable: {e}") from e
+            print(f"[db] Postgres unavailable ({e}); falling back to SQLite")
     _backend = "sqlite"
     print(f"[db] Using SQLite at {_sqlite_path}")
     return _backend
@@ -85,7 +76,6 @@ def _pg_conn():
 
 
 def _sqlite_conn():
-    os.makedirs(os.path.dirname(os.path.abspath(_sqlite_path)), exist_ok=True)
     c = sqlite3.connect(_sqlite_path, check_same_thread=False)
     c.row_factory = sqlite3.Row
     return c

@@ -4,7 +4,6 @@ import ccxt
 import os
 import re
 import time
-from datetime import datetime, timezone
 import pandas as pd
 from typing import List, Optional, Tuple, Dict
 
@@ -160,7 +159,7 @@ class BinanceClient:
         ][:top_n]
 
     def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
-        """Rank movers from Binance UTC daily candle (06:00 Bangladesh time)."""
+        """Rank liquid USDT-M contracts from the current UTC daily candle (00:00 UTC = 06:00 Bangladesh)."""
         gainers, losers = [], []
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
@@ -188,8 +187,7 @@ class BinanceClient:
                     candidates.append((clean, volume, last))
             candidates.sort(key=lambda row: row[1], reverse=True)
 
-            # Binance's standard 1d candle opens at 00:00 UTC = 06:00 Bangladesh time.
-            # Use that daily candle's open to match Binance's standard daily boundary.
+            # Check the top 40 contracts by quote volume using their current UTC daily candle (BD 06:00).
             rows = []
             for clean, volume, last in candidates[:40]:
                 if self.rate_limited:
@@ -209,11 +207,11 @@ class BinanceClient:
                         "change": round(change, 4),
                         "volume": volume,
                         "price": last,
-                        "period": "Binance UTC daily (BD 06:00)",
+                        "period": "UTC daily candle (BD 06:00)",
                     })
                 except Exception as e:
                     self._mark_rate_limit(e)
-                    print(f"mover Binance UTC daily candle {clean}: {e}")
+                    print(f"mover daily candle {clean}: {e}")
                     if self.rate_limited:
                         break
             rows.sort(key=lambda row: row["change"], reverse=True)

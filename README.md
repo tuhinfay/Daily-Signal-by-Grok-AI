@@ -29,7 +29,7 @@ python -m venv .venv
 | File | Action |
 |------|--------|
 | `start.bat` | Starts API on **port 8083** (background), writes `runtime.pid`, logs in `logs\` |
-| `stop.bat` | Stops only the recorded PID after verifying it is this project's Uvicorn process |
+| `stop.bat` | Stops by PID **and** frees port 8083 if PID was stale |
 
 ```bat
 start.bat
@@ -55,9 +55,7 @@ start.bat
 | `DATABASE_URL` | Storage |
 |----------------|----------|
 | Not set | SQLite (may reset on free Render redeploy) |
-| Valid Neon/Postgres URL | PostgreSQL — persists account + trades |
-
-When a PostgreSQL URL is configured but the database cannot be reached, startup fails with a clear error instead of silently switching to an empty local SQLite database. This prevents data from appearing to disappear or being split across two databases.
+| Neon/Postgres URL | PostgreSQL — persists account + trades |
 
 ### Steps
 
@@ -70,9 +68,9 @@ When a PostgreSQL URL is configured but the database cannot be reached, startup 
 4. Start: `uvicorn api:app --host 0.0.0.0 --port $PORT`
 5. Redeploy
 
-Logs should show: `[db] Using PostgreSQL with warm connection pool (DATABASE_URL)`
+Logs should show: `[db] Using PostgreSQL (DATABASE_URL)`
 
-If the URL is wrong or Neon is temporarily unavailable, check the Render logs and restore the database connection; the app intentionally does not fall back to SQLite.
+If URL is wrong, app falls back to SQLite automatically.
 
 ---
 
