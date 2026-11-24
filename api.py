@@ -1834,7 +1834,9 @@ async function loadTrades(){
 <div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmt(t.liquidation_price):"—"}</strong></div>
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>Margin</em><strong>$${fmt(t.margin)}</strong></div>
+        <div><em>TP2</em><strong>${t.tp2??'—'}</strong></div>
+        <div><em>TP2 PnL</em><strong>${t.tp2?((Number(t.realized_pnl)||0)+(t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))*(Number(t.qty)||0)):'—'}</strong></div>
+        <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
         <div><em>PnL%</em><strong class="${up?'up':'dn'}">${(Number(t.margin)>0?((Number(t.unrealized_pnl)||0)/Number(t.margin))*100:(Number(t.pnl_pct)||0)).toFixed(2)}%</strong></div>
@@ -1852,8 +1854,10 @@ async function loadTrades(){
       <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
   if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
     const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
+    const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
-    return '<div class="history-trade"><div class="head"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> <b>'+t.symbol+'</b> '+(t.auto_trade?'<span class="tag">BOT</span>':'')+' · '+(t.hit||'CLOSED')+'</span><b style="color:'+(pnl>=0?'var(--gn)':'var(--rd)')+'">'+(pnl>=0?'+':'')+'$'+fmt(pnl)+'</b></div><div class="vals"><div><em>Entry Price</em><strong>'+fmtPrice(t.entry)+'</strong></div><div><em>Close Price</em><strong>'+(exit?fmtPrice(exit):'—')+'</strong></div><div><em>Quantity</em><strong>'+fmt(t.qty)+'</strong></div><div><em>Trade Amount</em><strong><strong>'+(t.created_at?new Date(t.created_at).toLocaleString():'—')+'</strong></div><div><em>Closed</em><strong>'+closedAt+'</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade(\''+t.id+'\')">Share Trade</button></div></div>';
+    const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
+    return '<div class="history-trade"><div class="head"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> <b>'+t.symbol+'</b> '+(t.auto_trade?'<span class="tag">BOT</span>':'')+' · '+(t.hit||'CLOSED')+'</span><b style="color:'+(pnl>=0?'var(--gn)':'var(--rd)')+'">'+(pnl>=0?'+':'')+'$'+fmt(pnl)+'</b></div><div class="vals"><div><em>Entry Price</em><strong>'+fmtPrice(t.entry)+'</strong></div><div><em>Close Price</em><strong>'+(exit?fmtPrice(exit):'—')+'</strong></div><div><em>Quantity</em><strong>'+fmt(t.qty)+'</strong></div><div><em>Trade Amount</em><strong>$'+fmt(tradeAmount)+' USDT</strong></div><div><em>Opened</em><strong>'+openedAt+'</strong></div><div><em>Closed</em><strong>'+closedAt+'</strong></div></div></div>;
   }).join('');h+='</div>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
