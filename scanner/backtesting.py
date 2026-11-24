@@ -83,13 +83,29 @@ def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
             "max_drawdown": max_dd, "ending_equity": equity}
 
 
-def walk_forward_splits(frame: pd.DataFrame, *, train_fraction: float = 0.6,
-                        validation_fraction: float = 0.2) -> List[Dict]:
-    """Chronological, non-overlapping train/validation/test ranges; no random shuffle."""
-    if frame is None or len(frame) < 10 or not (0 < train_fraction < 1 and 0 < validation_fraction < 1 and train_fraction + validation_fraction < 1):
-        raise ValueError("Invalid frame size or split fractions")
+def walk_forward_splits(frame: pd.DataFrame, *, train_fraction: float = 0.5,
+                        validation_fraction: float = 0.2, test_fraction: float = 0.1,
+                        step_fraction: float = 0.1) -> List[Dict]:
+    """Generate expanding-train, rolling validation/test windows in chronological order."""
+    if frame is None or len(frame) < 20:
+        raise ValueError("At least 20 bars are required for walk-forward evaluation")
+    fractions = (train_fraction, validation_fraction, test_fraction, step_fraction)
+    if any(not 0 < x < 1 for x in fractions) or train_fraction + validation_fraction + test_fraction > 1:
+        raise ValueError("Invalid walk-forward fractions")
     n = len(frame)
-    a, b = int(n*train_fraction), int(n*(train_fraction+validation_fraction))
-    return [{"name":"train","frame":frame.iloc[:a].copy()},
-            {"name":"validation","frame":frame.iloc[a:b].copy()},
-            {"name":"test","frame":frame.iloc[b:].copy()}]
+    train_n = max(10, int(n * train_fraction))
+    val_n = max(2, int(n * validation_fraction))
+    test_n = max(2, int(n * test_fraction))
+    step_n = max(1, int(n * step_fraction))
+    folds, origin = [], train_n
+    while origin + val_n + test_n <= n:
+        folds.append({
+            "fold": len(folds) + 1,
+            "train": frame.iloc[:origin].copy(),
+            "validation": frame.iloc[origin:origin+val_n].copy(),
+            "test": frame.iloc[origin+val_n:origin+val_n+test_n].copy(),
+        })
+        origin += step_n
+    if not folds:
+        raise ValueError("Not enough rows to create a complete walk-forward fold")
+    return folds
