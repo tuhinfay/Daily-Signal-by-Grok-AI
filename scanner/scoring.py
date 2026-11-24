@@ -1,4 +1,5 @@
 """V5 quality-first scoring and hard trade qualification."""
+import math
 WEIGHTS = {
     "market_regime": 15, "htf_alignment": 20, "market_structure": 20,
     "momentum": 15, "volume_futures": 15, "entry_risk": 15,
@@ -29,9 +30,12 @@ def qualify_candidate(scored, *, rr, data_valid, candle_closed, spread_pct=0.0,
     if not candle_closed:
         return False, "CANDLE_NOT_CLOSED"
     try:
-        if float(spread_pct) > max_spread_pct:
+        spread_value, rr_value = float(spread_pct), float(rr)
+        if not math.isfinite(spread_value) or not math.isfinite(rr_value) or spread_value < 0 or rr_value < 0:
+            return False, "INVALID_RISK_INPUT"
+        if spread_value > max_spread_pct:
             return False, "SPREAD_TOO_WIDE"
-        if float(rr) < min_rr:
+        if rr_value < min_rr:
             return False, "RISK_REWARD_BELOW_MINIMUM"
         if int(scored.get("score", 0)) < min_score:
             return False, "QUALITY_SCORE_BELOW_MINIMUM"
