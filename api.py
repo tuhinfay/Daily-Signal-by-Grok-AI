@@ -965,7 +965,8 @@ def analyze_one(symbol: str, style: str = Query("day")):
             {"ok": False, "error": f"Insufficient Binance Futures candles for {sym}; missing: {', '.join(missing)}. Auto Scan does not control manual analysis."},
             status_code=503,
         )
-    r = engine.analyze_pair(sym, data, volume_24h=0, style=selected_style)
+    volume_24h = client.get_quote_volume_24h(sym) or 0
+    r = engine.analyze_pair(sym, data, volume_24h=volume_24h, style=selected_style)
     if r and selected_style == "hybrid":
         derivatives = client.get_derivatives_context(sym)
         book = client.get_order_book_context(sym) if not client.rate_limited else {}
@@ -987,7 +988,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     px = client.get_current_price(sym)
     lev = client.get_max_leverage(sym)
     _scan_max_leverage[sym] = lev
-    liq = client.get_market_liquidity(sym)
+    liq = ("VERY HIGH" if volume_24h >= 1e8 else "HIGH" if volume_24h >= 4e7 else "MED" if volume_24h >= 1.2e7 else "LOW" if volume_24h > 0 else "UNKNOWN")
     if not r:
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
                 "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
