@@ -1464,6 +1464,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .score{font-size:16px;font-weight:900;color:var(--cyan)}
 .tag{display:inline-block;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin-left:4px;background:#152033;color:var(--mut)}
 .tag.q{background:#0b3b2e;color:#6ee7b7}
+.tag.up{background:#064e3b;color:#6ee7b7}.tag.dn{background:#881337;color:#fecdd3}
 .sub{margin-top:5px;color:var(--mut);font-size:11px;line-height:1.4}
 .vals{display:flex;flex-wrap:wrap;gap:12px 16px;margin-top:10px}
 .vals div em{display:block;font-style:normal;font-size:9px;color:var(--mut);text-transform:uppercase}
