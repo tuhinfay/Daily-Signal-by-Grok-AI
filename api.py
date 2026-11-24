@@ -257,7 +257,7 @@ def _run_paper_auto_bot(signals):
     min_quality = quality.get(str(cfg.get("min_quality", "A")).upper(), 2)
     symbols = {x.strip().upper().replace("/", "") for x in str(cfg.get("symbols") or "").split(",") if x.strip()}
     strategy = str(cfg.get("trade_style") or "day").lower()
-    if strategy not in ("scalp", "day", "swing"): strategy = "day"
+    if strategy not in ("scalp", "day", "swing", "hybrid"): strategy = "day"
     now = datetime.now(timezone.utc)
     today = now.date()
     cooldown = max(0, min(int(cfg.get("cooldown_minutes") or 0), 1440))
@@ -1567,6 +1567,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="scalp"><span><b>Scalping</b><small>Short moves · 5m–15m</small></span></label>
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="day" checked><span><b>Day trade</b><small>Intraday · 15m–4h</small></span></label>
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="swing"><span><b>Swing</b><small>Multi-session · 4h–1d</small></span></label>
+          <label class="bot-style"><input type="radio" name="botStyleChoice" value="hybrid"><span><b>Hybrid V5</b><small>Trend + intraday confirmation</small></span></label>
         </div>
         <input type="hidden" id="botStyle" value="day">
         <div class="row2"><div><label>Trade direction</label><select id="botDirection"><option value="both">Long + Short</option><option value="long">Long only</option><option value="short">Short only</option></select></div><div><label>Minimum quality</label><select id="botQuality"><option>A+</option><option selected>A</option><option>B</option></select></div></div>
