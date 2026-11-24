@@ -53,4 +53,4 @@ Implemented on `v5-development`:
 - Run end-to-end tests against a mocked full Binance scan + paper-bot cycle. The current automated suite covers individual components but does not yet replace staging validation.
 - Threshold calibration still requires a separate out-of-sample dataset; initial score, RR, spread and mark-deviation thresholds are not proven profitable.
 
-Keep `V5_ENABLED=false` in the production branch until the operational and out-of-sample gates above are satisfied. Score is a heuristic, not a win-probability estimate. No live exchange order execution is part of this branch.
+`V5_ENABLED` reads an environment variable and defaults to false. Set `V5_ENABLED=true` only in an isolated staging deployment for paper-forward collection. Keep it unset/false in production until the operational and out-of-sample gates above are satisfied. Score is a heuristic, not a win-probability estimate. No live exchange order execution is part of this branch.
