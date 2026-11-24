@@ -1,4 +1,5 @@
 """Daily Signal by Grok AI"""
+import os
 
 TOP_N_PAIRS = 30
 MIN_VOLUME_USDT = 12_000_000
@@ -55,7 +56,7 @@ STRUCTURE_WINDOW = 20
 
 
 # Daily Signal V5 opt-in defaults; V4 remains the production path until validated.
-V5_ENABLED = False
+V5_ENABLED = os.getenv("V5_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
 V5_TRADING_STYLE = "hybrid"
 V5_SIGNAL_FREQUENCY = "quality"
 V5_MODE = "both"  # signal + simulated paper trading; no live orders
