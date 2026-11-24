@@ -7,6 +7,8 @@ import time
 import pandas as pd
 from typing import List, Optional, Tuple, Dict
 
+from .data_validator import closed_candles
+
 
 class BinanceClient:
     def __init__(self, futures: bool = True):
@@ -239,7 +241,8 @@ class BinanceClient:
             df.set_index("timestamp", inplace=True)
             for c in ("open", "high", "low", "close", "volume"):
                 df[c] = pd.to_numeric(df[c], errors="coerce")
-            return df.dropna()
+            # REST OHLCV includes the currently forming final candle.
+            return closed_candles(df, last_candle_closed=False, min_rows=30)
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"ohlcv {symbol} {timeframe}: {e}")
