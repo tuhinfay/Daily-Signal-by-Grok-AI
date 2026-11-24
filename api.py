@@ -1820,6 +1820,7 @@ function toggleChart(id,sym){
 function cardHTML(s){
   const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
   const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
+  const v5Details=s.v5_score_breakdown?'<div class="sub">V5 Score · '+Object.entries(s.v5_score_breakdown).map(([k,v])=>k.replaceAll('_',' ')+' '+v.points+'/'+v.weight).join(' · ')+'</div>':'';
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
       <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span><span class="tag ${(Number(s.daily_change_pct)||0)>=0?'up':'dn'}">${s.daily_change_pct==null?'—':(Number(s.daily_change_pct)>=0?'+':'')+Number(s.daily_change_pct).toFixed(2)+'% 1D'}</span></div>
@@ -1835,6 +1836,7 @@ function cardHTML(s){
       <div><em>TP2 RR</em><strong>1:${(s.rr_tp2??'—')}</strong></div>
     </div>
     <div class="sub" style="margin-top:8px">${s.summary||''}</div>
+    ${v5Details}
     <div class="sub">BTC ${s.market_regime||'—'} · OI 1h ${s.oi_change_1h_pct==null?'—':s.oi_change_1h_pct+'%'} · Book ${s.orderbook_imbalance_pct==null?'—':s.orderbook_imbalance_pct+'%'} · Spread ${s.spread_pct==null?'—':s.spread_pct+'%'}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
