@@ -1834,7 +1834,6 @@ async function loadTrades(){
 <div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmt(t.liquidation_price):"—"}</strong></div>
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
-        <div><em>TP2</em><strong>${t.tp2??'—'}</strong></div>
                 <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
