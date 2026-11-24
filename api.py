@@ -1819,7 +1819,6 @@ async function loadTrades(){
   window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
   if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
-    const tp2Pnl=t.tp2?(Number(t.realized_pnl||0)+(t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))*(Number(t.qty)||0)):null;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
@@ -1836,7 +1835,7 @@ async function loadTrades(){
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
         <div><em>TP2</em><strong>${t.tp2??'—'}</strong></div>
-        <div><em>TP2 PnL</em><strong class="${tp2Pnl==null?'':tp2Pnl>=0?'up':'dn'}">${tp2Pnl==null?'—':(tp2Pnl>=0?'+':'')+'$'+fmt(tp2Pnl)}</strong></div>
+        <div><em>TP2 PnL</em><strong>${t.tp2?((Number(t.realized_pnl)||0)+(t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))*(Number(t.qty)||0)):'—'}</strong></div>
         <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
