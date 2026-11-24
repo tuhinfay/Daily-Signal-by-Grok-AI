@@ -273,7 +273,7 @@ class SignalEngine:
         side = score = None
         reasons = []
         margin = 3
-        required_score = config.V5_MIN_SCORE if style == "hybrid" else self.min_score
+        required_score = config.MIN_SCORE if style == "hybrid" else self.min_score
         if long_score >= required_score and long_score >= short_score + margin:
             side, score, reasons = "LONG", long_score, lr1 + lr4 + lrh + lr15
         elif short_score >= required_score and short_score >= long_score + margin:
