@@ -308,7 +308,7 @@ class BinanceClient:
     def get_derivatives_context(self, symbol: str) -> Dict[str, Optional[float]]:
         """Fetch optional public Futures funding and open-interest context."""
         result: Dict[str, Optional[float]] = {
-            "funding_rate": None, "open_interest": None, "oi_change_pct": None,
+            "funding_rate": None, "open_interest": None, "oi_change_pct": None, "mark_price": None,
         }
         if self.rate_limited:
             return result
@@ -319,6 +319,9 @@ class BinanceClient:
                 value = funding.get("fundingRate")
                 if value is not None:
                     result["funding_rate"] = float(value)
+                mark_value = funding.get("markPrice") or (funding.get("info") or {}).get("markPrice")
+                if mark_value is not None and float(mark_value) > 0:
+                    result["mark_price"] = float(mark_value)
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"funding {symbol}: {e}")
