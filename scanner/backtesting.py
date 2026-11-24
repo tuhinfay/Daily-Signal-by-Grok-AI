@@ -84,7 +84,7 @@ def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
     gross_loss = abs(sum(t["net_return"] for t in losses))
     return {"trades": trades, "trade_count": len(trades),
             "win_rate": len(wins)/len(trades) if trades else 0.0,
-            "profit_factor": gross_profit/gross_loss if gross_loss else (math.inf if gross_profit else 0.0),
+            "profit_factor": round(gross_profit/gross_loss, 4) if gross_loss else ("INF" if gross_profit else None),
             "expectancy": sum(t["net_return"] for t in trades)/len(trades) if trades else 0.0,
             "max_drawdown": max_dd, "ending_equity": equity}
 
