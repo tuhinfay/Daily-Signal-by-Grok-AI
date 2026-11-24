@@ -395,6 +395,25 @@ class BinanceClient:
             result["min_qty"] = float(amount_limits["min"]) if amount_limits.get("min") is not None else None
             result["max_qty"] = float(amount_limits["max"]) if amount_limits.get("max") is not None else None
             result["min_notional"] = float(cost_limits["min"]) if cost_limits.get("min") is not None else None
+            # Binance filter values are the authoritative fallback when CCXT's
+            # normalized limits omit exchange-specific filters.
+            info = market.get("info") or {}
+            for rule in info.get("filters") or []:
+                kind = rule.get("filterType")
+                if kind in ("LOT_SIZE", "MARKET_LOT_SIZE"):
+                    step = float(rule.get("stepSize") or 0)
+                    if step > 0:
+                        result["qty_step"] = step
+                    if rule.get("minQty") is not None:
+                        result["min_qty"] = float(rule["minQty"])
+                    if rule.get("maxQty") is not None:
+                        result["max_qty"] = float(rule["maxQty"])
+                    if kind == "LOT_SIZE":
+                        break
+                if kind in ("MIN_NOTIONAL", "NOTIONAL"):
+                    value = rule.get("minNotional") or rule.get("notional")
+                    if value is not None:
+                        result["min_notional"] = float(value)
         except Exception as e:
             print(f"order constraints {symbol}: {e}")
         return result
