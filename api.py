@@ -12,6 +12,7 @@ import uvicorn, os, json, traceback, uuid, threading, time as time_mod
 from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
 from scanner.v5_analysis import apply_futures_evidence, finalize_v5
+from scanner.risk_sizing import calculate_position_size
 from scanner.indicators import add_indicators, get_latest
 from scanner import db
 import config
@@ -329,16 +330,31 @@ def _run_paper_auto_bot(signals):
                 except ValueError: pass
             if quality.get(str(sig.get("quality") or "B").upper(), 0) < min_quality: continue
             if any(t.get("status") == "OPEN" and t.get("symbol") == sym for t in _trades.values()): continue
-            entry = float(sig.get("market_price") or sig.get("entry") or 0); sl = float(sig.get("stop_loss") or 0); tp = float(sig.get("tp1") or 0)
+            entry = float((sig.get("mark_price") if strategy == "hybrid" else None) or sig.get("market_price") or sig.get("entry") or 0); sl = float(sig.get("stop_loss") or 0); tp = float(sig.get("tp1") or 0)
             if entry <= 0 or sl <= 0 or tp <= 0: continue
             if (side == "LONG" and not sl < entry < tp) or (side == "SHORT" and not tp < entry < sl): continue
             before = set(_trades)
+            quantity = None
+            if strategy == "hybrid":
+                if not sig.get("qty_step") or sig.get("min_qty") is None or sig.get("min_notional") is None:
+                    continue
+                sizing = calculate_position_size(
+                    balance=float(_account.get("balance") or 0),
+                    risk_pct=config.V5_RISK_PER_TRADE_PCT, entry=entry, stop_loss=sl,
+                    qty_step=float(sig["qty_step"]), min_qty=float(sig["min_qty"]),
+                    min_notional=float(sig["min_notional"]),
+                    max_qty=float(sig["max_qty"]) if sig.get("max_qty") is not None else None,
+                )
+                if not sizing.get("ok"):
+                    continue
+                quantity = sizing["quantity"]
             req = TradeCreate(
                 symbol=sym, side=side, entry=entry, stop_loss=sl, tp1=tp, tp2=sig.get("tp2"),
                 leverage=min(_symbol_leverage_cap(sym), int(sig.get("max_leverage") or 20)),
+                quantity=quantity,
                 amount_usd=None if strategy == "hybrid" else float(cfg.get("amount_usd") or 50),
-                risk_pct=config.V5_RISK_PER_TRADE_PCT if strategy == "hybrid" else None,
-                note="V5 · risk-sized simulated paper trade" if strategy == "hybrid" else "Auto Bot · simulated paper trade",
+                risk_pct=None,
+                note="V5 · exchange-step risk-sized simulated paper trade" if strategy == "hybrid" else "Auto Bot · simulated paper trade",
             )
             result = create_trade(req)
             if isinstance(result, dict) and result.get("ok"):
@@ -477,6 +493,7 @@ def run_scan(top_n: int = 12):
             context = client.get_derivatives_context(sym)
             book = client.get_order_book_context(sym) if not client.rate_limited else {}
             mark_price = client.get_mark_price(sym) if not client.rate_limited else None
+            constraints = client.get_order_constraints(sym) if not client.rate_limited else {}
             funding = context.get("funding_rate")
             oi_change = context.get("oi_change_pct")
             imbalance = book.get("book_imbalance_pct")
@@ -490,6 +507,10 @@ def run_scan(top_n: int = 12):
                 item["orderbook_imbalance_pct"] = round(imbalance, 2) if imbalance is not None else None
                 item["spread_pct"] = round(spread, 4) if spread is not None else None
                 item["mark_price"] = mark_price
+                item["qty_step"] = constraints.get("qty_step")
+                item["min_qty"] = constraints.get("min_qty")
+                item["max_qty"] = constraints.get("max_qty")
+                item["min_notional"] = constraints.get("min_notional")
                 item["market_regime"] = btc_regime
                 momentum = float(item.get("coin_return_24h_pct") or 0)
                 if funding is not None and funding >= 0.0005 and item["side"] == "LONG":
