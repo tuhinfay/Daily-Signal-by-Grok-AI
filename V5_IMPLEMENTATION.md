@@ -44,7 +44,7 @@ Implemented on `v5-development`:
 - No live order execution has been introduced. Signal cards expose the six-category score breakdown.
 - Added fee/slippage/funding-aware causal backtest engine. It enters at the next bar open, uses conservative stop-first handling if SL and TP hit in one bar, and reports win rate, profit factor, expectancy and max drawdown.
 - Added expanding-window walk-forward folds and a runner that fits on train/validation windows and reports untouched test windows.
-- Added a 30-day forward-paper validation endpoint: `GET /api/v5/forward-validation`. It requires at least 30 elapsed days and 30 closed paper trades before reporting READY_FOR_REVIEW; it cannot be pre-completed by code.
+- Added a 30-day forward-paper validation endpoint: `GET /api/v5/forward-validation`. It requires at least 30 elapsed days and 30 closed paper trades before reporting READY_FOR_REVIEW; it subtracts estimated round-trip fees and any recorded funding cost. It cannot be pre-completed by code.
 - Added unit tests for data validation, regime/scoring, structure, backtest costs/lookahead, walk-forward, mark-price behavior, lot constraints, risk sizing and forward validation.
 
 ## Remaining operational validation
