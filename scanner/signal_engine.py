@@ -5,6 +5,7 @@ import math
 import pandas as pd
 from .indicators import add_indicators, get_latest, get_prev
 from .risk import calculate_levels
+from .v5_analysis import build_v5_evidence, score_candidate
 import config
 
 
@@ -286,8 +287,17 @@ class SignalEngine:
         levels = calculate_levels(side, float(entry), float(atr), market_data=entry_df)
         if not levels:
             return None
-        if style == "hybrid" and float(levels.get("rr1") or 0) < config.V5_MIN_RR:
-            return None
+        v5_assessment = None
+        evidence = None
+        if style == "hybrid":
+            evidence = build_v5_evidence(
+                data, side, bias_1d, bias_4h,
+                float(levels.get("rr1") or 0), volume_24h or 0,
+            )
+            v5_assessment = score_candidate(evidence)
+            if int(v5_assessment["score"]) < config.V5_MIN_SCORE:
+                return None
+            score = int(v5_assessment["score"])
 
         vol = volume_24h or 0
         liq = "VERY HIGH" if vol >= 1e8 else "HIGH" if vol >= 4e7 else "MED" if vol >= 1.2e7 else "LOW"
@@ -350,4 +360,6 @@ class SignalEngine:
             "volume_24h": round(vol),
             "style": style,
             "timeframe": timeframe,
+            "v5_score_breakdown": v5_assessment["breakdown"] if v5_assessment else None,
+            "v5_evidence": evidence if style == "hybrid" else None,
         }
