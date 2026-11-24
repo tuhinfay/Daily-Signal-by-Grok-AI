@@ -194,7 +194,8 @@ class BinanceClient:
                     break
                 try:
                     candles = self.exchange.fetch_ohlcv(
-                        self._ccxt_symbol(clean), timeframe="1d", limit=1
+                        self._ccxt_symbol(clean), timeframe="1d", limit=1,
+                        params={"timezone": "0"}
                     )
                     if not candles:
                         continue
@@ -227,7 +228,12 @@ class BinanceClient:
             if self.rate_limited:
                 return None
             ccxt_symbol = self._ccxt_symbol(symbol)
-            ohlcv = self.exchange.fetch_ohlcv(ccxt_symbol, timeframe=timeframe, limit=limit)
+            # Binance Futures daily candles are aligned to UTC 00:00,
+            # which is Bangladesh time 06:00 (UTC+6). Keep this identical to Binance.
+            candle_params = {"timezone": "0"} if timeframe == "1d" else {}
+            ohlcv = self.exchange.fetch_ohlcv(
+                ccxt_symbol, timeframe=timeframe, limit=limit, params=candle_params
+            )
             if not ohlcv or len(ohlcv) < 30:
                 return None
             df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
