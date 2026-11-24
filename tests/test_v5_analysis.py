@@ -1,7 +1,7 @@
 """Tests for V5 evidence aggregation and hard execution filters."""
 import unittest
 import pandas as pd
-from scanner.v5_analysis import apply_futures_evidence, finalize_v5, validate_v5_frames
+from scanner.v5_analysis import apply_futures_evidence, finalize_v5, validate_v5_frames, reward_risk_at_price
 
 
 class V5AnalysisTests(unittest.TestCase):
@@ -53,6 +53,20 @@ class V5AnalysisTests(unittest.TestCase):
         self.assertTrue(validate_v5_frames(frames))
         frames["15m"].index = frames["15m"].index - pd.Timedelta(hours=2)
         self.assertFalse(validate_v5_frames(frames))
+
+    def test_required_mark_price_and_current_rr_are_hard_filters(self):
+        evidence = {k: 1.0 for k in (
+            "market_regime", "htf_alignment", "market_structure",
+            "momentum", "volume_futures", "entry_risk",
+        )}
+        rr = reward_risk_at_price("LONG", 101, 95, 113)
+        self.assertEqual(rr, 2.0)
+        _, ok, reason = finalize_v5(
+            evidence, rr=rr, spread_pct=0.02, data_valid=True, candle_closed=True,
+            mark_price=102, entry=100, atr=1, require_mark_price=True,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "MARK_PRICE_DEVIATION_TOO_LARGE")
 
     def test_rr_below_two_fails(self):
         evidence = {k: 1.0 for k in (
