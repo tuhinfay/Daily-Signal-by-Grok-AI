@@ -118,6 +118,20 @@ def apply_futures_evidence(evidence: Dict[str, float], side: str,
 
 
 
+
+def reward_risk_at_price(side: str, entry: float, stop_loss: float, take_profit: float) -> float:
+    """Recalculate TP1 reward/risk at the current mark reference, not the stale candle close."""
+    try:
+        entry, stop_loss, take_profit = float(entry), float(stop_loss), float(take_profit)
+        risk = abs(entry-stop_loss)
+        reward = (take_profit-entry) if str(side).upper() == "LONG" else (entry-take_profit)
+        if risk <= 0 or reward <= 0:
+            return 0.0
+        return reward/risk
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def validate_mark_price(entry: float, mark_price: Optional[float], atr: float,
                         max_deviation_atr: float = 0.5) -> tuple[bool, str, Optional[float]]:
     """Reject stale entry plans when a genuine futures mark price is unavailable or too far away."""
