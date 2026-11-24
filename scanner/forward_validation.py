@@ -9,6 +9,8 @@ import math
 def evaluate_forward_trades(trades: Iterable[Dict], *, start: datetime,
                             end: datetime, minimum_days: int = 30,
                             fee_rate: float = 0.0005) -> Dict:
+    if not math.isfinite(float(fee_rate)) or not 0 <= fee_rate < 0.1:
+        raise ValueError("fee_rate must be between 0 and 0.1")
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None:
