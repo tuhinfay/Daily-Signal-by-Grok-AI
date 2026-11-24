@@ -40,7 +40,9 @@ Implemented on `v5-development`:
 - Added bounded futures evidence blending for funding, open-interest change and order-book imbalance when those observations are returned by Binance.
 - Final V5 qualification enforces score >=75, RR >=2, closed/valid data and a known spread <=0.10%. Missing spread fails closed.
 - Existing scan pipeline requests derivatives/order-book context for at most four unique top-ranked symbols to bound API use. Other symbols without spread observations are intentionally not qualified for V5.
-- Hybrid is available in manual analysis and paper-trading selection. Paper trades remain simulated; no live order placement was added.
+- Hybrid is available in manual analysis and paper-trading selection; both automatic and manual Hybrid analysis use the same final spread/RR/data qualification.
+- Hybrid paper bot uses the configured 0.5% balance risk sizing, caps concurrent V5 paper positions at two, and skips DCA. Paper trades remain simulated; no live order placement was added.
+- Signal cards expose the six-category V5 score breakdown.
 - Added unit tests for core validation, weighted evidence and hard-filter behavior; GitHub Actions runs unittest discovery.
 
 Still outstanding before V5 can be enabled by default:
