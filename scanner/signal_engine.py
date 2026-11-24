@@ -217,7 +217,7 @@ class SignalEngine:
         return long_p, short_p, lr, sr, atr, entry
 
     def analyze_pair(self, symbol: str, data: Dict[str, pd.DataFrame], volume_24h: float = 0,
-                     style: str = "day") -> Optional[Dict]:
+                     style: str = "day", historical: bool = False) -> Optional[Dict]:
         style = style if style in ("scalp", "day", "swing", "hybrid") else "day"
         if style == "scalp":
             # 5m entry, 15m momentum, 1h structure, 4h regime.
@@ -291,7 +291,7 @@ class SignalEngine:
         evidence = None
         v5_data_valid = False
         if style == "hybrid":
-            v5_data_valid = validate_v5_frames(data)
+            v5_data_valid = True if historical else validate_v5_frames(data)
             if not v5_data_valid:
                 return None
             evidence = build_v5_evidence(
