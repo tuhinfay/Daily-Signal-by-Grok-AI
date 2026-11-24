@@ -408,8 +408,6 @@ class BinanceClient:
                         result["min_qty"] = float(rule["minQty"])
                     if rule.get("maxQty") is not None:
                         result["max_qty"] = float(rule["maxQty"])
-                    if kind == "LOT_SIZE":
-                        break
                 if kind in ("MIN_NOTIONAL", "NOTIONAL"):
                     value = rule.get("minNotional") or rule.get("notional")
                     if value is not None:
