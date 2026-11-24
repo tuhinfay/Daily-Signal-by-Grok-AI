@@ -1888,10 +1888,10 @@ function drawShareCard(t){
  rr(82,192,w-164,132,20,'#101d31');txt(t.symbol||'—',112,250,42,'#f2f6ff','800');
  const side=String(t.side||'').toUpperCase();rr(112,270,side==='LONG'?130:140,34,10,side==='LONG'?'#123b35':'#421c2b');txt(side,132,295,19,side==='LONG'?'#16c784':'#f6465d','800');
  const status=closed?'CLOSED':'RUNNING';txt(status,w-245,295,17,closed?'#a8b4c8':'#22d3ee','800');
- txt(closed?'REALIZED PNL':'TOTAL PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
- ctx.textAlign='right';txt('PNL %',788,390,18,'#8798b5','700');txt((pnl>=0?'+':'')+fmt(pnlPct)+'%',788,475,42,positive?green:red,'800');ctx.textAlign='left';
- const qty=Number(t.qty)||0;const leverage=Number(t.leverage)||1;const notional=Number(t.notional)||((Number(t.entry)||0)*qty);const margin=Number(t.margin)||(notional/leverage);const pnlPct=margin>0?(pnl/margin)*100:0;const rows=[['ENTRY PRICE',fmtPrice(t.entry)],[closed?'CLOSE PRICE':'MARK PRICE',fmtPrice(exit)],['TRADE AMOUNT','$'+fmt(notional)],['QUANTITY',fmt(qty)],['LEVERAGE',leverage+'x'],['MARGIN','$'+fmt(margin)+' USDT']];
-  for(let i=0;i<rows.length;i++){const col=i%2,row=Math.floor(i/2),x=112+col*340,yy=565+row*94;txt(rows[i][0],x,yy,15,'#8191ad','700');txt(rows[i][1],x,yy+42,24,'#edf3ff','700');}
+  const qty=Number(t.qty)||0;const leverage=Number(t.leverage)||1;const notional=Number(t.notional)||((Number(t.entry)||0)*qty);const margin=Number(t.margin)||(notional/leverage);const pnlPct=margin>0?(pnl/margin)*100:0;const rows=[['ENTRY PRICE',fmtPrice(t.entry)],[closed?'CLOSE PRICE':'MARK PRICE',fmtPrice(exit)],['TRADE AMOUNT','$'+fmt(notional)],['QUANTITY',fmt(qty)],['LEVERAGE',leverage+'x'],['MARGIN','$'+fmt(margin)+' USDT']];
+  txt(closed?'REALIZED PNL':'TOTAL PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
+  ctx.textAlign='right';txt('PNL %',788,390,18,'#8798b5','700');txt((pnl>=0?'+':'')+fmt(pnlPct)+'%',788,475,42,positive?green:red,'800');ctx.textAlign='left';
+    for(let i=0;i<rows.length;i++){const col=i%2,row=Math.floor(i/2),x=112+col*340,yy=565+row*94;txt(rows[i][0],x,yy,15,'#8191ad','700');txt(rows[i][1],x,yy+42,24,'#edf3ff','700');}
  const openedStamp=t.created_at?new Date(t.created_at).toLocaleString():'—'; const closedStamp=t.closed_at?new Date(t.closed_at).toLocaleString():'—'; const stamp=closed?('Opened '+openedStamp+' · Closed '+closedStamp):('Opened '+openedStamp);
  ctx.strokeStyle='#25334a';ctx.beginPath();ctx.moveTo(112,925);ctx.lineTo(w-112,925);ctx.stroke();
  txt((t.hit||status)+'  ·  '+(t.margin_mode||'CROSS'),112,975,18,'#b6c4dc','600');txt(stamp||'Paper Trading',112,1018,15,'#8191ad');txt('SIMULATED PAPER TRADE · NOT AN EXCHANGE EXECUTION',112,1050,12,'#5d6e8c','600');
