@@ -46,11 +46,11 @@ Implemented on `v5-development`:
 - Added unit tests for core validation, weighted evidence and hard-filter behavior; GitHub Actions runs unittest discovery.
 
 Still outstanding before V5 can be enabled by default:
-- Validate the complete API scan and paper-bot path against mocked Binance responses and the live GitHub Actions result.
+- Add end-to-end integration tests for the API scan and paper-bot path with mocked Binance responses (the current 28-test unit suite passes in Python 3.12).
 - Improve structure analysis beyond the current confirmed rolling swing/breakout references (e.g. swing sequence, liquidity sweeps and retests).
-- Add mark-price-aware entry checks and a documented risk-based position-sizing policy to the V5 paper bot.
+- Add mark-price-aware entry checks and verify risk sizing against exchange precision/minimum-notional constraints.
 - Add historical backtesting with fees, slippage and funding; add walk-forward and 30-day paper-forward evaluation.
-- Expand analysis output/dashboard to expose all six score components and rejection reasons clearly.
+- Expand analysis output/dashboard to expose hard-filter rejection reasons and full regime/futures context more clearly.
 - Calibrate score thresholds, RR and spread limits using out-of-sample results rather than treating initial values as proven.
 
 Keep `V5_ENABLED=false` until integration tests and out-of-sample validation pass. Score is a heuristic, not a win-probability estimate. No live exchange order execution is part of this branch.
