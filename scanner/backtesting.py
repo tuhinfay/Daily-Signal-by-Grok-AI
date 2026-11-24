@@ -1,0 +1,95 @@
+"""Causal single-position OHLCV backtesting and chronological walk-forward splits.
+
+Signals are evaluated at a bar close and entered on the next bar open. Stop is
+checked before target when both are touched in one bar (conservative ordering).
+Fees, slippage and optional funding are charged explicitly.
+"""
+from __future__ import annotations
+
+from typing import Callable, Dict, Iterable, List, Optional
+import math
+import pandas as pd
+
+
+def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
+                 fee_rate: float = 0.0005, slippage_rate: float = 0.0002,
+                 funding_rate_per_bar: float = 0.0,
+                 risk_fraction: float = 0.005) -> Dict:
+    required = {"open", "high", "low", "close"}
+    if frame is None or not required.issubset(frame.columns) or len(frame) < 3:
+        raise ValueError("At least three OHLCV bars with OHLC columns are required")
+    if not (0 <= fee_rate < 0.1 and 0 <= slippage_rate < 0.1 and 0 <= risk_fraction <= 1):
+        raise ValueError("Invalid fee, slippage or risk settings")
+    data = frame.sort_index()
+    trades, equity, peak, max_dd = [], 1.0, 1.0, 0.0
+    i = 0
+    while i < len(data) - 1:
+        signal = signal_fn(data.iloc[:i+1].copy(), i)
+        if not signal:
+            i += 1
+            continue
+        side = str(signal.get("side", "")).upper()
+        if side not in ("LONG", "SHORT"):
+            i += 1
+            continue
+        entry_raw = float(data.iloc[i+1]["open"])
+        stop, target = float(signal["stop_loss"]), float(signal["take_profit"])
+        if entry_raw <= 0 or (side == "LONG" and not stop < entry_raw < target) or (side == "SHORT" and not target < entry_raw < stop):
+            i += 1
+            continue
+        entry = entry_raw * (1 + slippage_rate if side == "LONG" else 1 - slippage_rate)
+        risk = abs(entry - stop)
+        if risk <= 0:
+            i += 1
+            continue
+        exit_price, reason, exit_i = None, "END_OF_DATA", len(data)-1
+        for j in range(i+1, len(data)):
+            bar = data.iloc[j]
+            hi, lo = float(bar["high"]), float(bar["low"])
+            hit_stop = lo <= stop if side == "LONG" else hi >= stop
+            hit_target = hi >= target if side == "LONG" else lo <= target
+            if hit_stop:  # conservative: stop first if both touched
+                exit_price, reason, exit_i = stop, "STOP", j
+                break
+            if hit_target:
+                exit_price, reason, exit_i = target, "TARGET", j
+                break
+        if exit_price is None:
+            exit_price = float(data.iloc[-1]["close"])
+        exit_price *= (1 - slippage_rate if side == "LONG" else 1 + slippage_rate)
+        direction = 1 if side == "LONG" else -1
+        gross_return = direction * (exit_price-entry) / entry
+        bars_held = exit_i - (i+1)
+        funding_cost = funding_rate_per_bar * bars_held * direction
+        net_return = gross_return - 2*fee_rate - funding_cost
+        # Fixed fractional risk budget scaled by realized R multiple.
+        r_multiple = direction * (exit_price-entry) / risk
+        equity *= max(0.0, 1.0 + risk_fraction * r_multiple - 2*fee_rate*risk_fraction - funding_cost*risk_fraction)
+        peak = max(peak, equity)
+        max_dd = max(max_dd, (peak-equity)/peak if peak else 0.0)
+        trades.append({"side": side, "entry_index": i+1, "exit_index": exit_i,
+                       "entry": entry, "exit": exit_price, "reason": reason,
+                       "gross_return": gross_return, "net_return": net_return,
+                       "r_multiple": r_multiple, "equity": equity})
+        i = max(exit_i+1, i+1)
+    wins = [t for t in trades if t["net_return"] > 0]
+    losses = [t for t in trades if t["net_return"] < 0]
+    gross_profit = sum(t["net_return"] for t in wins)
+    gross_loss = abs(sum(t["net_return"] for t in losses))
+    return {"trades": trades, "trade_count": len(trades),
+            "win_rate": len(wins)/len(trades) if trades else 0.0,
+            "profit_factor": gross_profit/gross_loss if gross_loss else (math.inf if gross_profit else 0.0),
+            "expectancy": sum(t["net_return"] for t in trades)/len(trades) if trades else 0.0,
+            "max_drawdown": max_dd, "ending_equity": equity}
+
+
+def walk_forward_splits(frame: pd.DataFrame, *, train_fraction: float = 0.6,
+                        validation_fraction: float = 0.2) -> List[Dict]:
+    """Chronological, non-overlapping train/validation/test ranges; no random shuffle."""
+    if frame is None or len(frame) < 10 or not (0 < train_fraction < 1 and 0 < validation_fraction < 1 and train_fraction + validation_fraction < 1):
+        raise ValueError("Invalid frame size or split fractions")
+    n = len(frame)
+    a, b = int(n*train_fraction), int(n*(train_fraction+validation_fraction))
+    return [{"name":"train","frame":frame.iloc[:a].copy()},
+            {"name":"validation","frame":frame.iloc[a:b].copy()},
+            {"name":"test","frame":frame.iloc[b:].copy()}]
