@@ -11,6 +11,7 @@ import uvicorn, os, json, traceback, uuid, threading, time as time_mod
 
 from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
+from scanner.v5_analysis import apply_futures_evidence, finalize_v5
 from scanner.indicators import add_indicators, get_latest
 from scanner import db
 import config
@@ -504,14 +505,34 @@ def run_scan(top_n: int = 12):
         if client.rate_limited:
             _cache["error"] = "Binance Futures rate limit active during derivatives checks; remaining checks paused."
             _pause_scans_for_rate_limit(client)
-        # Re-apply the minimum threshold after relative-strength/funding adjustments.
+        # V5 uses its independent 100-point evidence model and hard execution filters.
         filtered = []
         for item in signals:
-            if int(item.get("score", 0)) < config.MIN_SCORE:
-                continue
-            aligned = ((item.get("side") == "LONG" and item.get("bias_1d") == "bull" and item.get("bias_4h") == "bull") or
-                       (item.get("side") == "SHORT" and item.get("bias_1d") == "bear" and item.get("bias_4h") == "bear"))
-            item["quality"] = "A+" if item["score"] >= 72 and aligned else ("A" if item["score"] >= 62 or aligned else "B")
+            if "hybrid" in (item.get("styles") or []):
+                context = {
+                    "funding_rate": item.get("funding_rate"),
+                    "oi_change_pct": item.get("oi_change_1h_pct"),
+                    "book_imbalance_pct": item.get("orderbook_imbalance_pct"),
+                }
+                evidence = apply_futures_evidence(item.get("v5_evidence") or {}, item.get("side"), context)
+                scored, qualified, reason = finalize_v5(
+                    evidence, rr=float(item.get("rr") or 0),
+                    spread_pct=item.get("spread_pct"),
+                    data_valid=bool(item.get("v5_evidence")),
+                    candle_closed=True,
+                )
+                item["score"] = scored["score"]
+                item["v5_score_breakdown"] = scored["breakdown"]
+                item["v5_qualification"] = reason
+                if not qualified:
+                    continue
+                item["quality"] = scored["grade"]
+            else:
+                if int(item.get("score", 0)) < config.MIN_SCORE:
+                    continue
+                aligned = ((item.get("side") == "LONG" and item.get("bias_1d") == "bull" and item.get("bias_4h") == "bull") or
+                           (item.get("side") == "SHORT" and item.get("bias_1d") == "bear" and item.get("bias_4h") == "bear"))
+                item["quality"] = "A+" if item["score"] >= 72 and aligned else ("A" if item["score"] >= 62 or aligned else "B")
             filtered.append(item)
         signals = filtered
         signals.sort(key=lambda x: x["score"], reverse=True)
