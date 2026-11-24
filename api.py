@@ -1069,34 +1069,18 @@ async def clear_trade_history():
 
 @app.get("/api/trades")
 async def api_trades():
+    # This endpoint must remain local/fast: never make Binance network calls while
+    # rendering the trade list. Daily-open context is best-effort from background
+    # cache only; live mark prices are maintained by price_monitor_loop().
     _calc_equity()
     trades = [dict(trade) for trade in _trades.values()]
-    open_symbols = sorted({str(t.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
-                           for t in trades if t.get("status") == "OPEN" and t.get("symbol")})
-    client = None
-    now = time_mod.time()
-    for symbol in open_symbols:
-        cached = _daily_open_cache.get(symbol)
-        if not cached or now - float(cached.get("ts", 0)) >= 60:
-            try:
-                client = client or BinanceClient(futures=True)
-                daily_df = client.fetch_ohlcv(symbol, timeframe="1d", limit=31)
-                if daily_df is not None and len(daily_df):
-                    daily_open = float(daily_df["open"].iloc[-1])
-                    if daily_open > 0:
-                        _daily_open_cache[symbol] = {"open": daily_open, "ts": now}
-            except Exception as e:
-                print(f"[trade-daily-change] {symbol}: {e}")
     for trade in trades:
         if trade.get("status") != "OPEN":
             continue
         symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
         cached = _daily_open_cache.get(symbol)
         if cached:
-            price = trade.get("current_price")
-            if not price and client is not None:
-                price = client.get_current_price(symbol)
-            daily_pct = _daily_change_from_open(cached.get("open"), price)
+            daily_pct = _daily_change_from_open(cached.get("open"), trade.get("current_price"))
             if daily_pct is not None:
                 trade["daily_change_pct"] = daily_pct
     return {"trades": trades, "account": _account, "stats": _stats()}
@@ -1949,8 +1933,12 @@ async function submitTrade(){
 }
 async function loadTrades(){
   if(window._loadingTrades)return;window._loadingTrades=true;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),8000);
   try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
-  const d=await(await fetch('/api/trades')).json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
+  const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
+  if(!response.ok)throw new Error('Trade list HTTP '+response.status);
+  const d=await response.json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
   const selection=window.getSelection();
   if(selection&&!selection.isCollapsed){window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));return;}
   const chartIsOpen=!!document.querySelector('#tradeList .chartbox[style*="display: block"]');
@@ -2007,7 +1995,7 @@ async function loadTrades(){
   // Defensive cleanup: never show TP2 as a field on an open My Trades card.
   tradeList.querySelectorAll('.card').forEach(card=>{if(card.querySelector('.actions button[onclick^="closeTrade("]'))card.querySelectorAll('.vals > div').forEach(row=>{const label=row.querySelector('em');if(label&&label.textContent.trim().toUpperCase()==='TP2')row.remove();});});
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
-  }catch(e){console.error('loadTrades',e);}finally{window._loadingTrades=false;}
+  }catch(e){console.error('loadTrades',e);}finally{clearTimeout(timeout);window._loadingTrades=false;}
 }
 
 function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id)];if(!t){toast('Trade details unavailable');return;}window._sharingTrade=t;shareBg.style.display='flex';drawShareCard(t);}
@@ -2055,7 +2043,8 @@ loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
 setInterval(refreshModalMarket,1500);
-setInterval(()=>{if(document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
+setInterval(()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();});
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
 </body>
