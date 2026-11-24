@@ -32,19 +32,23 @@ Do not promote V5 to the default scanner until integration tests and out-of-samp
 
 ## Current branch status
 
-Implemented in this first development increment:
-- REST OHLCV ingestion drops the final, potentially-forming candle.
-- Added market-data validation and freshness helpers.
-- Added explicit regime classification with UNKNOWN fail-safe.
-- Added fixed-weight quality scoring and non-overridable qualification filters.
-- Added a Hybrid timeframe route to the signal engine (1D/4H/1H/15M).
-- Added Hybrid to manual analysis and paper-trading strategy selection.
-- Added unit tests and a GitHub Actions test workflow.
+Implemented on `v5-development`:
+- REST OHLCV ingestion drops the final, potentially-forming candle and validates OHLCV values.
+- V5 requires recent timestamped 1D/4H/1H/15M frames before producing a Hybrid signal.
+- Added regime classification with UNKNOWN fail-safe.
+- Wired six weighted evidence categories into Hybrid scoring: regime, HTF alignment, structure, momentum, volume/futures and entry/risk.
+- Added bounded futures evidence blending for funding, open-interest change and order-book imbalance when those observations are returned by Binance.
+- Final V5 qualification enforces score >=75, RR >=2, closed/valid data and a known spread <=0.10%. Missing spread fails closed.
+- Existing scan pipeline requests derivatives/order-book context for at most four unique top-ranked symbols to bound API use. Other symbols without spread observations are intentionally not qualified for V5.
+- Hybrid is available in manual analysis and paper-trading selection. Paper trades remain simulated; no live order placement was added.
+- Added unit tests for core validation, weighted evidence and hard-filter behavior; GitHub Actions runs unittest discovery.
 
-Not yet production-complete:
-- The new category scorer is not yet wired into the full signal-engine decision path; Hybrid currently uses the existing component scoring with the new minimum score/RR gate.
-- Market regime, structure and derivatives evidence still need full end-to-end integration.
-- The automated scan remains on the existing V4 styles while V5_ENABLED is false.
-- Historical backtest, walk-forward evaluation and paper-forward validation are still outstanding.
+Still outstanding before V5 can be enabled by default:
+- Validate the complete API scan and paper-bot path against mocked Binance responses and the live GitHub Actions result.
+- Improve structure analysis beyond the current confirmed rolling swing/breakout references (e.g. swing sequence, liquidity sweeps and retests).
+- Add mark-price-aware entry checks and a documented risk-based position-sizing policy to the V5 paper bot.
+- Add historical backtesting with fees, slippage and funding; add walk-forward and 30-day paper-forward evaluation.
+- Expand analysis output/dashboard to expose all six score components and rejection reasons clearly.
+- Calibrate score thresholds, RR and spread limits using out-of-sample results rather than treating initial values as proven.
 
-Keep V5_ENABLED=false until the remaining integration and tests are completed. No live exchange order execution is part of this branch.
+Keep `V5_ENABLED=false` until integration tests and out-of-sample validation pass. Score is a heuristic, not a win-probability estimate. No live exchange order execution is part of this branch.
