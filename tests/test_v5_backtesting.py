@@ -76,14 +76,18 @@ class V5BacktestingTests(unittest.TestCase):
             self.assertLess(fold["train"].index[-1], fold["validation"].index[0])
             self.assertLess(fold["validation"].index[-1], fold["test"].index[0])
 
-    def test_walk_forward_runs_held_out_test_windows(self):
+    def test_walk_forward_runs_held_out_test_windows_with_training_context(self):
+        seen_prefix_lengths = []
+        def fit(train, validation):
+            return lambda prefix, i: seen_prefix_lengths.append(len(prefix)) or None
         result = run_walk_forward(
-            self.frame(100),
-            lambda train, validation: (lambda prefix, i: None),
+            self.frame(100), fit,
             backtest_kwargs={"fee_rate":0, "slippage_rate":0},
         )
         self.assertGreaterEqual(result["fold_count"], 2)
         self.assertEqual(result["trade_count"], 0)
+        self.assertTrue(seen_prefix_lengths)
+        self.assertGreaterEqual(min(seen_prefix_lengths), 51)
 
     def test_position_size_respects_step_and_risk(self):
         result = calculate_position_size(
