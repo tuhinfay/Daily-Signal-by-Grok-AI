@@ -217,7 +217,7 @@ class SignalEngine:
 
     def analyze_pair(self, symbol: str, data: Dict[str, pd.DataFrame], volume_24h: float = 0,
                      style: str = "day") -> Optional[Dict]:
-        style = style if style in ("scalp", "day", "swing") else "day"
+        style = style if style in ("scalp", "day", "swing", "hybrid") else "day"
         if style == "scalp":
             # 5m entry, 15m momentum, 1h structure, 4h regime.
             l1, s1, lr1, sr1, bias_1d = self._score_1d(data.get("4h"))
@@ -232,6 +232,13 @@ class SignalEngine:
             lh, sh, lrh, srh, rsi_val = self._score_1h(data.get("4h"))
             l15, s15, lr15, sr15, atr, entry = self._score_15m(data.get("1h"))
             timeframe = "1h entry · 4h · 1d"
+        elif style == "hybrid":
+            # V5: daily bias, 4h structure, 1h setup, 15m confirmed entry.
+            l1, s1, lr1, sr1, bias_1d = self._score_1d(data.get("1d"))
+            l4, s4, lr4, sr4, adx_val, bias_4h = self._score_4h(data.get("4h"))
+            lh, sh, lrh, srh, rsi_val = self._score_1h(data.get("1h"))
+            l15, s15, lr15, sr15, atr, entry = self._score_15m(data.get("15m"))
+            timeframe = "15m entry · 1h setup · 4h structure · 1d bias"
         else:
             l1, s1, lr1, sr1, bias_1d = self._score_1d(data.get("1d"))
             l4, s4, lr4, sr4, adx_val, bias_4h = self._score_4h(data.get("4h"))
@@ -265,9 +272,10 @@ class SignalEngine:
         side = score = None
         reasons = []
         margin = 3
-        if long_score >= self.min_score and long_score >= short_score + margin:
+        required_score = config.V5_MIN_SCORE if style == "hybrid" else self.min_score
+        if long_score >= required_score and long_score >= short_score + margin:
             side, score, reasons = "LONG", long_score, lr1 + lr4 + lrh + lr15
-        elif short_score >= self.min_score and short_score >= long_score + margin:
+        elif short_score >= required_score and short_score >= long_score + margin:
             side, score, reasons = "SHORT", short_score, sr1 + sr4 + srh + sr15
         else:
             return None
@@ -278,6 +286,8 @@ class SignalEngine:
         levels = calculate_levels(side, float(entry), float(atr), market_data=entry_df)
         if not levels:
             return None
+        if style == "hybrid" and float(levels.get("rr1") or 0) < config.V5_MIN_RR:
+            return None
 
         vol = volume_24h or 0
         liq = "VERY HIGH" if vol >= 1e8 else "HIGH" if vol >= 4e7 else "MED" if vol >= 1.2e7 else "LOW"
@@ -285,7 +295,9 @@ class SignalEngine:
         aligned = (side == "LONG" and bias_1d == "bull" and bias_4h == "bull") or (
             side == "SHORT" and bias_1d == "bear" and bias_4h == "bear"
         )
-        if score >= 72 and aligned:
+        if style == "hybrid":
+            quality = "A+" if score >= 85 else "A" if score >= 75 else "B"
+        elif score >= 72 and aligned:
             quality = "A+"
         elif score >= 62 or aligned:
             quality = "A"
