@@ -1819,6 +1819,7 @@ async function loadTrades(){
   window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
   if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
+    const tp2Pnl=t.tp2?(Number(t.realized_pnl||0)+(t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))*(Number(t.qty)||0)):null;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
@@ -1835,7 +1836,90 @@ async function loadTrades(){
         <div><em>SL</em><strong>${t.stop_loss}</strong></div>
         <div><em>TP1</em><strong>${t.tp1}</strong></div>
         <div><em>TP2</em><strong>${t.tp2??'—'}</strong></div>
-        <div><em>TP2 PnL</em><strong>${t.tp2?((Number(t.realized_pnl)||0)+(t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))*(Number(t.qty)||0)):'—'}</strong></div>
+        <div><em>TP2 PnL</em><strong class="${tp2Pnl==null?'':tp2Pnl>=0?'up':'dn'}">${tp2Pnl==null?'—':(tp2Pnl>=0?'+':'')+'
+        <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
+        <div><em>Qty</em><strong>${t.qty}</strong></div>
+        <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
+        <div><em>PnL%</em><strong class="${up?'up':'dn'}">${(Number(t.margin)>0?((Number(t.unrealized_pnl)||0)/Number(t.margin))*100:(Number(t.pnl_pct)||0)).toFixed(2)}%</strong></div>
+        <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"—":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
+
+        <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
+      </div>
+      <div class="actions">
+        <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
+        <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
+        <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
+        <button class="btn dim" onclick="shareTrade('${t.id}')">Share</button>
+        <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
+      </div>
+      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
+  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
+    const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
+    const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';
+    const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
+    const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
+    return '<div class="history-trade"><div class="head"><span><b class="side '+(t.side==='LONG'?'L':'S')+'">'+t.side+'</b> <b>'+t.symbol+'</b> '+(t.auto_trade?'<span class="tag">BOT</span>':'')+' · '+(t.hit||'CLOSED')+'</span><b style="color:'+(pnl>=0?'var(--gn)':'var(--rd)')+'">'+(pnl>=0?'+':'')+'$'+fmt(pnl)+'</b></div><div class="vals"><div><em>Entry Price</em><strong>'+fmtPrice(t.entry)+'</strong></div><div><em>Close Price</em><strong>'+(exit?fmtPrice(exit):'—')+'</strong></div><div><em>Quantity</em><strong>'+fmt(t.qty)+'</strong></div><div><em>Trade Amount</em><strong>$'+fmt(tradeAmount)+' USDT</strong></div><div><em>Opened</em><strong>'+openedAt+'</strong></div><div><em>Closed</em><strong>'+closedAt+'</strong></div></div></div>;
+  }).join('');h+='</div>';}
+  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
+  for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
+  }catch(e){console.error('loadTrades',e);}finally{window._loadingTrades=false;}
+}
+
+function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id)];if(!t){toast('Trade details unavailable');return;}window._sharingTrade=t;shareBg.style.display='flex';drawShareCard(t);}
+function closeShare(){shareBg.style.display='none';}
+function drawShareCard(t){
+ const c=shareCanvas,ctx=c.getContext('2d'),w=c.width,h=c.height;
+ const closed=t.status==='CLOSED',pnl=closed?(Number(t.realized_pnl)||0):((Number(t.realized_pnl)||0)+(Number(t.unrealized_pnl)||0)),exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);
+ const positive=pnl>=0,green='#16c784',red='#f6465d';
+ const bg=ctx.createLinearGradient(0,0,w,h);bg.addColorStop(0,'#101b2d');bg.addColorStop(1,'#070b14');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+ function rr(x,y,ww,hh,r,fill,stroke){ctx.beginPath();ctx.roundRect(x,y,ww,hh,r);ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}}
+ function txt(value,x,y,size,color,weight){ctx.fillStyle=color;ctx.font=(weight||'500')+' '+size+'px Inter,Arial,sans-serif';ctx.fillText(String(value),x,y);}
+ rr(42,42,w-84,h-84,28,'#0b1322','#23334d');
+ txt('DAILY SIGNAL',82,112,28,'#22d3ee','800');txt('TRADE RECEIPT',82,154,17,'#8798b5','700');
+ rr(82,192,w-164,132,20,'#101d31');txt(t.symbol||'—',112,250,42,'#f2f6ff','800');
+ const side=String(t.side||'').toUpperCase();rr(112,270,side==='LONG'?130:140,34,10,side==='LONG'?'#123b35':'#421c2b');txt(side,132,295,19,side==='LONG'?'#16c784':'#f6465d','800');
+ const status=closed?'CLOSED':'RUNNING';txt(status,w-245,295,17,closed?'#a8b4c8':'#22d3ee','800');
+ txt(closed?'REALIZED PNL':'TOTAL PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
+ const qty=Number(t.qty)||0;const notional=Number(t.notional)||((Number(t.entry)||0)*qty);const margin=Number(t.margin)||(notional/(Number(t.leverage)||1));const pnlPct=margin>0?(pnl/margin)*100:0;const rows=[['ENTRY PRICE',fmtPrice(t.entry)],[closed?'CLOSE PRICE':'MARK PRICE',fmtPrice(exit)],['TRADE AMOUNT','$'+fmt(notional)],['QUANTITY',fmt(qty)],['PNL %',(pnl>=0?'+':'')+fmt(pnlPct)+'%']];
+ for(let i=0;i<rows.length;i++){const col=i%2,row=Math.floor(i/2),x=112+col*340,yy=565+row*94;txt(rows[i][0],x,yy,15,'#8191ad','700');txt(rows[i][1],x,yy+42,24,'#edf3ff','700');}
+ const openedStamp=t.created_at?new Date(t.created_at).toLocaleString():'—'; const closedStamp=t.closed_at?new Date(t.closed_at).toLocaleString():'—'; const stamp=closed?('Opened '+openedStamp+' · Closed '+closedStamp):('Opened '+openedStamp);
+ ctx.strokeStyle='#25334a';ctx.beginPath();ctx.moveTo(112,925);ctx.lineTo(w-112,925);ctx.stroke();
+ txt((t.hit||status)+'  ·  '+(t.margin_mode||'CROSS'),112,975,18,'#b6c4dc','600');txt(stamp||'Paper Trading',112,1018,15,'#8191ad');txt('SIMULATED PAPER TRADE · NOT AN EXCHANGE EXECUTION',112,1050,12,'#5d6e8c','600');
+}
+function shareFileName(){const t=window._sharingTrade||{};return (t.symbol||'trade')+'-'+(t.status||'trade').toLowerCase()+'.png';}
+function shareSummary(){const t=window._sharingTrade||{},closed=t.status==='CLOSED',pnl=closed?(Number(t.realized_pnl)||0):((Number(t.realized_pnl)||0)+(Number(t.unrealized_pnl)||0)),exit=closed?(Number(t.close_price)||Number(t.current_price)||0):(Number(t.current_price)||Number(t.entry)||0);return (t.symbol||'Trade')+' '+(t.side||'')+' · '+(closed?'Closed':'Running')+' · Entry '+fmtPrice(t.entry)+' · '+(closed?'Close ':'Mark ')+fmtPrice(exit)+' · PnL '+(pnl>=0?'+':'-')+'$'+fmt(Math.abs(pnl))+' · Paper trade';}
+function shareCardBlob(){return new Promise(resolve=>shareCanvas.toBlob(resolve,'image/png'));}
+async function saveShareCard(){const blob=await shareCardBlob();if(!blob){toast('Could not create image');return;}const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=shareFileName();a.click();setTimeout(()=>URL.revokeObjectURL(url),1500);}
+
+
+async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
+async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
+function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
+function closeManage(){manageBg.style.display='none';}
+async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null,orig=window._manageOriginalLevels||{};if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}if(sl!==orig.sl)body.stop_loss=sl;if(tp1!==orig.tp1)body.tp1=tp1;if((tp2??0)!==(orig.tp2??0))body.tp2=tp2;if(!Object.keys(body).length){closeManage();toast('No protection changes');return;}}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1–5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}try{const response=await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await response.json();if(response.ok&&d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}catch(e){toast('Could not save protection: '+(e.message||'network error'),5000);}}
+async function editLevels(id,sl,tp1,tp2){const t=(window._tradeCache||{})[String(id)]||{};manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';window._manageEntry=Number(t.entry)||0;window._manageSide=String(t.side||'LONG').toUpperCase();manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';syncLevelPct('sl','price');syncLevelPct('tp','price');window._manageOriginalLevels={sl:Number(sl),tp1:Number(tp1),tp2:Number(tp2)||0};manageBg.style.display='flex';}
+function syncLevelPct(kind,source){const isSL=kind==='sl',priceEl=isSL?manageSL:manageTP1,pctEl=isSL?manageSLPct:manageTP1Pct,entry=Number(window._manageEntry)||0,side=window._manageSide||'LONG';if(!(entry>0))return;if(source==='price'){const p=Number(priceEl.value);if(!(p>0))return;const pct=side==='LONG'?(isSL?(entry-p)/entry*100:(p-entry)/entry*100):(isSL?(p-entry)/entry*100:(entry-p)/entry*100);pctEl.value=Number.isFinite(pct)?Math.max(0,pct).toFixed(3):'';}else{const pct=Number(pctEl.value);if(!(pct>=0))return;const f=pct/100,p=side==='LONG'?(isSL?entry*(1-f):entry*(1+f)):(isSL?entry*(1+f):entry*(1-f));priceEl.value=p>0?Number(p.toPrecision(10)):'';}}
+async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
+function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
+async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
+async function adjustFunds(action){const input=document.getElementById('fundAmount'),amount=Number(input.value);if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}const label=action==='add'?'Add':'Remove';if(!confirm(label+' $'+fmt(amount)+' USDT '+(action==='add'?'to':'from')+' paper account?'))return;try{const r=await fetch('/api/account/funds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,amount})}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Balance adjustment failed');return;}setAcc(d.account);const account=await(await fetch('/api/account')).json();renderStats(account.stats,accStats);input.value='';toast(label+'ed $'+fmt(amount)+' USDT');loadTrades();}catch(e){toast('Balance adjustment failed: '+(e.message||'network error'));}}
+async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
+loadBotSettings();
+loadSignals();
+setInterval(()=>{if(!pinManual)loadSignals();},20000);
+setInterval(checkAlerts,10000);
+setInterval(refreshModalMarket,1500);
+setInterval(()=>{if(document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
+setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
+</script>
+</body>
+</html>
+"""
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("api:app", host="0.0.0.0", port=port, reload=False)
++fmt(tp2Pnl)}</strong></div>
         <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
