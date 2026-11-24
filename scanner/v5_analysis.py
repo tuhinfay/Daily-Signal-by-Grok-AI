@@ -166,3 +166,33 @@ def finalize_v5(evidence: Dict[str, float], *, rr: float, spread_pct: Optional[f
         spread_pct=spread_pct, min_score=75, min_rr=2.0, max_spread_pct=0.10,
     )
     return scored, ok, reason
+
+
+def qualify_v5_signal(signal: Dict, derivatives: Optional[Dict] = None):
+    """Shared final pipeline used by scanner and manual analysis; returns (copy, accepted, reason)."""
+    result = dict(signal or {})
+    derivatives = derivatives or {}
+    evidence = apply_futures_evidence(
+        result.get("v5_evidence") or {}, result.get("side"),
+        {
+            "funding_rate": derivatives.get("funding_rate", result.get("funding_rate")),
+            "oi_change_pct": derivatives.get("oi_change_pct", result.get("oi_change_1h_pct")),
+            "book_imbalance_pct": derivatives.get("book_imbalance_pct", result.get("orderbook_imbalance_pct")),
+        },
+    )
+    mark = derivatives.get("mark_price", result.get("mark_price"))
+    actual_rr = reward_risk_at_price(
+        result.get("side"), mark, result.get("stop_loss"), result.get("tp1")
+    )
+    scored, accepted, reason = finalize_v5(
+        evidence, rr=actual_rr, spread_pct=derivatives.get("spread_pct", result.get("spread_pct")),
+        data_valid=bool(result.get("v5_data_valid") and result.get("v5_evidence")),
+        candle_closed=True, mark_price=mark, entry=result.get("entry"),
+        atr=result.get("atr"), require_mark_price=True,
+    )
+    result.update({
+        "rr": round(actual_rr, 2), "mark_price": mark,
+        "score": scored["score"], "quality": scored["grade"],
+        "v5_score_breakdown": scored["breakdown"], "v5_qualification": reason,
+    })
+    return result, accepted, reason
