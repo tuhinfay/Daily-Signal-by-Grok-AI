@@ -247,8 +247,10 @@ def _update_trade_liquidation_fields(trade: Dict[str, Any]) -> None:
             raise ValueError("missing current price")
         distance = abs(current - price) / current * 100
         trade["liquidation_distance_pct"] = round(distance, 2)
+        trade["liquidation_risk"] = "HIGH" if distance <= 5 else "MEDIUM" if distance <= 10 else "LOW"
     except (TypeError, ValueError):
         trade["liquidation_distance_pct"] = None
+        trade["liquidation_risk"] = "UNKNOWN"
  
 
 def _run_paper_auto_bot(signals):
