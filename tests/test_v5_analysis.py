@@ -68,6 +68,26 @@ class V5AnalysisTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "MARK_PRICE_DEVIATION_TOO_LARGE")
 
+    def test_shared_pipeline_accepts_only_fully_qualified_signal(self):
+        evidence = {k: 1.0 for k in (
+            "market_regime", "htf_alignment", "market_structure",
+            "momentum", "volume_futures", "entry_risk",
+        )}
+        signal = {
+            "side":"LONG", "entry":100, "stop_loss":95, "tp1":110,
+            "atr":1, "spread_pct":0.02, "v5_data_valid":True,
+            "v5_evidence":evidence, "mark_price":100,
+        }
+        result, accepted, reason = qualify_v5_signal(signal)
+        self.assertTrue(accepted)
+        self.assertEqual(reason, "QUALIFIED")
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(result["rr"], 2.0)
+        signal["mark_price"] = None
+        _, accepted, reason = qualify_v5_signal(signal)
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "MARK_PRICE_UNAVAILABLE")
+
     def test_rr_below_two_fails(self):
         evidence = {k: 1.0 for k in (
             "market_regime", "htf_alignment", "market_structure",
