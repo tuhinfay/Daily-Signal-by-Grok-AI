@@ -223,6 +223,21 @@ Run the unit tests:
 python -m unittest discover -s tests -v
 ```
 
+### Run a historical V5 Hybrid backtest
+
+Prepare four CSV files with `timestamp,open,high,low,close,volume` columns. The 1D file needs at least 205 completed daily candles. Optional funding CSV uses `timestamp,funding_rate` with decimal funding rates at settlement timestamps.
+
+```bash
+python scripts/run_v5_backtest.py \
+  --symbol BTCUSDT \
+  --15m btc_15m.csv --1h btc_1h.csv \
+  --4h btc_4h.csv --1d btc_1d.csv \
+  --funding btc_funding.csv \
+  --spread-pct 0.05
+```
+
+The backtest uses next-15m-open fills, estimated mark-price gap checks, explicit fee/slippage and the supplied/assumed spread. Historical order-book spread and mark price are not reconstructed unless you supply equivalent source data; results are research estimates, not proof of future performance.
+
 Check the V5 paper-forward validation window (requires 30 elapsed days and at least 30 closed paper trades):
 
 ```bash
