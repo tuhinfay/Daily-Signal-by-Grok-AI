@@ -52,3 +52,30 @@ VWAP_WINDOW = 48
 VOLUME_PROFILE_WINDOW = 48
 VOLUME_PROFILE_BINS = 24
 STRUCTURE_WINDOW = 20
+
+
+# Daily Signal V5 opt-in defaults; V4 remains the production path until validated.
+V5_ENABLED = False
+V5_TRADING_STYLE = "hybrid"
+V5_SIGNAL_FREQUENCY = "quality"
+V5_MODE = "both"  # signal + simulated paper trading; no live orders
+V5_MIN_SCORE = 75
+V5_MIN_RR = 2.0
+V5_MAX_SPREAD_PCT = 0.10
+V5_SCORE_WEIGHTS = {
+    "market_regime": 15,
+    "htf_alignment": 20,
+    "market_structure": 20,
+    "momentum": 15,
+    "volume_futures": 15,
+    "entry_risk": 15,
+}
+V5_TIMEFRAMES = {
+    "regime": "1d",
+    "structure": "4h",
+    "setup": "1h",
+    "entry": "15m",
+    "refinement": "5m",
+}
+V5_MAX_OPEN_PAPER_TRADES = 2
+V5_RISK_PER_TRADE_PCT = 0.5
