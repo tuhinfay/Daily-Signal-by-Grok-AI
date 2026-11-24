@@ -268,7 +268,7 @@ def _run_paper_auto_bot(signals):
     max_daily_loss = max(0.0, float(_account.get("start_balance") or _account.get("balance") or 0) * max(0.0, min(float(cfg.get("max_daily_loss_pct") or 0), 20.0)) / 100.0)
     try:
         opened = [t for t in _trades.values() if t.get("status") == "OPEN"]
-        if cfg.get("dca_enabled"):
+        if cfg.get("dca_enabled") and strategy != "hybrid":
             gap = max(0.1, min(float(cfg.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
             max_adds = max(1, min(int(cfg.get("dca_max_orders") or 3), 5))
             multiplier = max(1.0, min(float(cfg.get("dca_multiplier") or 2.0), 3.0))
@@ -308,8 +308,9 @@ def _run_paper_auto_bot(signals):
         if max_daily_loss and daily_bot_pnl <= -max_daily_loss:
             print(f"[auto-bot] daily loss guard active: {daily_bot_pnl:.2f} USDT")
             return
+        max_open = min(int(cfg.get("max_open") or 2), int(getattr(config, "V5_MAX_OPEN_PAPER_TRADES", 2))) if strategy == "hybrid" else int(cfg.get("max_open") or 2)
         for sig in sorted(signals or [], key=lambda x: int(x.get("score") or 0), reverse=True):
-            if len(opened) >= int(cfg.get("max_open") or 2): break
+            if len(opened) >= max_open: break
             sym, side = str(sig.get("symbol") or "").upper(), str(sig.get("side") or "").upper()
             if not sym or (symbols and sym not in symbols): continue
             direction = str(cfg.get("direction") or "both").lower()
@@ -332,7 +333,13 @@ def _run_paper_auto_bot(signals):
             if entry <= 0 or sl <= 0 or tp <= 0: continue
             if (side == "LONG" and not sl < entry < tp) or (side == "SHORT" and not tp < entry < sl): continue
             before = set(_trades)
-            req = TradeCreate(symbol=sym, side=side, entry=entry, stop_loss=sl, tp1=tp, tp2=sig.get("tp2"), leverage=min(_symbol_leverage_cap(sym), int(sig.get("max_leverage") or 20)), amount_usd=float(cfg.get("amount_usd") or 50), note="Auto Bot · simulated paper trade")
+            req = TradeCreate(
+                symbol=sym, side=side, entry=entry, stop_loss=sl, tp1=tp, tp2=sig.get("tp2"),
+                leverage=min(_symbol_leverage_cap(sym), int(sig.get("max_leverage") or 20)),
+                amount_usd=None if strategy == "hybrid" else float(cfg.get("amount_usd") or 50),
+                risk_pct=config.V5_RISK_PER_TRADE_PCT if strategy == "hybrid" else None,
+                note="V5 · risk-sized simulated paper trade" if strategy == "hybrid" else "Auto Bot · simulated paper trade",
+            )
             result = create_trade(req)
             if isinstance(result, dict) and result.get("ok"):
                 for tid in set(_trades) - before:
