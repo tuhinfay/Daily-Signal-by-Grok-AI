@@ -13,7 +13,7 @@ import pandas as pd
 
 def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
                  fee_rate: float = 0.0005, slippage_rate: float = 0.0002,
-                 funding_rate_per_bar: float = 0.0,
+                 funding_rate_per_bar=0.0,
                  risk_fraction: float = 0.005) -> Dict:
     required = {"open", "high", "low", "close"}
     if frame is None or not required.issubset(frame.columns) or len(frame) < 3:
@@ -60,7 +60,13 @@ def run_backtest(frame: pd.DataFrame, signal_fn: Callable, *,
         direction = 1 if side == "LONG" else -1
         gross_return = direction * (exit_price-entry) / entry
         bars_held = exit_i - (i+1)
-        funding_cost = funding_rate_per_bar * bars_held * direction
+        if callable(funding_rate_per_bar):
+            funding_cost = float(funding_rate_per_bar(i+1, exit_i, side))
+        elif isinstance(funding_rate_per_bar, pd.Series):
+            rates = funding_rate_per_bar.reindex(data.index[i+1:exit_i+1]).fillna(0.0)
+            funding_cost = float(rates.sum()) * direction
+        else:
+            funding_cost = float(funding_rate_per_bar) * bars_held * direction
         net_return = gross_return - 2*fee_rate - funding_cost
         # Fixed fractional risk budget scaled by realized R multiple.
         r_multiple = direction * (exit_price-entry) / risk
@@ -109,3 +115,28 @@ def walk_forward_splits(frame: pd.DataFrame, *, train_fraction: float = 0.5,
     if not folds:
         raise ValueError("Not enough rows to create a complete walk-forward fold")
     return folds
+
+
+def run_walk_forward(frame: pd.DataFrame, fit_fn: Callable, *,
+                     train_fraction: float = 0.5, validation_fraction: float = 0.2,
+                     test_fraction: float = 0.1, step_fraction: float = 0.1,
+                     backtest_kwargs: Optional[Dict] = None) -> Dict:
+    """Fit/tune only on each fold's past data, then evaluate the untouched test window."""
+    reports = []
+    for fold in walk_forward_splits(
+        frame, train_fraction=train_fraction,
+        validation_fraction=validation_fraction, test_fraction=test_fraction,
+        step_fraction=step_fraction,
+    ):
+        signal_fn = fit_fn(fold["train"], fold["validation"])
+        if not callable(signal_fn):
+            raise ValueError("fit_fn must return a callable signal function")
+        report = run_backtest(fold["test"], signal_fn, **(backtest_kwargs or {}))
+        reports.append({"fold": fold["fold"], "train_rows": len(fold["train"]),
+                        "validation_rows": len(fold["validation"]),
+                        "test_rows": len(fold["test"]), "metrics": report})
+    counts = [x["metrics"]["trade_count"] for x in reports]
+    total = sum(counts)
+    wins = sum(x["metrics"]["win_rate"] * x["metrics"]["trade_count"] for x in reports)
+    return {"folds": reports, "fold_count": len(reports), "trade_count": total,
+            "weighted_win_rate": wins/total if total else 0.0}
