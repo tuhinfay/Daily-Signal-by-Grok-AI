@@ -7,7 +7,8 @@ import math
 
 
 def evaluate_forward_trades(trades: Iterable[Dict], *, start: datetime,
-                            end: datetime, minimum_days: int = 30) -> Dict:
+                            end: datetime, minimum_days: int = 30,
+                            fee_rate: float = 0.0005) -> Dict:
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None:
@@ -24,6 +25,12 @@ def evaluate_forward_trades(trades: Iterable[Dict], *, start: datetime,
                 dt = dt.replace(tzinfo=timezone.utc)
             if start <= dt <= end:
                 pnl = float(trade.get("realized_pnl") or 0)
+                qty = float(trade.get("qty") or 0)
+                entry = float(trade.get("entry") or 0)
+                close_price = float(trade.get("close_price") or entry)
+                fees = (qty*entry + qty*close_price)*fee_rate if qty > 0 and entry > 0 and close_price > 0 else 0.0
+                funding = float(trade.get("funding_cost_usd") or 0)
+                pnl -= fees + funding
                 if math.isfinite(pnl):
                     closed.append((dt, pnl))
         except (TypeError, ValueError):
@@ -50,5 +57,6 @@ def evaluate_forward_trades(trades: Iterable[Dict], *, start: datetime,
         "expectancy_usd": round(sum(pnls)/count, 4) if count else 0.0,
         "net_pnl_usd": round(sum(pnls), 4),
         "max_drawdown_usd": round(max_dd, 4),
+        "estimated_fee_rate": fee_rate,
         "status": "READY_FOR_REVIEW" if days >= minimum_days and count >= 30 else "COLLECTING_FORWARD_DATA",
     }
