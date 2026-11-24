@@ -7,6 +7,7 @@ import math
 from .indicators import add_indicators, get_latest
 from .market_regime import classify_regime
 from .scoring import score_candidate, qualify_candidate
+from .data_validator import is_fresh
 
 
 def _num(row, key, default=None):
@@ -25,6 +26,17 @@ def _frame_row(data, timeframe):
         return get_latest(add_indicators(frame))
     except (KeyError, ValueError, TypeError):
         return {}
+
+
+
+def validate_v5_frames(data: Dict) -> bool:
+    """Require all V5 timeframes to be recent timestamped frames from the closed-candle client."""
+    intervals = {"1d": 86400, "4h": 14400, "1h": 3600, "15m": 900}
+    for timeframe, seconds in intervals.items():
+        frame = data.get(timeframe)
+        if frame is None or len(frame) < 50 or not is_fresh(frame, seconds * 2):
+            return False
+    return True
 
 
 def build_v5_evidence(data: Dict, side: str, bias_1d: str, bias_4h: str,
