@@ -3,7 +3,7 @@ import unittest
 import pandas as pd
 
 from scanner.market_structure import analyze_structure
-from scanner.backtesting import run_backtest, walk_forward_splits
+from scanner.backtesting import run_backtest, walk_forward_splits, run_walk_forward
 from scanner.risk_sizing import calculate_position_size
 from scanner.v5_analysis import validate_mark_price, reward_risk_at_price
 
@@ -56,6 +56,15 @@ class V5BacktestingTests(unittest.TestCase):
         for fold in folds:
             self.assertLess(fold["train"].index[-1], fold["validation"].index[0])
             self.assertLess(fold["validation"].index[-1], fold["test"].index[0])
+
+    def test_walk_forward_runs_held_out_test_windows(self):
+        result = run_walk_forward(
+            self.frame(100),
+            lambda train, validation: (lambda prefix, i: None),
+            backtest_kwargs={"fee_rate":0, "slippage_rate":0},
+        )
+        self.assertGreaterEqual(result["fold_count"], 2)
+        self.assertEqual(result["trade_count"], 0)
 
     def test_position_size_respects_step_and_risk(self):
         result = calculate_position_size(
