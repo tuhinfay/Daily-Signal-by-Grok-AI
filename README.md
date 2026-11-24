@@ -138,7 +138,7 @@ echo $! > runtime.pid
 
 - Keep the project directory on persistent disk. SQLite data is stored locally; back up the database file before moving or rebuilding the VPS.
 - No Binance API key is needed for public market-data endpoints. Never add exchange trading permissions for this paper-trading setup.
-- V5 is deliberately disabled for automatic scanning by default (`V5_ENABLED = False`). The branch now includes backtesting, walk-forward and forward-paper evaluation tools, but a real 30-day paper-forward sample and staging end-to-end validation still require elapsed time. Do not enable V5 in production before those gates pass.
+- V5 is deliberately disabled for automatic scanning by default (`V5_ENABLED=false`). To test it only in an isolated staging deployment, explicitly set the environment variable `V5_ENABLED=true`; leave it unset/false in production until the forward-validation gates pass. The branch now includes backtesting, walk-forward and forward-paper evaluation tools, but a real 30-day paper-forward sample and staging end-to-end validation still require elapsed time. Do not enable V5 in production before those gates pass.
 - This project is designed for signal analysis and simulated paper trading. It does not place live orders.
 - For a production setup, configure HTTPS/reverse proxy, firewall rules, process supervision (for example systemd), log rotation and database backups.
 
