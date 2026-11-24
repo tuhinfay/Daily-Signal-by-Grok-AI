@@ -42,7 +42,9 @@ Implemented on `v5-development`:
 - Auto scan requests V5-specific mark and exchange lot metadata only for a bounded set of top candidates; V4 scan does not pay those extra requests.
 - Hybrid paper bot uses mark-referenced entry, 0.5% risk sizing rounded down to exchange quantity step, minimum quantity/notional checks, maximum two open V5 paper positions and no DCA.
 - No live order execution has been introduced. Signal cards expose the six-category score breakdown.
-- Added fee/slippage/funding-aware causal backtest engine. It enters at the next bar open, uses conservative stop-first handling if SL and TP hit in one bar, and reports win rate, profit factor, expectancy and max drawdown.
+- Added fee/slippage/funding-aware causal backtest engine. It enters at the next bar open, charges assumed bid/ask spread on both sides, uses conservative stop-first handling if SL and TP hit in one bar, and reports win rate, profit factor, expectancy and max drawdown.
+- Added a historical V5 signal adapter that aligns 1D/4H/1H/15M bars by actual candle close time, requires minimum quote turnover and applies next-open RR and ATR-gap guards.
+- Added `scripts/run_v5_backtest.py` to run the actual Hybrid V5 engine against user-supplied 15m/1h/4h/1d CSV files and optional historical funding CSV.
 - Added expanding-window walk-forward folds and a runner that fits on train/validation windows and reports untouched test windows.
 - Added a 30-day forward-paper validation endpoint: `GET /api/v5/forward-validation`. It requires at least 30 elapsed days and 30 closed paper trades before reporting READY_FOR_REVIEW; it subtracts estimated round-trip fees and any recorded funding cost. It cannot be pre-completed by code.
 - Added unit tests for data validation, regime/scoring, structure, backtest costs/lookahead, walk-forward, mark-price behavior, lot constraints, risk sizing and forward validation.
