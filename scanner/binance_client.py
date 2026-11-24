@@ -295,6 +295,9 @@ class BinanceClient:
             # Do not silently substitute last-traded price: V5 callers use this
             # value as a mark-price risk check, so absence must remain explicit.
             value = info.get("markPrice") or ticker.get("mark")
+            if value is None and self.exchange.has.get("fetchFundingRate"):
+                funding = self.exchange.fetch_funding_rate(self._ccxt_symbol(symbol)) or {}
+                value = funding.get("markPrice") or (funding.get("info") or {}).get("markPrice")
             price = float(value) if value is not None else None
             return price if price and price > 0 else None
         except Exception as e:
