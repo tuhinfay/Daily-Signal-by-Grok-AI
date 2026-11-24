@@ -13,6 +13,7 @@ from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
 from scanner.v5_analysis import apply_futures_evidence, finalize_v5, reward_risk_at_price
 from scanner.risk_sizing import calculate_position_size
+from scanner.forward_validation import evaluate_forward_trades
 from scanner.indicators import add_indicators, get_latest
 from scanner import db
 import config
@@ -1028,6 +1029,24 @@ def analyze_one(symbol: str, style: str = Query("day")):
     r["styles"] = [selected_style]
     r["summary"] = f"{r.get('setup','')} · {selected_style.upper()} · RR TP1 1:{r['rr']} / TP2 1:{r.get('rr_tp2', 0)} · SL {r['risk_pct']}% · TP1 {r['tp1_pct']}%"
     return {"ok": True, "signal": r}
+
+
+@app.get("/api/v5/forward-validation")
+def api_v5_forward_validation(start: Optional[str] = None):
+    """Report elapsed V5 paper-forward evidence; never labels an immature sample as validated."""
+    end = datetime.now(timezone.utc)
+    if start:
+        try:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "start must be an ISO-8601 datetime"}, status_code=400)
+    else:
+        from datetime import timedelta
+        start_dt = end - timedelta(days=30)
+    result = evaluate_forward_trades(_trades.values(), start=start_dt, end=end, minimum_days=30)
+    return {"ok": True, "validation": result}
 
 
 @app.get("/api/account")
