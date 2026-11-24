@@ -1,7 +1,7 @@
 """Tests for V5 evidence aggregation and hard execution filters."""
 import unittest
 import pandas as pd
-from scanner.v5_analysis import apply_futures_evidence, finalize_v5, validate_v5_frames, reward_risk_at_price
+from scanner.v5_analysis import apply_futures_evidence, finalize_v5, validate_v5_frames, reward_risk_at_price, qualify_v5_signal
 
 
 class V5AnalysisTests(unittest.TestCase):
