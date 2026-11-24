@@ -15,6 +15,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from scanner.backtesting import run_backtest
+from scanner.data_validator import closed_candles
 from scanner.v5_backtest import make_v5_signal_fn
 
 
@@ -29,7 +30,11 @@ def load_ohlcv(path: str) -> pd.DataFrame:
         raise ValueError(f"{path}: expected OHLCV columns {required}")
     for name in required:
         frame[name] = pd.to_numeric(frame[name], errors="coerce")
-    return frame.dropna(subset=required)
+    frame = frame.dropna(subset=required).iloc[:-1].copy()  # conservatively discard the potentially forming final row
+    validated = closed_candles(frame, last_candle_closed=True, min_rows=30)
+    if validated is None:
+        raise ValueError(f"{path}: insufficient valid completed candles after validation")
+    return validated
 
 
 def main():
