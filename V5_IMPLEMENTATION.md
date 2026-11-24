@@ -28,3 +28,23 @@ Target configuration: **Hybrid / Quality First / Signal + Paper Trading**.
 Run: python -m unittest discover -s tests -v
 
 Do not promote V5 to the default scanner until integration tests and out-of-sample backtesting pass.
+
+
+## Current branch status
+
+Implemented in this first development increment:
+- REST OHLCV ingestion drops the final, potentially-forming candle.
+- Added market-data validation and freshness helpers.
+- Added explicit regime classification with UNKNOWN fail-safe.
+- Added fixed-weight quality scoring and non-overridable qualification filters.
+- Added a Hybrid timeframe route to the signal engine (1D/4H/1H/15M).
+- Added Hybrid to manual analysis and paper-trading strategy selection.
+- Added unit tests and a GitHub Actions test workflow.
+
+Not yet production-complete:
+- The new category scorer is not yet wired into the full signal-engine decision path; Hybrid currently uses the existing component scoring with the new minimum score/RR gate.
+- Market regime, structure and derivatives evidence still need full end-to-end integration.
+- The automated scan remains on the existing V4 styles while V5_ENABLED is false.
+- Historical backtest, walk-forward evaluation and paper-forward validation are still outstanding.
+
+Keep V5_ENABLED=false until the remaining integration and tests are completed. No live exchange order execution is part of this branch.
