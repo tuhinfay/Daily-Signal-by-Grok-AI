@@ -138,7 +138,7 @@ echo $! > runtime.pid
 
 - Keep the project directory on persistent disk. SQLite data is stored locally; back up the database file before moving or rebuilding the VPS.
 - No Binance API key is needed for public market-data endpoints. Never add exchange trading permissions for this paper-trading setup.
-- V5 is deliberately disabled for automatic scanning by default (`V5_ENABLED = False`) until integration tests and backtesting are validated. Do not turn it on just to make the V5 UI appear.
+- V5 is deliberately disabled for automatic scanning by default (`V5_ENABLED = False`). The branch now includes backtesting, walk-forward and forward-paper evaluation tools, but a real 30-day paper-forward sample and staging end-to-end validation still require elapsed time. Do not enable V5 in production before those gates pass.
 - This project is designed for signal analysis and simulated paper trading. It does not place live orders.
 - For a production setup, configure HTTPS/reverse proxy, firewall rules, process supervision (for example systemd), log rotation and database backups.
 
@@ -222,6 +222,14 @@ Run the unit tests:
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+Check the V5 paper-forward validation window (requires 30 elapsed days and at least 30 closed paper trades):
+
+```bash
+curl http://127.0.0.1:8083/api/v5/forward-validation
+```
+
+The endpoint reports `COLLECTING_FORWARD_DATA` until both maturity conditions are met. It does not claim a backtest or paper sample has passed before the data exists. See [V5 implementation status](V5_IMPLEMENTATION.md) for backtest and walk-forward module details.
 
 ---
 
