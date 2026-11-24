@@ -91,6 +91,7 @@ def build_v5_evidence(data: Dict, side: str, bias_1d: str, bias_4h: str,
         "volume_futures": volume_score,
         "entry_risk": entry_risk,
         "structure_detail": structure_data,
+        "regime_detail": regime,
     }
 
 
@@ -172,8 +173,15 @@ def qualify_v5_signal(signal: Dict, derivatives: Optional[Dict] = None):
     """Shared final pipeline used by scanner and manual analysis; returns (copy, accepted, reason)."""
     result = dict(signal or {})
     derivatives = derivatives or {}
+    raw_evidence = result.get("v5_evidence") or {}
+    regime_detail = raw_evidence.get("regime_detail") or {}
+    regime_name = str(regime_detail.get("regime") or "UNKNOWN").upper()
+    if regime_name == "UNKNOWN":
+        return result, False, "REGIME_UNAVAILABLE"
+    if regime_name == "HIGH_VOLATILITY":
+        return result, False, "HIGH_VOLATILITY_REGIME"
     evidence = apply_futures_evidence(
-        result.get("v5_evidence") or {}, result.get("side"),
+        raw_evidence, result.get("side"),
         {
             "funding_rate": derivatives.get("funding_rate", result.get("funding_rate")),
             "oi_change_pct": derivatives.get("oi_change_pct", result.get("oi_change_1h_pct")),
