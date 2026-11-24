@@ -476,6 +476,7 @@ def run_scan(top_n: int = 12):
             checked_derivatives.add(sym)
             context = client.get_derivatives_context(sym)
             book = client.get_order_book_context(sym) if not client.rate_limited else {}
+            mark_price = client.get_mark_price(sym) if not client.rate_limited else None
             funding = context.get("funding_rate")
             oi_change = context.get("oi_change_pct")
             imbalance = book.get("book_imbalance_pct")
@@ -488,6 +489,7 @@ def run_scan(top_n: int = 12):
                 item["oi_change_1h_pct"] = round(oi_change, 2) if oi_change is not None else None
                 item["orderbook_imbalance_pct"] = round(imbalance, 2) if imbalance is not None else None
                 item["spread_pct"] = round(spread, 4) if spread is not None else None
+                item["mark_price"] = mark_price
                 item["market_regime"] = btc_regime
                 momentum = float(item.get("coin_return_24h_pct") or 0)
                 if funding is not None and funding >= 0.0005 and item["side"] == "LONG":
@@ -528,7 +530,8 @@ def run_scan(top_n: int = 12):
                     evidence, rr=float(item.get("rr") or 0),
                     spread_pct=item.get("spread_pct"),
                     data_valid=bool(item.get("v5_data_valid") and item.get("v5_evidence")),
-                    candle_closed=True,
+                    candle_closed=True, mark_price=item.get("mark_price"),
+                    entry=item.get("entry"), atr=item.get("atr"), require_mark_price=True,
                 )
                 item["score"] = scored["score"]
                 item["v5_score_breakdown"] = scored["breakdown"]
@@ -972,6 +975,8 @@ def analyze_one(symbol: str, style: str = Query("day")):
         scored, qualified, reason = finalize_v5(
             evidence, rr=float(r.get("rr") or 0), spread_pct=r.get("spread_pct"),
             data_valid=bool(r.get("v5_data_valid")), candle_closed=True,
+            mark_price=client.get_mark_price(sym), entry=r.get("entry"),
+            atr=r.get("atr"), require_mark_price=True,
         )
         r["score"] = scored["score"]
         r["quality"] = scored["grade"]
