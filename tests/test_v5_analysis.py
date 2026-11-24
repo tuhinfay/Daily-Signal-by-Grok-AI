@@ -75,7 +75,7 @@ class V5AnalysisTests(unittest.TestCase):
         )}
         signal = {
             "side":"LONG", "entry":100, "stop_loss":95, "tp1":110,
-            "atr":1, "spread_pct":0.02, "v5_data_valid":True,
+            "atr":1, "spread_pct":0.02, "volume_24h":20_000_000, "v5_data_valid":True,
             "v5_evidence":{**evidence, "regime_detail":{"regime":"STRONG_BULL","bias":"bull","confidence":70}}, "mark_price":100,
         }
         result, accepted, reason = qualify_v5_signal(signal)
@@ -88,13 +88,25 @@ class V5AnalysisTests(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(reason, "MARK_PRICE_UNAVAILABLE")
 
+    def test_low_liquidity_is_rejected(self):
+        evidence = {k: 1.0 for k in (
+            "market_regime", "htf_alignment", "market_structure",
+            "momentum", "volume_futures", "entry_risk",
+        )}
+        signal = {"side":"LONG","entry":100,"stop_loss":95,"tp1":110,"atr":1,
+                  "spread_pct":0.01,"volume_24h":1_000_000,"v5_data_valid":True,
+                  "mark_price":100,"v5_evidence":{**evidence,"regime_detail":{"regime":"STRONG_BULL"}}}
+        _, accepted, reason = qualify_v5_signal(signal)
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "INSUFFICIENT_24H_QUOTE_VOLUME")
+
     def test_unknown_regime_fails_closed(self):
         evidence = {k: 1.0 for k in (
             "market_regime", "htf_alignment", "market_structure",
             "momentum", "volume_futures", "entry_risk",
         )}
         signal = {"side":"LONG","entry":100,"stop_loss":95,"tp1":110,"atr":1,
-                  "spread_pct":0.01,"v5_data_valid":True,"mark_price":100,
+                  "spread_pct":0.01,"volume_24h":20_000_000,"v5_data_valid":True,"mark_price":100,
                   "v5_evidence":{**evidence,"regime_detail":{"regime":"UNKNOWN"}}}
         _, accepted, reason = qualify_v5_signal(signal)
         self.assertFalse(accepted)
