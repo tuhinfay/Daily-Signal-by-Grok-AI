@@ -949,6 +949,29 @@ def analyze_one(symbol: str, style: str = Query("day")):
             status_code=503,
         )
     r = engine.analyze_pair(sym, data, volume_24h=0, style=selected_style)
+    if r and selected_style == "hybrid":
+        derivatives = client.get_derivatives_context(sym)
+        book = client.get_order_book_context(sym) if not client.rate_limited else {}
+        r["funding_rate"] = derivatives.get("funding_rate")
+        r["open_interest"] = derivatives.get("open_interest")
+        r["oi_change_1h_pct"] = derivatives.get("oi_change_pct")
+        r["orderbook_imbalance_pct"] = book.get("book_imbalance_pct")
+        r["spread_pct"] = book.get("spread_pct")
+        evidence = apply_futures_evidence(
+            r.get("v5_evidence") or {}, r.get("side"),
+            {"funding_rate": r["funding_rate"], "oi_change_pct": r["oi_change_1h_pct"],
+             "book_imbalance_pct": r["orderbook_imbalance_pct"]},
+        )
+        scored, qualified, reason = finalize_v5(
+            evidence, rr=float(r.get("rr") or 0), spread_pct=r.get("spread_pct"),
+            data_valid=bool(r.get("v5_data_valid")), candle_closed=True,
+        )
+        r["score"] = scored["score"]
+        r["quality"] = scored["grade"]
+        r["v5_score_breakdown"] = scored["breakdown"]
+        r["v5_qualification"] = reason
+        if not qualified:
+            r = None
     px = client.get_current_price(sym)
     lev = client.get_max_leverage(sym)
     _scan_max_leverage[sym] = lev
