@@ -412,7 +412,7 @@ def run_scan(top_n: int = 12):
                 _scan_max_leverage[symbol] = max_leverage
                 if px:
                     prices[symbol] = px
-                for style_name in ("scalp", "day", "swing"):
+                for style_name in (("hybrid",) if getattr(config, "V5_ENABLED", False) else ("scalp", "day", "swing")):
                     r = engine.analyze_pair(symbol, data, volume_24h=vol, style=style_name)
                     if not r:
                         continue
@@ -871,7 +871,7 @@ async def get_auto_trade():
 async def set_auto_trade(body: Dict[str, Any]):
     try:
         _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
-        if _bot_config["trade_style"] not in ("scalp","day","swing"): _bot_config["trade_style"] = "day"
+        if _bot_config["trade_style"] not in ("scalp","day","swing","hybrid"): _bot_config["trade_style"] = "day"
         if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
         if _bot_config["direction"] not in ("both","long","short"): _bot_config["direction"] = "both"
     except (TypeError,ValueError): return JSONResponse({"ok":False,"error":"Invalid Auto Trade settings"},status_code=400)
@@ -895,7 +895,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     sym = symbol.upper().replace("/", "").replace("-", "")
     if not sym.endswith("USDT"):
         sym += "USDT"
-    selected_style = style if style in ("scalp", "day", "swing") else "day"
+    selected_style = style if style in ("scalp", "day", "swing", "hybrid") else "day"
     client = BinanceClient(futures=True)
     engine = SignalEngine()
     # Fetch only the timeframes required by the selected strategy. This keeps
@@ -904,6 +904,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
         "scalp": ("5m", "15m", "1h", "4h", "1d"),
         "day": ("15m", "1h", "4h", "1d"),
         "swing": ("1h", "4h", "1d"),
+        "hybrid": ("15m", "1h", "4h", "1d"),
     }[selected_style]
     data = {}
     for tf in required_tfs:
