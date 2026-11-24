@@ -194,5 +194,6 @@ def qualify_v5_signal(signal: Dict, derivatives: Optional[Dict] = None):
         "rr": round(actual_rr, 2), "mark_price": mark,
         "score": scored["score"], "quality": scored["grade"],
         "v5_score_breakdown": scored["breakdown"], "v5_qualification": reason,
+        "v5_structure": (result.get("v5_evidence") or {}).get("structure_detail"),
     })
     return result, accepted, reason
