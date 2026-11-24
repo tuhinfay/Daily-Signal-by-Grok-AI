@@ -33,6 +33,16 @@ class V5CoreTests(unittest.TestCase):
     def test_scoring_weights_sum_to_100(self):
         result=score_candidate({})
         self.assertEqual(sum(x["weight"] for x in result["breakdown"].values()),100)
+    def test_non_finite_spread_is_rejected(self):
+        scored = score_candidate({k:1 for k in (
+            "market_regime","htf_alignment","market_structure",
+            "momentum","volume_futures","entry_risk")})
+        ok, reason = qualify_candidate(
+            scored, rr=3, data_valid=True, candle_closed=True, spread_pct=float("nan")
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "INVALID_RISK_INPUT")
+
     def test_candle_filter_overrides_high_score(self):
         scored=score_candidate({k:1 for k in ("market_regime","htf_alignment",
           "market_structure","momentum","volume_futures","entry_risk")})
