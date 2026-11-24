@@ -5,7 +5,7 @@ import math
 import pandas as pd
 from .indicators import add_indicators, get_latest, get_prev
 from .risk import calculate_levels
-from .v5_analysis import build_v5_evidence, score_candidate
+from .v5_analysis import build_v5_evidence, score_candidate, validate_v5_frames
 import config
 
 
@@ -289,7 +289,11 @@ class SignalEngine:
             return None
         v5_assessment = None
         evidence = None
+        v5_data_valid = False
         if style == "hybrid":
+            v5_data_valid = validate_v5_frames(data)
+            if not v5_data_valid:
+                return None
             evidence = build_v5_evidence(
                 data, side, bias_1d, bias_4h,
                 float(levels.get("rr1") or 0), volume_24h or 0,
@@ -362,4 +366,5 @@ class SignalEngine:
             "timeframe": timeframe,
             "v5_score_breakdown": v5_assessment["breakdown"] if v5_assessment else None,
             "v5_evidence": evidence if style == "hybrid" else None,
+            "v5_data_valid": v5_data_valid,
         }
