@@ -115,6 +115,7 @@ class V5BacktestingTests(unittest.TestCase):
                 }
         client = object.__new__(BinanceClient)
         client._markets_loaded = True
+        client.futures = True
         client.exchange = Exchange()
         result = client.get_order_constraints("BTCUSDT")
         self.assertEqual(result["qty_step"], 0.001)
