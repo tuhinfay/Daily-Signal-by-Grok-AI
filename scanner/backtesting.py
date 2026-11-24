@@ -158,7 +158,13 @@ def run_walk_forward(frame: pd.DataFrame, fit_fn: Callable, *,
         signal_fn = fit_fn(fold["train"], fold["validation"])
         if not callable(signal_fn):
             raise ValueError("fit_fn must return a callable signal function")
-        report = run_backtest(fold["test"], signal_fn, **(backtest_kwargs or {}))
+        combined = pd.concat([fold["train"], fold["validation"], fold["test"]]).sort_index()
+        test_start = fold["test"].index[0]
+        def held_out_signal(prefix, index):
+            if prefix.index[-1] < test_start:
+                return None
+            return signal_fn(prefix, index)
+        report = run_backtest(combined, held_out_signal, **(backtest_kwargs or {}))
         reports.append({"fold": fold["fold"], "train_rows": len(fold["train"]),
                         "validation_rows": len(fold["validation"]),
                         "test_rows": len(fold["test"]), "metrics": report})
