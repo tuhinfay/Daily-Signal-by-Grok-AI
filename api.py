@@ -420,7 +420,8 @@ def run_scan(top_n: int = 12):
             btc_return = (float(btc_df["close"].iloc[-1]) / float(btc_df["close"].iloc[-25]) - 1.0) * 100.0
         for symbol, vol in pairs:
             data = {}
-            for tf in ("5m", "15m", "1h", "4h", "1d"):
+            scan_timeframes = ("15m", "1h", "4h", "1d") if getattr(config, "V5_ENABLED", False) else ("5m", "15m", "1h", "4h", "1d")
+            for tf in scan_timeframes:
                 if client.rate_limited:
                     break
                 df = client.fetch_ohlcv(symbol, timeframe=tf, limit=config.CANDLE_LIMIT.get(tf, 100))
@@ -492,8 +493,8 @@ def run_scan(top_n: int = 12):
             checked_derivatives.add(sym)
             context = client.get_derivatives_context(sym)
             book = client.get_order_book_context(sym) if not client.rate_limited else {}
-            mark_price = client.get_mark_price(sym) if not client.rate_limited else None
-            constraints = client.get_order_constraints(sym) if not client.rate_limited else {}
+            mark_price = (context.get("mark_price") or client.get_mark_price(sym)) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else None
+            constraints = client.get_order_constraints(sym) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else {}
             funding = context.get("funding_rate")
             oi_change = context.get("oi_change_pct")
             imbalance = book.get("book_imbalance_pct")
