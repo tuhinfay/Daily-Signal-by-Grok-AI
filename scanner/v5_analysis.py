@@ -135,11 +135,17 @@ def validate_mark_price(entry: float, mark_price: Optional[float], atr: float,
 
 
 def finalize_v5(evidence: Dict[str, float], *, rr: float, spread_pct: Optional[float],
-                data_valid: bool, candle_closed: bool):
+                data_valid: bool, candle_closed: bool, mark_price: Optional[float] = None,
+                entry: Optional[float] = None, atr: Optional[float] = None,
+                require_mark_price: bool = False):
     """Fail closed if spread is unavailable; never let score override execution-quality filters."""
     scored = score_candidate(evidence)
     if spread_pct is None:
         return scored, False, "SPREAD_UNAVAILABLE"
+    if require_mark_price:
+        valid_mark, mark_reason, _ = validate_mark_price(entry, mark_price, atr)
+        if not valid_mark:
+            return scored, False, mark_reason
     ok, reason = qualify_candidate(
         scored, rr=rr, data_valid=data_valid, candle_closed=candle_closed,
         spread_pct=spread_pct, min_score=75, min_rr=2.0, max_spread_pct=0.10,
