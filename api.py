@@ -1858,6 +1858,8 @@ async function loadTrades(){
     return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtPrice(t.entry)}</strong></div><div><em>Close Price</em><strong>${exit?fmtPrice(exit):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
   }).join('');h+='</div>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
+  // Defensive cleanup: never show TP2 as a field on an open My Trades card.
+  tradeList.querySelectorAll('.card').forEach(card=>{if(card.querySelector('.actions button[onclick^="closeTrade("]'))card.querySelectorAll('.vals > div').forEach(row=>{const label=row.querySelector('em');if(label&&label.textContent.trim().toUpperCase()==='TP2')row.remove();});});
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
   }catch(e){console.error('loadTrades',e);}finally{window._loadingTrades=false;}
 }
