@@ -1975,7 +1975,7 @@ async function loadTrades(){
   if(window._loadingTrades)return;window._loadingTrades=true;
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),8000);
-  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
+  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;const openExpanded=document.getElementById('openTradesDetails')?.open??true;const closedExpanded=document.getElementById('closedTradesDetails')?.open??false;
   const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
   if(!response.ok)throw new Error('Trade list HTTP '+response.status);
   const d=await response.json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
@@ -1990,7 +1990,7 @@ async function loadTrades(){
   let h='';
   if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') · Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtPrice(t.limit_price)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
   window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
-  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
+  if(open.length){h+='<details id="openTradesDetails" class="card" '+(openExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Running Trades ('+open.length+') · Click to collapse</summary>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
@@ -2023,14 +2023,14 @@ async function loadTrades(){
         <button class="btn dim" onclick="shareTrade('${t.id}')">Share</button>
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
-      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
+      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');h+='</details>';}
+  if(closed.length){h+='<details id="closedTradesDetails" class="card" '+(closedExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Closed Trade History ('+closed.length+') · Click to expand</summary>';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
     const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
     const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
     return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtPrice(t.entry)}</strong></div><div><em>Close Price</em><strong>${exit?fmtPrice(exit):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
-  }).join('');h+='</div>';}
+  }).join('');h+='</details>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   // Defensive cleanup: never show TP2 as a field on an open My Trades card.
   tradeList.querySelectorAll('.card').forEach(card=>{if(card.querySelector('.actions button[onclick^="closeTrade("]'))card.querySelectorAll('.vals > div').forEach(row=>{const label=row.querySelector('em');if(label&&label.textContent.trim().toUpperCase()==='TP2')row.remove();});});
