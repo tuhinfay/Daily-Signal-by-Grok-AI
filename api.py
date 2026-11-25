@@ -409,6 +409,16 @@ def _run_paper_auto_bot(signals):
                 if new_qty <= 0: continue
                 position["entry"] = round((entry0 * old_qty + mark * add_qty) / new_qty, 8)
                 position["qty"] = round(new_qty, 8)
+                avg_entry = float(position["entry"])
+                if float(position.get("sl_pct_setting") or 0) > 0:
+                    p = float(position["sl_pct_setting"]) / 100.0
+                    position["stop_loss"] = avg_entry * (1-p if position.get("side") == "LONG" else 1+p)
+                if float(position.get("tp1_pct_setting") or 0) > 0:
+                    p = float(position["tp1_pct_setting"]) / 100.0
+                    position["tp1"] = avg_entry * (1+p if position.get("side") == "LONG" else 1-p)
+                if float(position.get("tp2_pct_setting") or 0) > 0:
+                    p = float(position["tp2_pct_setting"]) / 100.0
+                    position["tp2"] = avg_entry * (1+p if position.get("side") == "LONG" else 1-p)
                 position["notional"] = round(float(position.get("notional") or 0) + add_notional, 2)
                 position["margin"] = round(float(position.get("margin") or 0) + add_margin, 2)
                 position["dca_count"] = adds + 1
@@ -892,7 +902,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
             continue
 
         # Optional per-position DCA: adverse move from latest fill, bounded by count and optional range.
-        if t.get("advanced_dca_enabled") and int(t.get("dca_count") or 0) < int(t.get("dca_max_orders") or 3):
+        if t.get("advanced_dca_enabled") and not t.get("auto_trade") and int(t.get("dca_count") or 0) < int(t.get("dca_max_orders") or 3):
             adds = int(t.get("dca_count") or 0); hist = t.get("dca_history") or []
             anchor = float(hist[-1].get("price") or entry) if hist else entry
             gap = max(0.001, min(float(t.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
@@ -1570,6 +1580,10 @@ def create_trade(body: TradeCreate):
         if body.tp2_pct and body.tp2_pct > 0:
             p = min(float(body.tp2_pct), 200.0) / 100.0
             body.tp2 = entry_price * (1 + p if side == "LONG" else 1 - p)
+    if body.advanced_enabled and body.dca_enabled:
+        lower, upper = float(body.dca_lower_price or 0), float(body.dca_upper_price or 0)
+        if lower and upper and upper <= lower:
+            return JSONResponse({"ok": False, "error": "DCA upper price must be greater than lower price"}, status_code=400)
     if entry_price <= 0: return JSONResponse({"ok": False, "error": "invalid entry price"}, status_code=400)
     # No Binance client/network I/O in the order-submit path.
     # The modal/scanner refreshes market prices in the background.
@@ -1637,7 +1651,7 @@ def create_trade(body: TradeCreate):
         "trade_style": (str(body.trade_style).lower() if str(body.trade_style or "").lower() in ("scalp", "day", "swing") else "day"),
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
-        "trailing_pct": None, "callback_rate": None, "trailing_activation_price": None,
+        "trailing_pct": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "callback_rate": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "trailing_activation_price": None,
         "trailing_active": False, "peak_price": entry_price, "trough_price": entry_price,
         "advanced_enabled": bool(body.advanced_enabled),
         "advanced_dca_enabled": bool(body.advanced_enabled and body.dca_enabled),
@@ -2441,6 +2455,7 @@ async function submitTrade(){
   if(!(+m_tp1.value>0)){toast('Enter a valid TP1');return;}
   const adv=document.getElementById('addAdvanced').open,offset=adv?(+m_limit_offset.value||0):0;
   if(offset>0&&typ!=='LIMIT'){toast('Choose Limit order to use Limit Entry Offset');return;}
+  if(offset>0&&m_scale.value){toast('Limit offset cannot be combined with scaled entry');return;}
   const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null,advanced_enabled:adv,dca_enabled:adv&&m_adv_dca.checked,dca_gap_pct:+m_dca_gap.value||1.5,dca_max_orders:+m_dca_max.value||3,dca_multiplier:+m_dca_mult.value||1.5,dca_lower_price:+m_dca_low.value||null,dca_upper_price:+m_dca_high.value||null,limit_offset_pct:offset,sl_pct:adv?(+m_sl_pct.value||null):null,tp1_pct:adv?(+m_tp1_pct.value||null):null,tp2_pct:adv?(+m_tp2_pct.value||null):null,profit_lock_enabled:adv&&m_profit_lock.checked,profit_activation_pct:+m_profit_activation.value||0.8,profit_callback_pct:+m_profit_callback.value||0.5};
   if(mode==='amount')body.amount_usd=+m_amount.value;
   if(mode==='margin')body.margin_usd=+m_margin.value;
