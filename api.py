@@ -2071,8 +2071,9 @@ function cardHTML(s){
       <div><em>TP2</em><strong>${fmtSymbolPrice(s.symbol,s.tp2,s.price_precision)}</strong></div>
       <div><em>TP1 RR</em><strong>1:${s.rr}</strong></div>
       <div><em>TP2 RR</em><strong>1:${(s.rr_tp2??'—')}</strong></div>
+      <div><em>SL %</em><strong>${s.risk_pct==null?'—':fmt(s.risk_pct)+'%'}</strong></div>
+      <div><em>TP1 %</em><strong>${s.tp1_pct==null?'—':fmt(s.tp1_pct)+'%'}</strong></div>
     </div>
-    <div class="sub" style="margin-top:8px">${s.summary||''}</div>
     ${v5Details}
     ${v5Structure}
     ${marketStructureHTML(s.market_structure,s.price_precision)}
