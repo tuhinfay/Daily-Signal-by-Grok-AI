@@ -367,6 +367,61 @@ class BinanceClient:
             print(f"open interest history {symbol}: {e}")
         return result
 
+    def get_global_derivatives_context(self, symbol: str) -> Dict[str, Optional[float]]:
+        """Blend public Binance, Bybit and OKX derivatives signals when available.
+
+        OI percentage changes are compared within each venue, then median-aggregated;
+        raw contract quantities are deliberately not summed across exchanges.
+        """
+        base = self.get_derivatives_context(symbol)
+        changes, funding, sources = [], [], []
+        if base.get("oi_change_pct") is not None:
+            changes.append(float(base["oi_change_pct"]))
+            sources.append("Binance")
+        if base.get("funding_rate") is not None:
+            funding.append(float(base["funding_rate"]))
+        clean = self._clean_symbol(symbol)
+        if not clean.endswith("USDT"):
+            return {**base, "oi_sources": sources, "oi_coverage": len(sources)}
+        try:
+            import statistics
+            for exchange_id in ("bybit", "okx"):
+                try:
+                    exchange_class = getattr(ccxt, exchange_id, None)
+                    if exchange_class is None:
+                        continue
+                    venue = exchange_class({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+                    market_symbol = self._ccxt_symbol(clean)
+                    if not venue.has.get("fetchOpenInterestHistory"):
+                        continue
+                    history = venue.fetch_open_interest_history(market_symbol, timeframe="1h", limit=2) or []
+                    values = []
+                    for row in history:
+                        info = row.get("info") or {}
+                        value = (row.get("openInterestValue") or row.get("openInterestAmount")
+                                 or info.get("sumOpenInterestValue") or info.get("sumOpenInterest")
+                                 or info.get("openInterest"))
+                        if value is not None and float(value) > 0:
+                            values.append(float(value))
+                    if len(values) >= 2 and values[-2] > 0:
+                        changes.append((values[-1] / values[-2] - 1.0) * 100.0)
+                        sources.append(exchange_id.title())
+                    if venue.has.get("fetchFundingRate"):
+                        rate = venue.fetch_funding_rate(market_symbol) or {}
+                        if rate.get("fundingRate") is not None:
+                            funding.append(float(rate["fundingRate"]))
+                except Exception as exc:
+                    print(f"[global-derivatives] {exchange_id} {clean}: {exc}")
+        except Exception as exc:
+            print(f"[global-derivatives] setup {clean}: {exc}")
+        result = dict(base)
+        result["oi_change_pct"] = round(statistics.median(changes), 2) if changes else None
+        result["funding_rate"] = statistics.median(funding) if funding else None
+        result["oi_sources"] = sources
+        result["oi_coverage"] = len(sources)
+        return result
+
+
     def get_order_book_context(self, symbol: str, limit: int = 20) -> Dict[str, Optional[float]]:
         """Return top-of-book spread and depth imbalance; never infer hidden liquidity."""
         result: Dict[str, Optional[float]] = {"book_imbalance_pct": None, "spread_pct": None}
