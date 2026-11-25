@@ -2213,7 +2213,7 @@ function cardHTML(s){
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
       <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span><span class="tag ${(Number(s.daily_change_pct)||0)>=0?'up':'dn'}">${s.daily_change_pct==null?'—':(Number(s.daily_change_pct)>=0?'+':'')+Number(s.daily_change_pct).toFixed(2)+'% 24H'}</span></div>
       <div class="score">${s.score}</div></div>
-      <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} (${s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||['day'])[0]).toLowerCase()]||'15m')}) · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
+      <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ENTRY ${s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||['day'])[0]).toLowerCase()]||'15m')} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
       ${timeframeHTML(s)}
       ${marketSummaryHTML(s)}
     <div class="vals">
