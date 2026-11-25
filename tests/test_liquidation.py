@@ -1,6 +1,7 @@
 import unittest
 
 import api
+from scanner import liquidation_feed
 
 
 class LiquidationEstimateTests(unittest.TestCase):
@@ -45,6 +46,31 @@ class LiquidationEstimateTests(unittest.TestCase):
 
     def test_invalid_trade_has_no_liquidation_price(self):
         self.assertIsNone(api._estimate_liquidation_price({"side": "LONG", "qty": 0}))
+
+
+    def test_liquidation_summary_includes_one_minute_window(self):
+        now_ms = int(__import__("time").time() * 1000)
+        with liquidation_feed._lock:
+            original = dict(liquidation_feed._orders)
+            liquidation_feed._orders.clear()
+            liquidation_feed._orders["BTCUSDT:1"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "LONG",
+                "timestamp_ms": now_ms - 10_000, "notional_usdt": 125.0,
+            }
+            liquidation_feed._orders["BTCUSDT:2"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "SHORT",
+                "timestamp_ms": now_ms - 120_000, "notional_usdt": 75.0,
+            }
+        try:
+            result = liquidation_feed.get_liquidation_summary("BTCUSDT")
+            self.assertEqual(result["timeframes"]["1m"]["long_usdt"], 125.0)
+            self.assertEqual(result["timeframes"]["1m"]["short_usdt"], 0.0)
+            self.assertEqual(result["timeframes"]["5m"]["short_usdt"], 75.0)
+            self.assertIn("1m", result["timeframes"])
+        finally:
+            with liquidation_feed._lock:
+                liquidation_feed._orders.clear()
+                liquidation_feed._orders.update(original)
 
 
 if __name__ == "__main__":
