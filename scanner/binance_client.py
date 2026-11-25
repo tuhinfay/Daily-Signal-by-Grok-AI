@@ -227,7 +227,7 @@ class BinanceClient:
                     continue
                 rows.append({
                     "symbol": symbol,
-                    "change": round(change, 2),
+                    "change": change,
                     "volume": volume,
                     "price": last,
                     "period": "rolling 24h",
