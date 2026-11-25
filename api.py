@@ -493,7 +493,7 @@ def run_scan(top_n: int = 12):
             if sym in checked_derivatives or len(checked_derivatives) >= 4 or client.rate_limited:
                 continue
             checked_derivatives.add(sym)
-            context = client.get_derivatives_context(sym)
+            context = client.get_global_derivatives_context(sym)
             book = client.get_order_book_context(sym) if not client.rate_limited else {}
             mark_price = (context.get("mark_price") or client.get_mark_price(sym)) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else None
             constraints = client.get_order_constraints(sym) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else {}
@@ -505,6 +505,8 @@ def run_scan(top_n: int = 12):
                 if item["symbol"] != sym:
                     continue
                 item["funding_rate"] = funding
+                item["oi_sources"] = context.get("oi_sources") or ["Binance"]
+                item["oi_coverage"] = context.get("oi_coverage", 1)
                 item["open_interest"] = context.get("open_interest")
                 item["oi_change_1h_pct"] = round(oi_change, 2) if oi_change is not None else None
                 item["orderbook_imbalance_pct"] = round(imbalance, 2) if imbalance is not None else None
