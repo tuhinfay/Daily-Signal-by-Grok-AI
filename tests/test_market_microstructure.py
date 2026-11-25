@@ -29,6 +29,17 @@ class MarketMicrostructureTests(unittest.TestCase):
         client._tickers_cache = {}
         self.assertEqual(client.get_24h_change_pct("BTCUSDT"), 4.57)
 
+    def test_24h_change_uses_ticker_percentage(self):
+        class TickerExchange:
+            def fetch_ticker(self, symbol):
+                return {"percentage": 4.567}
+        client = BinanceClient.__new__(BinanceClient)
+        client.rate_limited = False
+        client.futures = True
+        client.exchange = TickerExchange()
+        client._tickers_cache = {}
+        self.assertEqual(client.get_24h_change_pct("BTCUSDT"), 4.57)
+
     def test_order_book_uses_quote_notional_imbalance_and_spread(self):
         client = BinanceClient.__new__(BinanceClient)
         client.rate_limited = False
