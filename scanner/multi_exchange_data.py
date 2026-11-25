@@ -181,12 +181,22 @@ def get_multi_exchange_context(symbol: str) -> Dict[str, Any]:
             return cached
     futures = {exchange_id: _executor.submit(_venue_snapshot, exchange_id, base)
                for exchange_id in _EXCHANGE_IDS}
-    venues = []
+    venues_by_id = {}
+    future_to_id = {future: exchange_id for exchange_id, future in futures.items()}
+    try:
+        for future in concurrent.futures.as_completed(future_to_id, timeout=9.0):
+            exchange_id = future_to_id[future]
+            try:
+                venues_by_id[exchange_id] = future.result()
+            except Exception as exc:
+                venues_by_id[exchange_id] = {"exchange": exchange_id, "status": "unavailable", "error": str(exc)[:180]}
+    except concurrent.futures.TimeoutError:
+        pass
     for exchange_id, future in futures.items():
-        try:
-            venues.append(future.result(timeout=8.0))
-        except Exception as exc:
-            venues.append({"exchange": exchange_id, "status": "unavailable", "error": str(exc)[:180]})
+        if exchange_id not in venues_by_id:
+            future.cancel()
+            venues_by_id[exchange_id] = {"exchange": exchange_id, "status": "unavailable", "error": "Snapshot timed out"}
+    venues = [venues_by_id[exchange_id] for exchange_id in _EXCHANGE_IDS]
     valid = [venue for venue in venues if venue.get("status") == "ok"]
     periods = ("5m", "15m", "1h", "4h", "1d")
     aggregated = {}
