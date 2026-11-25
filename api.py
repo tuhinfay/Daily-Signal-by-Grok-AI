@@ -1937,7 +1937,7 @@ function cardHTML(s){
     <div class="sub" style="margin-top:8px">${s.summary||''}</div>
     ${v5Details}
     ${v5Structure}
-    <div class="sub">BTC ${s.market_regime||'—'} · OI 1h ${s.oi_change_1h_pct==null?'—':s.oi_change_1h_pct+'%'} · Book ${s.orderbook_imbalance_pct==null?'—':s.orderbook_imbalance_pct+'%'} · Spread ${s.spread_pct==null?'—':s.spread_pct+'%'}</div>
+    <div class="sub">BTC ${s.market_regime||'—'} · Global OI 1h ${s.oi_change_1h_pct==null?'—':s.oi_change_1h_pct+'%'} (${(s.oi_sources||[]).join('/')||'no data'}) · Book ${s.orderbook_imbalance_pct==null?'—':s.orderbook_imbalance_pct+'%'} · Spread ${s.spread_pct==null?'—':s.spread_pct+'%'}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
     <div class="chartbox" id="${cid}"></div></article>`;
