@@ -553,9 +553,6 @@ def run_scan(top_n: int = 12):
             market_pressure = client.get_market_pressure_context(sym) if not client.rate_limited else {"timeframes": {}}
             multi_exchange = get_multi_exchange_context(sym)
             market_pressure["multi_exchange"] = multi_exchange
-            for tf, values in (multi_exchange.get("timeframes") or {}).items():
-                if tf in market_pressure.get("timeframes", {}) and values.get("total_volume_usdt") is not None:
-                    market_pressure["timeframes"][tf].update(values)
             mark_price = (context.get("mark_price") or client.get_mark_price(sym)) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else None
             constraints = client.get_order_constraints(sym) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else {}
             funding = context.get("funding_rate")
@@ -1151,9 +1148,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     r["market_structure"]["market_pressure"] = client.get_market_pressure_context(sym)
     multi_exchange = get_multi_exchange_context(sym)
     r["market_structure"]["market_pressure"]["multi_exchange"] = multi_exchange
-    for tf, values in (multi_exchange.get("timeframes") or {}).items():
-        if tf in r["market_structure"]["market_pressure"].get("timeframes", {}) and values.get("total_volume_usdt") is not None:
-            r["market_structure"]["market_pressure"]["timeframes"][tf].update(values)
+    r["market_structure"]["liquidations"] = get_liquidation_summary(sym)
     _market_structure_cache[_market_symbol_key(sym)] = r["market_structure"]
     # Match Binance USDⓈ-M rolling 24h ticker percentage, not the UTC 1d candle open.
     change_24h_pct = client.get_24h_change_pct(sym)
