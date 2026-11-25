@@ -480,6 +480,57 @@ class BinanceClient:
             print(f"order book {symbol}: {e}")
         return result
 
+    def get_market_pressure_context(self, symbol: str) -> Dict[str, Any]:
+        """Return Binance USD-M public crowd, taker-flow and quote-volume snapshots by timeframe."""
+        result = {"timeframes": {}, "source": "Binance USD-M Futures"}
+        if self.rate_limited:
+            return result
+        clean = self._clean_symbol(symbol)
+        periods = ("5m", "15m", "1h", "4h", "1d")
+        for period in periods:
+            row = {"long_pct": None, "short_pct": None, "long_short_ratio": None,
+                   "buy_usdt": None, "sell_usdt": None, "total_volume_usdt": None,
+                   "buy_pct": None, "sell_pct": None, "timestamp": None}
+            try:
+                ratio_method = getattr(self.exchange, "fapiDataGetGlobalLongShortAccountRatio", None)
+                rows = ratio_method({"symbol": clean, "period": period, "limit": 1}) if callable(ratio_method) else []
+                if rows:
+                    item = rows[-1]
+                    if item.get("longAccount") is not None:
+                        row["long_pct"] = round(float(item["longAccount"]) * 100, 2)
+                    if item.get("shortAccount") is not None:
+                        row["short_pct"] = round(float(item["shortAccount"]) * 100, 2)
+                    if item.get("longShortRatio") is not None:
+                        row["long_short_ratio"] = round(float(item["longShortRatio"]), 3)
+                    row["timestamp"] = item.get("timestamp")
+            except Exception as exc:
+                self._mark_rate_limit(exc)
+                print(f"[market-pressure] long/short {clean} {period}: {exc}")
+            try:
+                # Kline fields 7 and 10 are quote turnover and taker-buy quote turnover.
+                kline_method = getattr(self.exchange, "fapiPublicGetKlines", None)
+                candles = kline_method({"symbol": clean, "interval": period, "limit": 1}) if callable(kline_method) and not self.rate_limited else []
+                if candles:
+                    candle = candles[-1]
+                    total = float(candle[7])
+                    buy = float(candle[10])
+                    sell = max(0.0, total - buy)
+                    if total >= 0 and buy >= 0:
+                        row["total_volume_usdt"] = round(total, 2)
+                        row["buy_usdt"] = round(buy, 2)
+                        row["sell_usdt"] = round(sell, 2)
+                        if total > 0:
+                            row["buy_pct"] = round(buy / total * 100, 2)
+                            row["sell_pct"] = round(sell / total * 100, 2)
+                        row["volume_timestamp"] = candle[0]
+            except Exception as exc:
+                self._mark_rate_limit(exc)
+                print(f"[market-pressure] volume {clean} {period}: {exc}")
+            result["timeframes"][period] = row
+            if self.rate_limited:
+                break
+        return result
+
     def get_market_structure_context(self, symbol: str) -> Dict[str, Optional[float]]:
         """Fetch Binance public crowd positioning and taker flow where available."""
         result: Dict[str, Optional[float]] = {
