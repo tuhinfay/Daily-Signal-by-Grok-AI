@@ -49,6 +49,8 @@ _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
 _daily_open_cache: Dict[str, Dict[str, float]] = {}
+_symbol_price_precision: Dict[str, int] = {}
+_market_structure_cache: Dict[str, Dict[str, Any]] = {}
 _bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both"}
 
 def _utc_daily_change_pct(df, current_price=None):
@@ -400,6 +402,16 @@ def run_scan(top_n: int = 12):
         client = BinanceClient(futures=True)
         engine = SignalEngine()
         pairs = client.get_top_usdt_pairs(top_n=top_n, min_volume=config.MIN_VOLUME_USDT)
+        for pair_symbol, _ in pairs:
+            precision = client.get_price_precision(pair_symbol)
+            if precision is not None:
+                _symbol_price_precision[pair_symbol] = precision
+        for existing_trade in _trades.values():
+            trade_symbol = str(existing_trade.get("symbol") or "")
+            if existing_trade.get("status") in ("OPEN", "CLOSED") and trade_symbol and trade_symbol not in _symbol_price_precision:
+                precision = client.get_price_precision(trade_symbol)
+                if precision is not None:
+                    _symbol_price_precision[trade_symbol] = precision
         try:
             mv = client.get_movers(top_n=1000, min_volume=0)
             _cache["gainers"] = mv.get("gainers", [])
@@ -495,6 +507,7 @@ def run_scan(top_n: int = 12):
             checked_derivatives.add(sym)
             context = client.get_global_derivatives_context(sym)
             book = client.get_order_book_context(sym) if not client.rate_limited else {}
+            structure = client.get_market_structure_context(sym) if not client.rate_limited else {}
             mark_price = (context.get("mark_price") or client.get_mark_price(sym)) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else None
             constraints = client.get_order_constraints(sym) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else {}
             funding = context.get("funding_rate")
@@ -511,6 +524,9 @@ def run_scan(top_n: int = 12):
                 item["oi_change_1h_pct"] = round(oi_change, 2) if oi_change is not None else None
                 item["orderbook_imbalance_pct"] = round(imbalance, 2) if imbalance is not None else None
                 item["spread_pct"] = round(spread, 4) if spread is not None else None
+                item["market_structure"] = {**book, **structure, "funding_rate": funding, "oi_change_1h_pct": round(oi_change, 2) if oi_change is not None else None}
+                _market_structure_cache[sym] = item["market_structure"]
+                item["price_precision"] = _symbol_price_precision.get(sym)
                 item["mark_price"] = mark_price
                 item["qty_step"] = constraints.get("qty_step")
                 item["min_qty"] = constraints.get("min_qty")
@@ -960,6 +976,7 @@ async def api_signals(style: str = Query("all")):
     for s in _cache["signals"]:
         s2 = dict(s)
         s2["already_added"] = (s["symbol"], s["side"]) in open_keys
+        s2["price_precision"] = _symbol_price_precision.get(str(s2.get("symbol") or ""))
         if s2["symbol"] in _cache.get("prices", {}):
             s2["market_price"] = _cache["prices"][s2["symbol"]]
         if style != "all" and style not in (s2.get("styles") or []):
@@ -1148,9 +1165,11 @@ async def api_trades():
     _calc_equity()
     trades = [dict(trade) for trade in _trades.values()]
     for trade in trades:
+        symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
+        trade["price_precision"] = _symbol_price_precision.get(symbol)
+        trade["market_structure"] = _market_structure_cache.get(symbol)
         if trade.get("status") != "OPEN":
             continue
-        symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
         cached = _daily_open_cache.get(symbol)
         if cached and cached.get("change") is not None:
             trade["daily_change_pct"] = cached["change"]
