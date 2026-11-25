@@ -327,7 +327,9 @@ class BinanceClient:
     def get_derivatives_context(self, symbol: str) -> Dict[str, Optional[float]]:
         """Fetch optional public Futures funding and open-interest context."""
         result: Dict[str, Optional[float]] = {
-            "funding_rate": None, "open_interest": None, "oi_change_pct": None, "mark_price": None,
+            "funding_rate": None, "open_interest": None, "open_interest_usd": None,
+            "oi_change_pct": None, "oi_change_24h_pct": None, "mark_price": None,
+            "oi_updated_at": None,
         }
         if self.rate_limited:
             return result
@@ -351,20 +353,32 @@ class BinanceClient:
                 value = oi.get("openInterestAmount") or oi.get("openInterest") or info.get("openInterest")
                 if value is not None:
                     result["open_interest"] = float(value)
+                value_usd = oi.get("openInterestValue") or info.get("openInterestValue") or info.get("sumOpenInterestValue")
+                if value_usd is not None and float(value_usd) > 0:
+                    result["open_interest_usd"] = float(value_usd)
+                elif result["open_interest"] is not None:
+                    mark = result.get("mark_price") or self.get_mark_price(symbol)
+                    if mark is not None and mark > 0:
+                        result["open_interest_usd"] = result["open_interest"] * mark
+                result["oi_updated_at"] = int(time.time() * 1000)
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"open interest {symbol}: {e}")
         try:
             if not self.rate_limited and self.exchange.has.get("fetchOpenInterestHistory"):
-                history = self.exchange.fetch_open_interest_history(market_symbol, timeframe="1h", limit=2) or []
-                values = []
+                history = self.exchange.fetch_open_interest_history(market_symbol, timeframe="1h", limit=25) or []
+                values_1h, values_24h = [], []
                 for row in history:
                     info = row.get("info") or {}
-                    value = row.get("openInterestAmount") or row.get("openInterest") or info.get("sumOpenInterest")
+                    value = (row.get("openInterestValue") or row.get("openInterestAmount")
+                             or row.get("openInterest") or info.get("sumOpenInterestValue")
+                             or info.get("sumOpenInterest"))
                     if value is not None and float(value) > 0:
-                        values.append(float(value))
-                if len(values) >= 2 and values[-2] > 0:
-                    result["oi_change_pct"] = (values[-1] / values[-2] - 1.0) * 100.0
+                        values_1h.append(float(value))
+                if len(values_1h) >= 2 and values_1h[-2] > 0:
+                    result["oi_change_pct"] = (values_1h[-1] / values_1h[-2] - 1.0) * 100.0
+                if len(values_1h) >= 25 and values_1h[0] > 0:
+                    result["oi_change_24h_pct"] = (values_1h[-1] / values_1h[0] - 1.0) * 100.0
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"open interest history {symbol}: {e}")
