@@ -70,6 +70,28 @@ def _freeze_trade_market_context(trade: Dict[str, Any]) -> None:
 
 
 def _nearest_support_resistance(df, price):
+    """Nearest confirmed local pivot support/resistance from the strategy timeframe."""
+    result = {"support": None, "resistance": None}
+    try:
+        if df is None or len(df) < 8 or float(price or 0) <= 0:
+            return result
+        lows, highs = [], []
+        start = max(2, len(df) - 100)
+        for i in range(start, len(df) - 2):
+            low, high = float(df["low"].iloc[i]), float(df["high"].iloc[i])
+            if low <= float(df["low"].iloc[i-1]) and low <= float(df["low"].iloc[i-2]) and low < float(df["low"].iloc[i+1]) and low < float(df["low"].iloc[i+2]):
+                if low < float(price):
+                    lows.append(low)
+            if high >= float(df["high"].iloc[i-1]) and high >= float(df["high"].iloc[i-2]) and high > float(df["high"].iloc[i+1]) and high > float(df["high"].iloc[i+2]):
+                if high > float(price):
+                    highs.append(high)
+        result["support"] = max(lows) if lows else None
+        result["resistance"] = min(highs) if highs else None
+    except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+        pass
+    return result
+
+
 def _timeframe_trend_map(data: Dict[str, Any]) -> Dict[str, str]:
     """EMA9/EMA21 trend labels for available signal timeframes."""
     trends = {}
@@ -85,24 +107,6 @@ def _timeframe_trend_map(data: Dict[str, Any]) -> Dict[str, str]:
         except (TypeError, ValueError, KeyError, IndexError):
             continue
     return trends
-    """Nearest confirmed local pivot support/resistance from the strategy timeframe."""
-    result = {"support": None, "resistance": None}
-    try:
-        if df is None or len(df) < 8 or float(price or 0) <= 0:
-            return result
-        lows, highs = [], []
-        start = max(2, len(df) - 100)
-        for i in range(start, len(df) - 2):
-            low, high = float(df["low"].iloc[i]), float(df["high"].iloc[i])
-            if low <= float(df["low"].iloc[i-1]) and low <= float(df["low"].iloc[i-2]) and low < float(df["low"].iloc[i+1]) and low < float(df["low"].iloc[i+2]):
-                if low < float(price): lows.append(low)
-            if high >= float(df["high"].iloc[i-1]) and high >= float(df["high"].iloc[i-2]) and high > float(df["high"].iloc[i+1]) and high > float(df["high"].iloc[i+2]):
-                if high > float(price): highs.append(high)
-        result["support"] = max(lows) if lows else None
-        result["resistance"] = min(highs) if highs else None
-    except (TypeError, ValueError, KeyError, IndexError, OverflowError):
-        pass
-    return result
 
 
 def _market_symbol_key(symbol: Any) -> str:
