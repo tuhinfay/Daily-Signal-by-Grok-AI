@@ -425,34 +425,51 @@ class BinanceClient:
         return result
 
 
+    def get_price_precision(self, symbol: str) -> Optional[int]:
+        """Return Binance's displayed price decimal places from PRICE_FILTER tickSize."""
+        try:
+            self._ensure_markets()
+            market = self.exchange.market(self._ccxt_symbol(symbol))
+            info = market.get("info") or {}
+            for rule in info.get("filters") or []:
+                if rule.get("filterType") == "PRICE_FILTER":
+                    tick = str(rule.get("tickSize") or "").rstrip("0")
+                    if "." in tick:
+                        return max(0, len(tick.split(".", 1)[1]))
+            precision = (market.get("precision") or {}).get("price")
+            if precision is not None:
+                if getattr(self.exchange, "precisionMode", None) == getattr(ccxt, "TICK_SIZE", object()):
+                    tick = f"{float(precision):.16f}".rstrip("0")
+                    return max(0, len(tick.split(".", 1)[1])) if "." in tick else 0
+                return max(0, int(precision))
+        except Exception as e:
+            print(f"price precision {symbol}: {e}")
+        return None
+
     def get_order_book_context(self, symbol: str, limit: int = 20) -> Dict[str, Optional[float]]:
-        """Return observable futures positioning, recent taker pressure and visible book liquidity."""
+        """Return visible order-book depth only; not hidden liquidity or liquidation data."""
         result: Dict[str, Optional[float]] = {
             "book_imbalance_pct": None, "spread_pct": None,
-            "buy_pressure_pct": None, "sell_pressure_pct": None,
-            "bid_liquidity_price": None, "ask_liquidity_price": None,
-            "bid_wall_usd": None, "ask_wall_usd": None,
-            "long_short_ratio": None, "long_account_pct": None, "short_account_pct": None,
+            "bid_depth_usdt": None, "ask_depth_usdt": None,
+            "bid_wall_price": None, "ask_wall_price": None,
         }
         if self.rate_limited:
             return result
-        market_symbol = self._ccxt_symbol(symbol)
         try:
-            book = self.exchange.fetch_order_book(market_symbol, limit=limit) or {}
+            book = self.exchange.fetch_order_book(self._ccxt_symbol(symbol), limit=limit) or {}
             bids, asks = book.get("bids") or [], book.get("asks") or []
-            bid_levels = [(float(x[0]), float(x[0]) * float(x[1])) for x in bids if len(x) >= 2 and float(x[0]) > 0 and float(x[1]) > 0]
-            ask_levels = [(float(x[0]), float(x[0]) * float(x[1])) for x in asks if len(x) >= 2 and float(x[0]) > 0 and float(x[1]) > 0]
-            bid_qty = sum(v for _, v in bid_levels)
-            ask_qty = sum(v for _, v in ask_levels)
+            bid_rows = [(float(x[0]), float(x[1]), float(x[0])*float(x[1])) for x in bids if len(x)>=2 and float(x[0])>0 and float(x[1])>0]
+            ask_rows = [(float(x[0]), float(x[1]), float(x[0])*float(x[1])) for x in asks if len(x)>=2 and float(x[0])>0 and float(x[1])>0]
+            bid_qty = sum(x[2] for x in bid_rows); ask_qty = sum(x[2] for x in ask_rows)
             total = bid_qty + ask_qty
+            result["bid_depth_usdt"] = bid_qty
+            result["ask_depth_usdt"] = ask_qty
             if total > 0:
                 result["book_imbalance_pct"] = (bid_qty - ask_qty) / total * 100.0
-            if bid_levels:
-                price, value = max(bid_levels, key=lambda x: x[1])
-                result["bid_liquidity_price"], result["bid_wall_usd"] = price, value
-            if ask_levels:
-                price, value = max(ask_levels, key=lambda x: x[1])
-                result["ask_liquidity_price"], result["ask_wall_usd"] = price, value
+            if bid_rows:
+                result["bid_wall_price"] = max(bid_rows, key=lambda x:x[2])[0]
+            if ask_rows:
+                result["ask_wall_price"] = max(ask_rows, key=lambda x:x[2])[0]
             if bids and asks:
                 bid, ask = float(bids[0][0]), float(asks[0][0])
                 mid = (bid + ask) / 2.0
@@ -461,44 +478,40 @@ class BinanceClient:
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"order book {symbol}: {e}")
-        try:
-            if not self.rate_limited and self.exchange.has.get("fetchTrades"):
-                trades = self.exchange.fetch_trades(market_symbol, limit=100) or []
-                buy = sell = 0.0
-                for trade in trades:
-                    amount = float(trade.get("amount") or 0)
-                    price = float(trade.get("price") or 0)
-                    if amount <= 0 or price <= 0:
-                        continue
-                    value = amount * price
-                    if str(trade.get("side") or "").lower() == "buy":
-                        buy += value
-                    elif str(trade.get("side") or "").lower() == "sell":
-                        sell += value
-                pressure_total = buy + sell
-                if pressure_total > 0:
-                    result["buy_pressure_pct"] = buy / pressure_total * 100.0
-                    result["sell_pressure_pct"] = sell / pressure_total * 100.0
-        except Exception as e:
-            print(f"recent trade pressure {symbol}: {e}")
-        try:
-            if not self.rate_limited:
-                endpoint = getattr(self.exchange, "fapiPublicGetGlobalLongShortAccountRatio", None)
-                if callable(endpoint):
-                    rows = endpoint({"symbol": self._clean_symbol(symbol), "period": "5m", "limit": 1}) or []
-                    if rows:
-                        row = rows[-1]
-                        ratio = float(row.get("longShortRatio") or 0)
-                        long_pct = float(row.get("longAccount") or 0) * 100.0
-                        short_pct = float(row.get("shortAccount") or 0) * 100.0
-                        if ratio > 0:
-                            result["long_short_ratio"] = ratio
-                            result["long_account_pct"] = long_pct
-                            result["short_account_pct"] = short_pct
-        except Exception as e:
-            print(f"long/short ratio {symbol}: {e}")
         return result
 
+    def get_market_structure_context(self, symbol: str) -> Dict[str, Optional[float]]:
+        """Fetch Binance public crowd positioning and taker flow where available."""
+        result: Dict[str, Optional[float]] = {
+            "long_short_ratio": None, "taker_buy_sell_ratio": None,
+            "long_account_pct": None, "short_account_pct": None,
+        }
+        if self.rate_limited:
+            return result
+        clean = self._clean_symbol(symbol)
+        for method_name, key in (
+            ("fapiDataGetGlobalLongShortAccountRatio", "long_short_ratio"),
+            ("fapiDataGetTakerlongshortRatio", "taker_buy_sell_ratio"),
+        ):
+            try:
+                method = getattr(self.exchange, method_name, None)
+                if not callable(method):
+                    continue
+                rows = method({"symbol": clean, "period": "5m", "limit": 1}) or []
+                if rows:
+                    row = rows[-1]
+                    value = row.get("longShortRatio") if key == "long_short_ratio" else row.get("buySellRatio")
+                    if value is not None:
+                        result[key] = float(value)
+                    if key == "long_short_ratio":
+                        if row.get("longAccount") is not None:
+                            result["long_account_pct"] = float(row["longAccount"]) * 100.0
+                        if row.get("shortAccount") is not None:
+                            result["short_account_pct"] = float(row["shortAccount"]) * 100.0
+            except Exception as e:
+                self._mark_rate_limit(e)
+                print(f"market structure {key} {symbol}: {e}")
+        return result
 
     def get_order_constraints(self, symbol: str) -> Dict[str, Optional[float]]:
         """Return public market lot/notional limits without placing or signing an order."""
