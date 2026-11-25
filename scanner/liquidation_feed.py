@@ -104,7 +104,7 @@ def start_liquidation_feed():
 def get_liquidation_summary(symbol: str) -> Dict[str, Any]:
     clean = str(symbol or "").upper().replace("/", "").split(":")[0]
     now_ms = int(time.time() * 1000)
-    windows = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+    windows = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
     with _lock:
         rows = [dict(row) for row in _orders.values() if row["symbol"] == clean]
         started = _started_at
