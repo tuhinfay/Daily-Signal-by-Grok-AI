@@ -135,6 +135,7 @@ class TradeCreate(BaseModel):
     amount_usd: Optional[float] = None  # total notional
     quantity: Optional[float] = None
     margin_mode: str = "CROSS"  # CROSS | ISOLATED
+    trade_style: Optional[str] = None
     note: Optional[str] = ""
     scale_mode: Optional[str] = None  # flat | ascending
     scale_orders: Optional[int] = None
@@ -445,7 +446,7 @@ def run_scan(top_n: int = 12):
                     if not r:
                         continue
                     r["market_price"] = px or r["entry"]
-                    daily_change_pct = _utc_daily_change_pct(data.get("1d"), px)
+                    daily_change_pct = client.get_24h_change_pct(symbol)
                     if daily_change_pct is not None:
                         r["daily_change_pct"] = daily_change_pct
                     r["max_leverage"] = max_leverage
@@ -866,11 +867,9 @@ def daily_open_cache_loop():
                     continue
                 try:
                     client = client or BinanceClient(futures=True)
-                    daily_df = client.fetch_ohlcv(symbol, timeframe="1d", limit=31)
-                    if daily_df is not None and len(daily_df):
-                        daily_open = float(daily_df["open"].iloc[-1])
-                        if daily_open > 0:
-                            _daily_open_cache[symbol] = {"open": daily_open, "ts": now}
+                    daily_change = client.get_24h_change_pct(symbol)
+                    if daily_change is not None:
+                        _daily_open_cache[symbol] = {"change": daily_change, "ts": now}
                 except Exception as exc:
                     print(f"[trade-daily-change] {symbol}: {exc}")
         except Exception as exc:
@@ -1109,10 +1108,8 @@ async def api_trades():
             continue
         symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
         cached = _daily_open_cache.get(symbol)
-        if cached:
-            daily_pct = _daily_change_from_open(cached.get("open"), trade.get("current_price"))
-            if daily_pct is not None:
-                trade["daily_change_pct"] = daily_pct
+        if cached and cached.get("change") is not None:
+            trade["daily_change_pct"] = cached["change"]
     return {"trades": trades, "account": _account, "stats": _stats()}
 
 
@@ -1283,6 +1280,7 @@ def create_trade(body: TradeCreate):
         "id": tid, "symbol": sym, "side": side, "position_mode": "HEDGE", "order_type": order_type, "order_price": entry_price if order_type == "LIMIT" else None, "limit_price": entry_price if order_type == "LIMIT" else None,
         "entry": entry_price, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
+        "trade_style": (str(body.trade_style).lower() if str(body.trade_style or "").lower() in ("scalp", "day", "swing") else "day"),
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
         "trailing_pct": None, "callback_rate": None, "trailing_activation_price": None,
@@ -1386,6 +1384,18 @@ def create_trade(body: TradeCreate):
     _calc_equity()
     db.save_trades_and_account([trade], _account)
     return {"ok": True, "trade": trade, "duplicate": False, "account": _account}
+
+
+@app.delete("/api/trades/pending")
+async def cancel_all_pending_trades():
+    canceled_at = datetime.now(timezone.utc).isoformat()
+    canceled = []
+    for trade in list(_trades.values()):
+        if trade.get("status") == "PENDING":
+            trade.update({"status": "CANCELED", "canceled_at": canceled_at})
+            db.save_trade(trade)
+            canceled.append(trade["id"])
+    return {"ok": True, "canceled": len(canceled), "ids": canceled}
 
 
 @app.delete("/api/trades/{tid}")
