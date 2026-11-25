@@ -1960,30 +1960,18 @@ function durationShort(start,end,seconds){let s=Number.isFinite(Number(seconds))
 function marketStructureHTML(m,p){
  if(!m)return '';
  const pressure=m.market_pressure||{},tfs=pressure.timeframes||{},multi=pressure.multi_exchange||{};
- const localLiq=(m.liquidations||{}),liq={...(localLiq.timeframes||{}),...((multi.marketlight||{}).liquidations||{})};
- const labels=['1m','5m','15m','1h','4h','1d'];
+ const liq=(m.liquidations||{}).timeframes||{},lx=liq['1h']||{},ml=multi.marketlight||{};
+ const labels=['5m','15m','1h','4h','1d'];
  const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
- const usd=v=>v==null?'—':fmt(v,2)+' USDT';
- const cell=tf=>{const x=tfs[tf]||{};const coverage=x.exchange_count==null?'': ' · '+x.exchange_count+'/'+(multi.exchange_total||8)+' venues';return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+usd(x.buy_usdt)+' / '+usd(x.sell_usdt)+'</td><td>'+usd(x.total_volume_usdt)+coverage+'</td></tr>';};
- const liqCell=tf=>{const x=liq[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+usd(x.long_usdt)+'</td><td>'+usd(x.short_usdt)+'</td></tr>';};
+ const compact=v=>{if(v==null||!Number.isFinite(Number(v)))return '—';const n=Number(v),a=Math.abs(n);return a>=1e9?(n/1e9).toFixed(2)+'B':a>=1e6?(n/1e6).toFixed(2)+'M':a>=1e3?(n/1e3).toFixed(1)+'K':n.toFixed(0);};
+ const cell=tf=>{const x=tfs[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+compact(x.buy_usdt)+' / '+compact(x.sell_usdt)+'</td><td>'+compact(x.total_volume_usdt)+'</td></tr>';};
  const hasRows=labels.some(tf=>tfs[tf]&&Object.values(tfs[tf]).some(v=>v!=null));
- const liqMeta=m.liquidations||{},ml=(multi.marketlight||{});
- const oi=ml.open_interest_usd==null?'—':usd(ml.open_interest_usd);
- const oiChange=ml.oi_change_24h_pct==null?'—':fmt(ml.oi_change_24h_pct)+'%';
- const book=multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%';
- const venueStatus=(multi.exchanges||[]).map(v=>v.exchange+': '+(v.status==='ok'?'OK':'—')).join(' · ');
- const box='margin-top:8px;padding:8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:11px;line-height:1.35;overflow-x:auto';
- return '<div class="market-pressure" style="'+box+'"><b>MULTI-EXCHANGE MARKET PRESSURE</b>'+
- '<div style="opacity:.75;margin-top:3px">Trade / book venues: '+(multi.exchange_count||0)+'/'+(multi.exchange_total||8)+' · Aggregated visible-book imbalance: '+book+'</div>'+
- '<div style="opacity:.65;margin-top:2px">'+venueStatus+'</div>'+
- '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:7px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG*</th><th>SHORT*</th><th>BUY / SELL USDT</th><th>SAMPLED VOL</th></tr></thead><tbody>'+
- labels.map(cell).join('')+'</tbody></table></div>'+
- '<div style="margin-top:8px;font-weight:700">LIQUIDATIONS · USDT</div>'+
- '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:4px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG LIQ.</th><th>SHORT LIQ.</th></tr></thead><tbody>'+labels.map(liqCell).join('')+'</tbody></table></div>'+
- '<div style="opacity:.75;margin-top:5px">*Long/Short = Binance global account ratio, not position size or trader count. Buy/Sell volume = recent public trade sample, not guaranteed full-period exchange turnover.</div>'+
- '<div style="opacity:.75;margin-top:3px">Global OI: '+oi+' · OI 24h: '+oiChange+' · funding venues: '+((ml.funding_by_exchange||[]).length)+'</div>'+
- '<div style="opacity:.75;margin-top:3px">Liquidations: 5m/15m from Binance stream (sampled); 1h/4h/1d from Marketlight hourly multi-exchange feed where available. Marketlight data CC BY 4.0.</div>'+
- (hasRows?'':'<div style="opacity:.75;margin-top:4px">Market data is not available yet for this symbol.</div>')+
+ const box='margin-top:8px;padding:8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:11px;line-height:1.4;overflow-x:auto';
+ return '<div class="market-pressure" style="'+box+'"><b>MARKET STRUCTURE</b>'+
+ '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:6px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG</th><th>SHORT</th><th>BUY / SELL</th><th>VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
+ '<div style="margin-top:8px"><b>LIQ 1H</b> &nbsp; L '+compact(lx.long_usdt)+' &nbsp; / &nbsp; S '+compact(lx.short_usdt)+'</div>'+
+ '<div style="opacity:.7;margin-top:5px">OI '+compact(ml.open_interest_usd)+' · OI 24H '+(ml.oi_change_24h_pct==null?'—':fmt(ml.oi_change_24h_pct)+'%')+' · Book '+(multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%')+'</div>'+
+ (hasRows?'':'<div style="opacity:.7;margin-top:4px">No market data yet</div>')+
  '</div>';
 }
 function setAcc(a){if(!a)return;sBal.textContent='$'+fmt(a.balance);sEq.textContent='$'+fmt(a.equity);sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);sReal.className=a.realized_pnl>=0?'up':'dn';if(window.aStart){aStart.textContent='$'+fmt(a.start_balance);aBal.textContent='$'+fmt(a.balance);aEq.textContent='$'+fmt(a.equity);aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}}
