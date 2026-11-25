@@ -1278,7 +1278,7 @@ def api_market_price(symbol: str):
 
 @app.post("/api/trade-preview")
 async def api_trade_preview(body: TradeCreate):
-    sym = body.symbol.upper().replace("/", "").replace(":USDT", "")
+    sym = body.symbol.upper().replace("/", "").split(":")[0].replace(":USDT", "")
     side = body.side.upper()
     if side not in ("LONG", "SHORT"):
         return JSONResponse({"ok": False, "error": "Choose LONG or SHORT"}, status_code=400)
