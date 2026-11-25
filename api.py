@@ -565,6 +565,9 @@ def run_scan(top_n: int = 12):
                 "funding_rate": funding,
                 "oi_change_1h_pct": round(oi_change, 2) if oi_change is not None else None,
                 "open_interest": context.get("open_interest"),
+                "open_interest_usd": context.get("open_interest_usd"),
+                "oi_change_24h_pct": context.get("oi_change_24h_pct"),
+                "oi_updated_at": context.get("oi_updated_at"),
                 "mark_price": mark_price,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -1960,6 +1963,8 @@ function marketStructureHTML(m,p){
  if(!m)return '';
  const pressure=m.market_pressure||{},tfs=pressure.timeframes||{},multi=pressure.multi_exchange||{};
  const localLiq=(m.liquidations||{}).timeframes||{},ml=multi.marketlight||{},remoteLiq=ml.liquidations||{};
+ const oiUsd=m.open_interest_usd??ml.open_interest_usd;
+ const oi24h=m.oi_change_24h_pct??ml.oi_change_24h_pct;
  const labels=['5m','15m','1h','4h','1d'];
  const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
  const compact=v=>{if(v==null||!Number.isFinite(Number(v)))return '—';const n=Number(v),a=Math.abs(n);return a>=1e9?(n/1e9).toFixed(1)+'B':a>=1e6?(n/1e6).toFixed(1)+'M':a>=1e3?(n/1e3).toFixed(1)+'K':n.toFixed(0);};
@@ -1970,7 +1975,8 @@ function marketStructureHTML(m,p){
  return '<div class="market-pressure" style="'+box+'"><b>MARKET STRUCTURE</b> <span style="opacity:.65">· Long/Short = accounts</span>'+
  '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:6px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG %</th><th>SHORT %</th><th>BUY / SELL</th><th>VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
  '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px"><b>LIQ</b>'+['1h','4h','1d'].map(liqRow).join('')+'</div>'+
- '<div style="opacity:.7;margin-top:5px">OI '+compact(ml.open_interest_usd)+' · OI 24H '+(ml.oi_change_24h_pct==null?'—':fmt(ml.oi_change_24h_pct)+'%')+' · Book '+(multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%')+'</div>'+
+ '<div style="opacity:.7;margin-top:5px">OI '+compact(oiUsd)+' USDT · OI 24H '+(oi24h==null?'—':fmt(oi24h)+'%')+' · Book '+(multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%')+'</div>'+
+ '<div style="opacity:.55;margin-top:3px">Flow: Binance Futures · OI: '+(m.open_interest_usd!=null?'Binance':'Marketlight fallback')+' · LIQ: '+(Object.keys(remoteLiq).length?'Marketlight hourly':'Binance live stream')+'</div>'+
  (hasRows?'':'<div style="opacity:.7;margin-top:4px">No market data yet</div>')+
  '</div>';
 }
