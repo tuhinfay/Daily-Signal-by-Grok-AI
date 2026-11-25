@@ -380,7 +380,7 @@ def _run_paper_auto_bot(signals):
     max_symbol_day = max(1, min(int(cfg.get("max_symbol_trades_day") or 3), 30))
     max_daily_loss = max(0.0, float(_account.get("start_balance") or _account.get("balance") or 0) * max(0.0, min(float(cfg.get("max_daily_loss_pct") or 0), 20.0)) / 100.0)
     try:
-        opened = [t for t in _trades.values() if t.get("status") == "OPEN"]
+        opened = [t for t in _trades.values() if t.get("status") in ("OPEN", "PENDING")]
         if cfg.get("advanced_enabled") and cfg.get("dca_enabled") and strategy != "hybrid":
             gap = max(0.1, min(float(cfg.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
             max_adds = max(1, min(int(cfg.get("dca_max_orders") or 3), 5))
@@ -452,7 +452,7 @@ def _run_paper_auto_bot(signals):
                     if (now - datetime.fromisoformat(recent_close.replace("Z", "+00:00"))).total_seconds() < cooldown * 60: continue
                 except ValueError: pass
             if quality.get(str(sig.get("quality") or "B").upper(), 0) < min_quality: continue
-            if any(t.get("status") == "OPEN" and t.get("symbol") == sym for t in _trades.values()): continue
+            if any(t.get("status") in ("OPEN", "PENDING") and t.get("symbol") == sym for t in _trades.values()): continue
             entry = float((sig.get("mark_price") if strategy == "hybrid" else None) or sig.get("market_price") or sig.get("entry") or 0); sl = float(sig.get("stop_loss") or 0); tp = float(sig.get("tp1") or 0)
             if entry <= 0 or sl <= 0 or tp <= 0: continue
             if (side == "LONG" and not sl < entry < tp) or (side == "SHORT" and not tp < entry < sl): continue
@@ -874,6 +874,16 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
                 matching["margin"] = round(float(matching.get("margin") or 0) + float(t.get("margin") or 0), 2)
                 matching["dca_count"] = int(matching.get("dca_count") or 0) + 1
                 matching.setdefault("dca_history", []).append({"price": limit_px, "qty": add_qty, "notional": round(limit_px * add_qty, 2), "margin": t.get("margin", 0), "created_at": datetime.now(timezone.utc).isoformat()})
+                if t.get("advanced_enabled"):
+                    for key in ("advanced_enabled","advanced_dca_enabled","dca_gap_pct","dca_max_orders","dca_multiplier","dca_lower_price","dca_upper_price","auto_dca_base_usd","sl_pct_setting","tp1_pct_setting","tp2_pct_setting","profit_lock_enabled","profit_activation_pct","profit_callback_pct","callback_rate","trailing_pct"):
+                        if key in t: matching[key] = t[key]
+                    avg = float(matching.get("entry") or 0); s0 = str(matching.get("side") or "").upper()
+                    if float(matching.get("sl_pct_setting") or 0)>0:
+                        p=float(matching["sl_pct_setting"])/100; matching["stop_loss"]=avg*(1-p if s0=="LONG" else 1+p)
+                    if float(matching.get("tp1_pct_setting") or 0)>0:
+                        p=float(matching["tp1_pct_setting"])/100; matching["tp1"]=avg*(1+p if s0=="LONG" else 1-p)
+                    if float(matching.get("tp2_pct_setting") or 0)>0:
+                        p=float(matching["tp2_pct_setting"])/100; matching["tp2"]=avg*(1+p if s0=="LONG" else 1-p)
                 matching["current_price"] = price
                 if pending_side == "LONG":
                     matching["unrealized_pnl"] = round((price - matching["entry"]) * total_qty, 4)
@@ -1744,6 +1754,18 @@ def create_trade(body: TradeCreate):
         existing_trade["margin"] = round(float(existing_trade.get("margin") or 0) + margin, 2)
         existing_trade["dca_count"] = int(existing_trade.get("dca_count") or 0) + 1
         existing_trade.setdefault("dca_history", []).append({"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()})
+        if body.advanced_enabled:
+            existing_trade.update({"advanced_enabled": True, "advanced_dca_enabled": bool(body.dca_enabled), "dca_gap_pct": max(0.1,min(float(body.dca_gap_pct or 1.5),20.0)), "dca_max_orders": max(1,min(int(body.dca_max_orders or 3),5)), "dca_multiplier": max(1.0,min(float(body.dca_multiplier or 1.5),3.0)), "dca_lower_price": float(body.dca_lower_price or 0) or None, "dca_upper_price": float(body.dca_upper_price or 0) or None, "auto_dca_base_usd": round(notional,2), "sl_pct_setting": float(body.sl_pct or 0), "tp1_pct_setting": float(body.tp1_pct or 0), "tp2_pct_setting": float(body.tp2_pct or 0), "profit_lock_enabled": bool(body.profit_lock_enabled), "profit_activation_pct": float(body.profit_activation_pct or 0.8), "profit_callback_pct": float(body.profit_callback_pct or 0.5)})
+            if existing_trade["profit_lock_enabled"]:
+                existing_trade["callback_rate"] = existing_trade["profit_callback_pct"]
+                existing_trade["trailing_pct"] = existing_trade["profit_callback_pct"]
+            avg = float(existing_trade["entry"]); side_avg = str(existing_trade.get("side") or side).upper()
+            if existing_trade["sl_pct_setting"] > 0:
+                p = existing_trade["sl_pct_setting"]/100; existing_trade["stop_loss"] = avg*(1-p if side_avg=="LONG" else 1+p)
+            if existing_trade["tp1_pct_setting"] > 0:
+                p = existing_trade["tp1_pct_setting"]/100; existing_trade["tp1"] = avg*(1+p if side_avg=="LONG" else 1-p)
+            if existing_trade["tp2_pct_setting"] > 0:
+                p = existing_trade["tp2_pct_setting"]/100; existing_trade["tp2"] = avg*(1+p if side_avg=="LONG" else 1-p)
         current_mark = float(_cache.get("prices", {}).get(sym) or existing_trade.get("current_price") or entry_price)
         existing_trade["current_price"] = current_mark
         if side == "LONG":
