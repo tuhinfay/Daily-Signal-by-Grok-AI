@@ -35,7 +35,7 @@ git --version
 ```bash
 sudo mkdir -p /opt/daily-signal
 sudo chown -R "$USER":"$USER" /opt/daily-signal
-git clone --branch v5-development --single-branch https://github.com/tuhinfay/Daily-Signal-by-Grok-AI.git /opt/daily-signal
+git clone --branch v5-enhancement --single-branch https://github.com/tuhinfay/Daily-Signal-by-Grok-AI.git /opt/daily-signal
 cd /opt/daily-signal
 ```
 
@@ -44,8 +44,8 @@ If you already cloned the repository, switch to the V5 branch instead:
 ```bash
 cd /opt/daily-signal
 git fetch origin
-git switch v5-development
-git pull origin v5-development
+git switch v5-enhancement
+git pull origin v5-enhancement
 ```
 
 ### 3. Create Python virtual environment and install dependencies
@@ -127,7 +127,7 @@ if [ -f runtime.pid ]; then
   rm -f runtime.pid
 fi
 git fetch origin
-git pull --ff-only origin v5-development
+git pull --ff-only origin v5-enhancement
 .venv/bin/python -m pip install -r requirements.txt
 mkdir -p logs
 nohup .venv/bin/uvicorn api:app --host 0.0.0.0 --port 8083 > logs/app.log 2>&1 &
@@ -151,7 +151,7 @@ Neon is not required on VPS. SQLite on persistent disk is sufficient.
 ### First-time setup
 
 ```bat
-git clone --branch v5-development https://github.com/tuhinfay/Daily-Signal-by-Grok-AI.git
+git clone --branch v5-enhancement https://github.com/tuhinfay/Daily-Signal-by-Grok-AI.git
 cd Daily-Signal-by-Grok-AI
 python -m venv .venv
 .venv\\Scripts\\python -m pip install --upgrade pip
@@ -177,7 +177,7 @@ stop.bat
 
 ```bat
 stop.bat
-git pull origin v5-development
+git pull origin v5-enhancement
 .venv\\Scripts\\pip install -r requirements.txt
 start.bat
 ```
