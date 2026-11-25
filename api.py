@@ -1848,18 +1848,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .tf-chip.up{color:var(--gn);border-color:#14543f;background:#09251e}.tf-chip.dn{color:var(--rd);border-color:#64263a;background:#2b101b}.tf-chip.side{color:var(--gd);border-color:#66501d;background:#251e0d}
 .market-summary{display:flex;flex-wrap:wrap;align-items:center;gap:5px 9px;margin-top:7px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:#080f1c;font-size:10px;line-height:1.5}
 .market-summary .ms-label{color:var(--mut);font-weight:800}.market-summary .open{color:var(--cyan);font-weight:800}.market-summary .high,.market-summary .support{color:var(--gn);font-weight:800}.market-summary .low,.market-summary .resistance{color:var(--rd);font-weight:800}.market-summary .up{color:var(--gn);font-weight:800}.market-summary .dn{color:var(--rd);font-weight:800}.ms-tile:last-child{grid-column:1/-1}
-.market-structure{margin-top:8px;padding:9px;border:1px solid var(--line);border-radius:9px;background:#080f1c;min-width:0}
-.ms-title{font-size:10px;font-weight:900;letter-spacing:.06em;color:var(--cyan);margin-bottom:7px}
-.ms-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
-.ms-tile{min-width:0;padding:7px;border:1px solid var(--line);border-radius:7px;background:#0c1728}
-.ms-tile-head{font-size:10px;font-weight:900;color:var(--text);margin-bottom:5px}
-.ms-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 7px}
-.ms-metric{min-width:0;font-size:9px;color:var(--mut);overflow-wrap:anywhere}
-.ms-metric b{display:block;font-size:10px;color:var(--text);margin-top:1px}
-.ms-metric .long{color:var(--gn)}.ms-metric .short{color:var(--rd)}
-.ms-footer{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);font-size:10px;color:var(--mut)}
-.ms-footer b{color:var(--text)}
-@media(max-width:360px){.ms-grid{grid-template-columns:1fr}.market-summary{gap:4px 7px}}
+@media(max-width:360px){.market-summary{gap:4px 7px}}
 .vals{display:flex;flex-wrap:wrap;gap:12px 16px;margin-top:10px}
 .vals div em{display:block;font-style:normal;font-size:9px;color:var(--mut);text-transform:uppercase}
 .vals div strong{font-size:12px;font-weight:700}
@@ -2102,7 +2091,7 @@ function marketStructureHTML(m,p){
  const hasRows=labels.some(tf=>tfs[tf]&&Object.values(tfs[tf]).some(v=>v!=null));
  const liqRow=tf=>{const remote=remoteLiq[tf]||{},local=localLiq[tf]||{},hasRemote=remote.long_usdt!=null||remote.short_usdt!=null,localReady=!!(m.liquidations&&m.liquidations.connected&&m.liquidations.collected_since),x=hasRemote?remote:(localReady?local:{});return '<span style="white-space:nowrap"><b>'+tf.toUpperCase()+'</b> <span style="color:var(--gn)">L '+compact(x.long_usdt)+'</span> / <span style="color:var(--rd)">S '+compact(x.short_usdt)+'</span></span>';};
  const box='margin-top:8px;padding:7px 8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:10px;line-height:1.35;min-width:0;max-width:100%;box-sizing:border-box';
- const oiColor=Number(oi24h)>0?'var(--cyan)':Number(oi24h)<0?'var(--gd)':'var(--mut)';
+ const oiColor='var(--cyan)';
  const book=multi.book_imbalance_pct,bookColor=book==null?'var(--mut)':Number(book)>0?'var(--gn)':Number(book)<0?'var(--rd)':'var(--mut)';
  return '<div class="market-pressure" style="'+box+'"><b style="font-size:10px;letter-spacing:.04em">MARKET STRUCTURE</b>'+
  '<div style="width:100%;overflow-x:auto;overscroll-behavior-x:contain"><table style="width:100%;min-width:430px;table-layout:auto;border-collapse:collapse;margin-top:5px;white-space:nowrap;font-size:10px"><thead><tr style="color:var(--mut)"><th style="text-align:left;padding:3px 5px">TF</th><th style="text-align:right;padding:3px 5px">LONG %</th><th style="text-align:right;padding:3px 5px">SHORT %</th><th style="text-align:right;padding:3px 5px">BUY / SELL</th><th style="text-align:right;padding:3px 5px">VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
