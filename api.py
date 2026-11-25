@@ -548,6 +548,7 @@ def run_scan(top_n: int = 12):
                     r = engine.analyze_pair(symbol, data, volume_24h=vol, style=style_name)
                     if not r: continue
                     r["timeframe_trends"] = _timeframe_trend_map(data)
+                    r["entry_timeframe"] = {"scalp": "5m", "day": "15m", "swing": "1h", "hybrid": "15m"}.get(style_name, "15m")
                     r["market_price"] = px or r["entry"]
                     daily_change_pct = client.get_24h_change_pct(symbol)
                     if daily_change_pct is not None:
@@ -592,14 +593,10 @@ def run_scan(top_n: int = 12):
 
         checked_derivatives = set()
         priority_symbols = [_market_symbol_key(t.get("symbol")) for t in _trades.values() if t.get("status") == "OPEN"]
-        recent_closed = sorted(
-            (t for t in _trades.values() if t.get("status") == "CLOSED"),
-            key=lambda t: str(t.get("closed_at") or ""), reverse=True,
-        )[:3]
-        priority_symbols += [_market_symbol_key(t.get("symbol")) for t in recent_closed]
-        priority_symbols += [x["symbol"] for x in sorted(signals, key=lambda x: x["score"], reverse=True)]
+        # Refresh every signal coin over successive scans; open trades always get first priority.
+        priority_symbols += [_market_symbol_key(x.get("symbol")) for x in sorted(signals, key=lambda x: x["score"], reverse=True)]
         for sym in dict.fromkeys(priority_symbols):
-            if not sym or len(checked_derivatives) >= 6 or client.rate_limited:
+            if not sym or len(checked_derivatives) >= 10 or client.rate_limited:
                 continue
             checked_derivatives.add(sym)
             context = client.get_global_derivatives_context(sym)
@@ -636,6 +633,15 @@ def run_scan(top_n: int = 12):
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             _market_structure_cache[_market_symbol_key(sym)] = structure_snapshot
+            _market_structure_refresh_at[_market_symbol_key(sym)] = time_mod.monotonic()
+            # Keep running-trade market context live; closed trades are intentionally immutable.
+            for position in _trades.values():
+                if position.get("status") == "OPEN" and _market_symbol_key(position.get("symbol")) == _market_symbol_key(sym):
+                    position["market_structure"] = dict(structure_snapshot)
+                    for field in ("daily_open", "daily_high", "daily_low", "change_7d_pct", "change_30d_pct", "change_1y_pct"):
+                        if structure_snapshot.get(field) is not None:
+                            position[field] = structure_snapshot[field]
+                    db.save_trade(position)
             imbalance = book.get("book_imbalance_pct")
             spread = book.get("spread_pct")
             for item in signals:
@@ -1140,7 +1146,7 @@ async def api_signals(style: str = Query("all")):
     for s in _cache["signals"]:
         s2 = dict(s)
         s2["already_added"] = (s["symbol"], s["side"]) in open_keys
-        s2["market_structure"] = dict(s2.get("market_structure") or {})
+        s2["market_structure"] = dict(_market_structure_cache.get(_market_symbol_key(s2.get("symbol"))) or s2.get("market_structure") or {})
         s2["market_structure"]["liquidations"] = get_liquidation_summary(s2.get("symbol"))
         s2["price_precision"] = _symbol_price_precision.get(str(s2.get("symbol") or ""))
         if s2["symbol"] in _cache.get("prices", {}):
@@ -2101,11 +2107,12 @@ function marketStructureHTML(m,p){
  '</div>';
 }
 function timeframeHTML(s){
- const trends=s.timeframe_trends||{},items=['15m','1h','4h'].filter(tf=>trends[tf]).map(tf=>({label:tf.toUpperCase()+(tf==='4h'?' EMA':''),trend:trends[tf]}));
- const bias=v=>{const x=String(v||'').toLowerCase();return x==='bull'?'BULL':x==='bear'?'BEAR':x?x.toUpperCase():'—';};
+ const trends=s.timeframe_trends||{},items=['15m','1h','4h','1d'].filter(tf=>trends[tf]).map(tf=>({label:tf.toUpperCase(),trend:trends[tf]}));
+ const bias=v=>{const x=String(v||'').toLowerCase();return x==='bull'?'Bull':x==='bear'?'Bear':x?x[0].toUpperCase()+x.slice(1):'—';};
  const cls=v=>String(v||'').toLowerCase()==='bull'?'up':String(v||'').toLowerCase()==='bear'?'dn':'side';
- const htf='<span class="tf-chip '+cls(s.bias_1d)+'">HTF 1D '+bias(s.bias_1d)+'</span><span class="tf-chip '+cls(s.bias_4h)+'">HTF 4H '+bias(s.bias_4h)+'</span>';
- return '<div class="tf-strip">'+(items.map(x=>'<span class="tf-chip '+(x.trend==='UP'?'up':x.trend==='DOWN'?'dn':'side')+'">'+x.label+' '+x.trend+'</span>').join('')||'<span class="tf-chip side">TF —</span>')+htf+'</div>';
+ const htf='<span class="tf-chip '+(String(s.bias_1d).toLowerCase()==='bear'?'dn':String(s.bias_1d).toLowerCase()==='bull'?'up':'side')+'">HTF '+bias(s.bias_1d)+'/'+bias(s.bias_4h)+'</span>';
+ const entry=s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||[s.style||'day'])[0]).toLowerCase()]||'15m');
+ return '<div class="tf-strip">'+(items.map(x=>'<span class="tf-chip '+(x.trend==='UP'?'up':x.trend==='DOWN'?'dn':'side')+'">'+x.label+' '+x.trend+'</span>').join('')||'<span class="tf-chip side">TF —</span>')+htf+'<span class="tf-chip side">ENTRY '+entry+'</span></div>';
 }
 function marketSummaryHTML(t){
  const m=t.market_structure||t,price=(v)=>v==null?'—':fmtSymbolPrice(t.symbol,v,t.price_precision);
