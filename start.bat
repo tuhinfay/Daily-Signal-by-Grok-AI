@@ -49,18 +49,20 @@ if errorlevel 1 (
 )
 
 echo.
-echo Starting Daily Signal in this CMD window.
-echo Startup errors and live server logs will appear below.
-echo Dashboard: %DASHBOARD%
-echo Press CTRL+C to stop the server.
-echo.
+echo Starting Daily Signal in the background...
+echo Server logs: logs\server.log and logs\server-error.log
 
-REM Open the browser only after the health endpoint responds.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$python=(Resolve-Path '%PYTHON%').Path; $root=(Get-Location).Path; $out=Join-Path $root 'logs\server.log'; $err=Join-Path $root 'logs\server-error.log'; $p=Start-Process -FilePath $python -ArgumentList '-m uvicorn api:app --host 0.0.0.0 --port 8083' -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Set-Content -Path (Join-Path $root 'logs\server.pid') -Value $p.Id"
+if errorlevel 1 (
+  echo ERROR: Could not launch the background server.
+  pause
+  exit /b 1
+)
+
+REM Open the dashboard after the health endpoint responds. This runs separately,
+REM so this launcher can close immediately and leave no visible CMD window.
 start "" /min powershell -NoProfile -ExecutionPolicy Bypass -Command "$u='%DASHBOARD%/health'; for($i=0;$i -lt 60;$i++){try{$r=Invoke-WebRequest -UseBasicParsing $u -TimeoutSec 2;if($r.StatusCode -eq 200){Start-Process '%DASHBOARD%';exit 0}}catch{};Start-Sleep -Seconds 1}"
 
-"%PYTHON%" -m uvicorn api:app --host 0.0.0.0 --port 8083
-
-echo.
-echo Daily Signal server has stopped. Review the error above.
-pause
+echo Daily Signal launched in the background. This window will close.
 endlocal
+exit /b 0
