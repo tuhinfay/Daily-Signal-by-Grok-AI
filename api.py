@@ -1229,7 +1229,10 @@ async def api_trades():
         cached = _daily_open_cache.get(symbol)
         if cached and cached.get("change") is not None:
             trade["daily_change_pct"] = cached["change"]
-    return {"trades": trades, "account": _account, "stats": _stats()}
+    return JSONResponse(
+        {"trades": trades, "account": _account, "stats": _stats()},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @app.get("/api/market-price/{symbol}")
@@ -1646,7 +1649,15 @@ async def api_price_monitor():
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    return HTMLResponse(PAGE)
+    # Dashboard JavaScript is inline; prevent browsers/proxies serving stale UI.
+    return HTMLResponse(
+        PAGE,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 PAGE = r"""<!DOCTYPE html>
