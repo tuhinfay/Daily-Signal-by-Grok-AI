@@ -3,7 +3,6 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 if not exist logs mkdir logs
-set "DASHBOARD=http://127.0.0.1:8083"
 set "PYTHON=.venv\Scripts\python.exe"
 
 echo ==========================================
@@ -49,20 +48,19 @@ if errorlevel 1 (
 )
 
 echo.
-echo Starting Daily Signal in the background...
-echo Server logs: logs\server.log and logs\server-error.log
+echo Starting Daily Signal hidden in the background...
+echo Waiting for the server health check. Dashboard will NOT be opened.
+echo Logs: logs\server.log and logs\server-error.log
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$python=(Resolve-Path '%PYTHON%').Path; $root=(Get-Location).Path; $out=Join-Path $root 'logs\server.log'; $err=Join-Path $root 'logs\server-error.log'; $p=Start-Process -FilePath $python -ArgumentList '-m uvicorn api:app --host 0.0.0.0 --port 8083' -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Set-Content -Path (Join-Path $root 'logs\server.pid') -Value $p.Id"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$python=(Resolve-Path '%PYTHON%').Path; $root=(Get-Location).Path; $out=Join-Path $root 'logs\server.log'; $err=Join-Path $root 'logs\server-error.log'; $pidfile=Join-Path $root 'logs\server.pid'; $p=Start-Process -FilePath $python -ArgumentList '-m uvicorn api:app --host 0.0.0.0 --port 8083' -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru; Set-Content -Path $pidfile -Value $p.Id; for($i=0;$i -lt 45;$i++){Start-Sleep -Seconds 1; $p.Refresh(); if($p.HasExited){Write-Host ('ERROR: Server process exited with code ' + $p.ExitCode); if(Test-Path $err){Get-Content $err -Tail 40}; exit 1}; try{$r=Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8083/health' -TimeoutSec 2;if($r.StatusCode -eq 200){Write-Host 'Daily Signal server is running successfully (hidden).'; exit 0}}catch{}}; Write-Host 'ERROR: Server did not become healthy within 45 seconds.'; Write-Host 'Check logs\server-error.log and logs\server.log for details.'; if(Test-Path $err){Get-Content $err -Tail 40}; exit 1"
 if errorlevel 1 (
-  echo ERROR: Could not launch the background server.
+  echo.
+  echo STARTUP FAILED. Error details are shown above.
+  echo Full logs: logs\server-error.log and logs\server.log
   pause
   exit /b 1
 )
 
-REM Open the dashboard after the health endpoint responds. This runs separately,
-REM so this launcher can close immediately and leave no visible CMD window.
-start "" /min powershell -NoProfile -ExecutionPolicy Bypass -Command "$u='%DASHBOARD%/health'; for($i=0;$i -lt 60;$i++){try{$r=Invoke-WebRequest -UseBasicParsing $u -TimeoutSec 2;if($r.StatusCode -eq 200){Start-Process '%DASHBOARD%';exit 0}}catch{};Start-Sleep -Seconds 1}"
-
-echo Daily Signal launched in the background. This window will close.
+echo Startup successful. Closing this window; server stays hidden in background.
 endlocal
 exit /b 0
