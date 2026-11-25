@@ -194,25 +194,28 @@ class BinanceClient:
             return {"gainers": gainers, "losers": losers}
         try:
             self._ensure_markets()
-            # CCXT's raw endpoint maps directly to GET /fapi/v1/ticker/24hr.
-            # With no symbol, Binance returns the complete USDⓈ-M ticker array.
+            # Use Binance's authoritative USDⓈ-M exchangeInfo universe rather
+            # than CCXT's normalized markets_by_id, which can omit valid contracts.
+            exchange_info = self.exchange.fapiPublicGetExchangeInfo() or {}
+            contracts = {
+                str(item.get("symbol") or "").upper(): item
+                for item in (exchange_info.get("symbols") or [])
+            }
+            # The all-symbol ticker endpoint returns every USDⓈ-M contract.
             tickers = self.exchange.fapiPublicGetTicker24hr()
             rows = []
             for ticker in tickers or []:
                 symbol = str(ticker.get("symbol") or "").upper()
-                if not symbol.endswith("USDT"):
+                contract = contracts.get(symbol)
+                if not contract:
                     continue
-                market = self.exchange.markets_by_id.get(symbol)
-                if isinstance(market, list):
-                    market = market[0] if market else None
-                if not market:
-                    continue
-                market_info = market.get("info") or {}
+                quote_asset = str(contract.get("quoteAsset") or "").upper()
+                margin_asset = str(contract.get("marginAsset") or "").upper()
                 if (
-                    market.get("quote") != "USDT"
-                    or not market.get("swap")
-                    or market_info.get("contractType") != "PERPETUAL"
-                    or market_info.get("status") != "TRADING"
+                    quote_asset not in ("USDT", "USDC")
+                    or margin_asset not in ("USDT", "USDC")
+                    or contract.get("contractType") != "PERPETUAL"
+                    or contract.get("status") != "TRADING"
                 ):
                     continue
                 try:
