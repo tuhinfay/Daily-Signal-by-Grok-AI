@@ -63,9 +63,10 @@ class LiquidationEstimateTests(unittest.TestCase):
             }
         try:
             result = liquidation_feed.get_liquidation_summary("BTCUSDT")
-            self.assertEqual(list(result["timeframes"]), ["1h"])
-            self.assertEqual(result["timeframes"]["1h"]["long_usdt"], 125.0)
-            self.assertEqual(result["timeframes"]["1h"]["short_usdt"], 75.0)
+            self.assertEqual(list(result["timeframes"]), ["1h", "4h", "1d"])
+            for timeframe in ("1h", "4h", "1d"):
+                self.assertEqual(result["timeframes"][timeframe]["long_usdt"], 125.0)
+                self.assertEqual(result["timeframes"][timeframe]["short_usdt"], 75.0)
         finally:
             with liquidation_feed._lock:
                 liquidation_feed._orders.clear()
