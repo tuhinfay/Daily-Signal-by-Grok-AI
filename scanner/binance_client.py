@@ -390,7 +390,7 @@ class BinanceClient:
                     exchange_class = getattr(ccxt, exchange_id, None)
                     if exchange_class is None:
                         continue
-                    venue = exchange_class({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+                    venue = exchange_class({"enableRateLimit": True, "timeout": 5000, "options": {"defaultType": "swap"}})
                     market_symbol = self._ccxt_symbol(clean)
                     if not venue.has.get("fetchOpenInterestHistory"):
                         continue
