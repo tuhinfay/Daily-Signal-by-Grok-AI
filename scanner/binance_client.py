@@ -5,7 +5,7 @@ import os
 import re
 import time
 import pandas as pd
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Any
 
 from .data_validator import closed_candles
 
