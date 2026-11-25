@@ -4,6 +4,7 @@ import pandas as pd
 
 from scanner.binance_client import BinanceClient
 from scanner.signal_engine import SignalEngine
+from api import _trade_duration_seconds, _trade_opened_at
 
 
 class FakeExchange:
@@ -58,6 +59,45 @@ class MarketMicrostructureTests(unittest.TestCase):
         self.assertEqual([row["symbol"] for row in result["gainers"]], ["SOLUSDC", "BTCUSDT", "ETHUSDT"])
         self.assertEqual([row["symbol"] for row in result["losers"]], ["ETHUSDT", "BTCUSDT", "SOLUSDC"])
         self.assertEqual(result["gainers"][0]["change"], 12.0)
+
+    def test_market_structure_fetches_long_short_and_taker_ratios(self):
+        class StructureExchange:
+            def fapiDataGetGlobalLongShortAccountRatio(self, params):
+                self.global_params = params
+                return [{"longShortRatio": "1.5", "longAccount": "0.6", "shortAccount": "0.4"}]
+
+            def fapiDataGetTakerlongshortRatio(self, params):
+                self.taker_params = params
+                return [{"buySellRatio": "1.2"}]
+
+        exchange = StructureExchange()
+        client = BinanceClient.__new__(BinanceClient)
+        client.rate_limited = False
+        client.futures = True
+        client.exchange = exchange
+        result = client.get_market_structure_context("BTCUSDT")
+        self.assertEqual(result["long_short_ratio"], 1.5)
+        self.assertEqual(result["long_account_pct"], 60.0)
+        self.assertEqual(result["short_account_pct"], 40.0)
+        self.assertEqual(result["taker_buy_sell_ratio"], 1.2)
+        self.assertEqual(exchange.global_params, {"symbol": "BTCUSDT", "period": "5m", "limit": 1})
+
+    def test_trade_duration_uses_fill_time_and_returns_seconds(self):
+        trade = {
+            "created_at": "2026-11-25T09:00:00+00:00",
+            "filled_at": "2026-11-25T10:00:00+00:00",
+            "closed_at": "2026-11-25T10:05:58+00:00",
+        }
+        self.assertEqual(_trade_opened_at(trade), "2026-11-25T10:00:00+00:00")
+        self.assertEqual(_trade_duration_seconds(trade), 358)
+
+    def test_trade_duration_falls_back_to_first_dca_timestamp(self):
+        trade = {
+            "dca_history": [{"created_at": "2026-11-25T10:00:00Z"}],
+            "closed_at": "2026-11-25T10:01:05Z",
+        }
+        self.assertEqual(_trade_opened_at(trade), "2026-11-25T10:00:00Z")
+        self.assertEqual(_trade_duration_seconds(trade), 65)
 
     def test_order_book_uses_quote_notional_imbalance_and_spread(self):
         client = BinanceClient.__new__(BinanceClient)
