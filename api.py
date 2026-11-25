@@ -2098,30 +2098,25 @@ function marketStructureHTML(m,p){
  const labels=['5m','15m','1h','4h','1d'];
  const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
  const compact=v=>{if(v==null||!Number.isFinite(Number(v)))return '—';const n=Number(v),a=Math.abs(n);return a>=1e9?(n/1e9).toFixed(1)+'B':a>=1e6?(n/1e6).toFixed(1)+'M':a>=1e3?(n/1e3).toFixed(1)+'K':n.toFixed(0);};
- const tile=tf=>{
-  const x=tfs[tf]||{},buy=Number(x.buy_usdt),sell=Number(x.sell_usdt);
-  const buyColor=Number.isFinite(buy)&&Number.isFinite(sell)?(buy>=sell?'long':'short'):'';
-  const sellColor=Number.isFinite(buy)&&Number.isFinite(sell)?(sell>=buy?'short':'long'):'';
-  return '<div class="ms-tile"><div class="ms-tile-head">'+tf.toUpperCase()+'</div><div class="ms-metrics">'+
-   '<div class="ms-metric">LONG %<b class="long">'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</b></div>'+
-   '<div class="ms-metric">SHORT %<b class="short">'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</b></div>'+
-   '<div class="ms-metric">BUY USDT<b class="'+buyColor+'">'+compact(x.buy_usdt)+'</b></div>'+
-   '<div class="ms-metric">SELL USDT<b class="'+sellColor+'">'+compact(x.sell_usdt)+'</b></div>'+
-   '<div class="ms-metric">TOTAL VOL<b>'+compact(x.total_volume_usdt)+'</b></div></div></div>';
- };
+ const cell=tf=>{const x=tfs[tf]||{},buy=Number(x.buy_usdt),sell=Number(x.sell_usdt),long=x.long_pct,short=x.short_pct;const bc=Number.isFinite(buy)&&Number.isFinite(sell)?(buy>=sell?'var(--gn)':'var(--rd)'):'var(--text)',sc=Number.isFinite(buy)&&Number.isFinite(sell)?(sell>=buy?'var(--rd)':'var(--gn)'):'var(--text)';return '<tr><td style="font-weight:800;text-align:left">'+tf+'</td><td style="text-align:right;color:var(--gn);font-weight:700">'+(long==null?'—':fmt(long)+'%')+'</td><td style="text-align:right;color:var(--rd);font-weight:700">'+(short==null?'—':fmt(short)+'%')+'</td><td style="text-align:right;white-space:nowrap"><span style="color:'+bc+';font-weight:700">'+compact(x.buy_usdt)+'</span><span style="opacity:.55"> / </span><span style="color:'+sc+';font-weight:700">'+compact(x.sell_usdt)+'</span></td><td style="text-align:right;font-weight:700;color:'+bc+'">'+compact(x.total_volume_usdt)+'</td></tr>';};
  const hasRows=labels.some(tf=>tfs[tf]&&Object.values(tfs[tf]).some(v=>v!=null));
- const liqRow=tf=>{const remote=remoteLiq[tf]||{},local=localLiq[tf]||{},hasRemote=remote.long_usdt!=null||remote.short_usdt!=null,localReady=!!(m.liquidations&&m.liquidations.connected&&m.liquidations.collected_since),x=hasRemote?remote:(localReady?local:{});return '<span><b>'+tf.toUpperCase()+'</b> <span style="color:var(--gn)">L '+compact(x.long_usdt)+'</span> / <span style="color:var(--rd)">S '+compact(x.short_usdt)+'</span></span>';};
- return '<div class="market-structure"><div class="ms-title">MARKET STRUCTURE</div>'+
-  '<div class="ms-grid">'+labels.map(tile).join('')+'</div>'+
-  '<div class="ms-footer"><span><b>LIQ</b></span>'+['1h','4h','1d'].map(liqRow).join('')+'</div>'+
-  '<div class="ms-footer">OI <b>'+compact(oiUsd)+' USDT</b> · OI 24H <b>'+(oi24h==null?'—':fmt(oi24h)+'%')+'</b> · Book <b>'+(multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%')+'</b></div>'+
-  (hasRows?'':'<div class="ms-footer">No market data yet</div>')+'</div>';
+ const liqRow=tf=>{const remote=remoteLiq[tf]||{},local=localLiq[tf]||{},hasRemote=remote.long_usdt!=null||remote.short_usdt!=null,localReady=!!(m.liquidations&&m.liquidations.connected&&m.liquidations.collected_since),x=hasRemote?remote:(localReady?local:{});return '<span style="white-space:nowrap"><b>'+tf.toUpperCase()+'</b> <span style="color:var(--gn)">L '+compact(x.long_usdt)+'</span> / <span style="color:var(--rd)">S '+compact(x.short_usdt)+'</span></span>';};
+ const box='margin-top:8px;padding:7px 8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:10px;line-height:1.35;min-width:0;max-width:100%;box-sizing:border-box';
+ const oiColor=Number(oi24h)>0?'var(--cyan)':Number(oi24h)<0?'var(--gd)':'var(--mut)';
+ const book=multi.book_imbalance_pct,bookColor=book==null?'var(--mut)':Number(book)>0?'var(--gn)':Number(book)<0?'var(--rd)':'var(--mut)';
+ return '<div class="market-pressure" style="'+box+'"><b style="font-size:10px;letter-spacing:.04em">MARKET STRUCTURE</b>'+
+ '<div style="width:100%;overflow-x:auto;overscroll-behavior-x:contain"><table style="width:100%;min-width:430px;table-layout:auto;border-collapse:collapse;margin-top:5px;white-space:nowrap;font-size:10px"><thead><tr style="color:var(--mut)"><th style="text-align:left;padding:3px 5px">TF</th><th style="text-align:right;padding:3px 5px">LONG %</th><th style="text-align:right;padding:3px 5px">SHORT %</th><th style="text-align:right;padding:3px 5px">BUY / SELL</th><th style="text-align:right;padding:3px 5px">VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
+ '<div style="display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin-top:7px;padding-top:6px;border-top:1px solid var(--bd,#263449)"><b>LIQ</b>'+['1h','4h','1d'].map(liqRow).join('')+'</div>'+
+ '<div style="display:flex;gap:5px 12px;flex-wrap:wrap;margin-top:6px;padding-top:5px;border-top:1px solid var(--bd,#263449);font-size:10px"><span>OI <b style="color:var(--text)">'+compact(oiUsd)+' USDT</b></span><span>OI 24H <b style="color:'+oiColor+'">'+(oi24h==null?'—':(Number(oi24h)>0?'+':'')+fmt(oi24h)+'%')+'</b></span><span>Book <b style="color:'+bookColor+'">'+(book==null?'—':(Number(book)>0?'+':'')+fmt(book)+'%')+'</b></span></div>'+
+ (hasRows?'':'<div style="opacity:.7;margin-top:4px">No market data yet</div>')+
+ '</div>';
 }
 function timeframeHTML(s){
- const trends=s.timeframe_trends||{},items=['15m','1h','4h'].filter(tf=>trends[tf]).map(tf=>({label:tf.toUpperCase(),trend:trends[tf]}));
- if(trends['1d'])items.push({label:'HTF 1D',trend:trends['1d']});
- if(!items.length&&s.timeframe)items.push({label:'TF '+String(s.timeframe).toUpperCase(),trend:'SIDE'});
- return '<div class="tf-strip">'+(items.map(x=>'<span class="tf-chip '+(x.trend==='UP'?'up':x.trend==='DOWN'?'dn':'side')+'">'+x.label+' '+x.trend+'</span>').join('')||'<span class="tf-chip side">TF —</span>')+'</div>';
+ const trends=s.timeframe_trends||{},items=['15m','1h','4h'].filter(tf=>trends[tf]).map(tf=>({label:tf.toUpperCase()+(tf==='4h'?' EMA':''),trend:trends[tf]}));
+ const bias=v=>{const x=String(v||'').toLowerCase();return x==='bull'?'BULL':x==='bear'?'BEAR':x?x.toUpperCase():'—';};
+ const cls=v=>String(v||'').toLowerCase()==='bull'?'up':String(v||'').toLowerCase()==='bear'?'dn':'side';
+ const htf='<span class="tf-chip '+cls(s.bias_1d)+'">HTF 1D '+bias(s.bias_1d)+'</span><span class="tf-chip '+cls(s.bias_4h)+'">HTF 4H '+bias(s.bias_4h)+'</span>';
+ return '<div class="tf-strip">'+(items.map(x=>'<span class="tf-chip '+(x.trend==='UP'?'up':x.trend==='DOWN'?'dn':'side')+'">'+x.label+' '+x.trend+'</span>').join('')||'<span class="tf-chip side">TF —</span>')+htf+'</div>';
 }
 function marketSummaryHTML(t){
  const m=t.market_structure||t,price=(v)=>v==null?'—':fmtSymbolPrice(t.symbol,v,t.price_precision);
