@@ -207,18 +207,18 @@ class BinanceClient:
                 except Exception:
                     continue
                 if volume >= min_volume and last > 0:
-                    candidates.append((clean, volume, last))
+                    candidates.append((clean, volume, last, data))
             candidates.sort(key=lambda row: row[1], reverse=True)
 
-            # Check the top 40 contracts by quote volume using their current UTC daily candle (BD 06:00).
+            # Rank each contract using its own Binance rolling-24h ticker percentage.
             rows = []
-            for clean, volume, last in candidates[:40]:
+            for clean, volume, last, ticker_data in candidates[:40]:
                 if self.rate_limited:
                     break
                 try:
-                    change = data.get("percentage")
+                    change = ticker_data.get("percentage")
                     if change is None:
-                        change = (data.get("info") or {}).get("priceChangePercent")
+                        change = (ticker_data.get("info") or {}).get("priceChangePercent")
                     if change is None:
                         continue
                     change = float(change)
