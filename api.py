@@ -1587,7 +1587,8 @@ def create_trade(body: TradeCreate):
         entry_price = (scale_low + scale_high) / 2
     else:
         entry_price = float((body.limit_price or body.entry) if order_type == "LIMIT" else body.entry)
-    market_reference = float(_cache.get("prices", {}).get(sym) or body.entry or 0)
+    modal_market = _modal_price_cache.get(sym) or {}
+    market_reference = float(modal_market.get("price") or _cache.get("prices", {}).get(sym) or body.entry or 0)
     if body.advanced_enabled and order_type == "LIMIT" and body.limit_offset_pct and body.limit_offset_pct > 0 and market_reference > 0:
         offset = min(float(body.limit_offset_pct), 20.0) / 100.0
         entry_price = market_reference * (1 - offset if side == "LONG" else 1 + offset)
