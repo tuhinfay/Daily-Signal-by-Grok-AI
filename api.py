@@ -1532,6 +1532,10 @@ async def close_trade(tid: str):
     t = _trades[tid]
     if t.get("status") != "OPEN":
         return {"ok": True, "trade": t}
+    symbol_key = str(t.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
+    daily_snapshot = _daily_open_cache.get(symbol_key) or {}
+    if daily_snapshot.get("change") is not None:
+        t["daily_change_pct"] = daily_snapshot["change"]
     pnl = t.get("unrealized_pnl") or 0.0
     _account["balance"] = round(_account["balance"] + pnl, 2)
     _account["realized_pnl"] = round(_account["realized_pnl"] + pnl, 2)
@@ -2074,7 +2078,7 @@ async function loadTrades(){
     const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
-    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtPrice(t.entry)}</strong></div><div><em>Close Price</em><strong>${exit?fmtPrice(exit):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
+    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 1D</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtPrice(t.entry)}</strong></div><div><em>Close Price</em><strong>${exit?fmtPrice(exit):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
   }).join('');h+='</details>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   // Defensive cleanup: never show TP2 as a field on an open My Trades card.
