@@ -1951,14 +1951,14 @@ function marketStructureHTML(m,p){
  const bidPct=depthTotal>0?bid/depthTotal*100:null,askPct=depthTotal>0?ask/depthTotal*100:null;
  const crowd=ratio==null?'Crowd positioning unavailable':ratio>1.05?'More public accounts are LONG':ratio<0.95?'More public accounts are SHORT':'Public accounts nearly balanced';
  const aggression=buyPct==null?'Taker buy/sell flow unavailable':buyPct>52?'Aggressive buyers stronger':buyPct<48?'Aggressive sellers stronger':'Aggressive buying/selling balanced';
- const book=Number(m.book_imbalance_pct);
- const liquidity=!Number.isFinite(book)?'Order-book pressure unavailable':book>5?'More visible BUY-side liquidity':book< -5?'More visible SELL-side liquidity':'Visible bid/ask liquidity balanced';
- const aligned=ratio!=null&&buyPct!=null&&Number.isFinite(book)&&ratio>1.05&&buyPct>52&&book>5?'Bullish signals align':ratio!=null&&buyPct!=null&&Number.isFinite(book)&&ratio<0.95&&buyPct<48&&book< -5?'Bearish signals align':'Mixed pressure — indicators disagree';
+ const book=m.book_imbalance_pct==null?null:Number(m.book_imbalance_pct);
+ const liquidity=book==null||!Number.isFinite(book)?'Order-book pressure unavailable':book>5?'More visible BUY-side liquidity':book< -5?'More visible SELL-side liquidity':'Visible bid/ask liquidity balanced';
+ const aligned=ratio!=null&&buyPct!=null&&book!=null&&Number.isFinite(book)&&ratio>1.05&&buyPct>52&&book>5?'Bullish signals align':ratio!=null&&buyPct!=null&&book!=null&&Number.isFinite(book)&&ratio<0.95&&buyPct<48&&book< -5?'Bearish signals align':'Mixed pressure — indicators disagree';
  return '<div style="'+box+'"><b>PUBLIC MARKET POSITION · BINANCE · 5m</b>'+
  '<div style="margin-top:5px"><b>1. Public accounts:</b> Long '+pct(m.long_account_pct)+' vs Short '+pct(m.short_account_pct)+' · L/S '+(ratio==null?'—':f(ratio,2)+':1')+'<br>'+crowd+'</div>'+
  '<div style="margin-top:5px"><b>2. Aggressive trades:</b> Buy '+pct(buyPct)+' vs Sell '+pct(sellPct)+' · B/S '+(buyRatio==null?'—':f(buyRatio,2))+'<br>'+aggression+'</div>'+
  '<div style="margin-top:5px"><b>3. Visible order-book liquidity:</b> Bid '+(m.bid_depth_usdt==null?'—':fmt(bid))+' USDT ('+pct(bidPct)+') vs Ask '+(m.ask_depth_usdt==null?'—':fmt(ask))+' USDT ('+pct(askPct)+')<br>'+liquidity+' · imbalance '+pct(m.book_imbalance_pct)+'</div>'+
- '<div style="margin-top:5px"><b>Largest visible walls:</b> Bid '+(m.bid_wall_price==null?'—':fmtPrice(m.bid_wall_price,p))+' / Ask '+(m.ask_wall_price==null?'—':fmtPrice(m.ask_wall_price,p))+' · Spread '+pct(m.spread_pct)+'</div>'+
+ '<div style="margin-top:5px"><b>Largest visible walls:</b> Bid '+(m.bid_wall_price==null?'—':fmtPrice(m.bid_wall_price,p))+' / Ask '+(m.ask_wall_price==null?'—':fmtPrice(m.ask_wall_price,p))+' · Spread '+(m.spread_pct==null?'—':f(m.spread_pct,4)+'%')+'</div>'+
  '<div style="margin-top:6px"><b>Overall reading:</b> '+aligned+'. Different measures can disagree; this is not a guaranteed trade direction.</div>'+
  '<div style="margin-top:4px;opacity:.8">Total trader count / total trade count is not provided by this Binance feed. Account percentages show the split, not the number of traders. Liquidation heatmap is not available.</div></div>';
 }
