@@ -2163,7 +2163,7 @@ async function loadTrades(){
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
-        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span><span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span>
+        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span><span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> <span class="tag" style="font-size:10px;padding:2px 5px;opacity:.8">${durationShort(t.opened_at||t.filled_at||t.created_at,null,t.duration_seconds)}</span>
         <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'% 24H'}</span>
         ${t.auto_trade?'<span class="tag" style="background:#164e3b;color:#6ee7b7">BOT</span>':''}
         ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
