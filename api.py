@@ -1961,7 +1961,7 @@ function marketStructureHTML(m,p){
  if(!m)return '';
  const pressure=m.market_pressure||{},tfs=pressure.timeframes||{},multi=pressure.multi_exchange||{};
  const localLiq=(m.liquidations||{}),liq={...(localLiq.timeframes||{}),...((multi.marketlight||{}).liquidations||{})};
- const labels=['5m','15m','1h','4h','1d'];
+ const labels=['1m','5m','15m','1h','4h','1d'];
  const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
  const usd=v=>v==null?'—':fmt(v,2)+' USDT';
  const cell=tf=>{const x=tfs[tf]||{};const coverage=x.exchange_count==null?'': ' · '+x.exchange_count+'/'+(multi.exchange_total||8)+' venues';return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+usd(x.buy_usdt)+' / '+usd(x.sell_usdt)+'</td><td>'+usd(x.total_volume_usdt)+coverage+'</td></tr>';};
