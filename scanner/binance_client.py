@@ -160,8 +160,29 @@ class BinanceClient:
             ("LINKUSDT", 4e7), ("SUIUSDT", 3e7), ("NEARUSDT", 2e7), ("AAVEUSDT", 2e7),
         ][:top_n]
 
+    def get_24h_change_pct(self, symbol: str) -> Optional[float]:
+        """Return Binance Futures rolling 24-hour ticker percentage, not a UTC daily candle."""
+        ticker = self._cached_ticker(symbol)
+        if ticker is None:
+            if self.rate_limited:
+                return None
+            try:
+                ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
+            except Exception as e:
+                self._mark_rate_limit(e)
+                print(f"24h change {symbol}: {e}")
+                return None
+        value = ticker.get("percentage")
+        if value is None:
+            value = (ticker.get("info") or {}).get("priceChangePercent")
+        try:
+            number = float(value)
+            return round(number, 2) if number == number and abs(number) != float("inf") else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
     def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
-        """Rank liquid USDT-M contracts from the current UTC daily candle (00:00 UTC = 06:00 Bangladesh)."""
+        """Rank liquid USDT-M contracts by Binance rolling 24-hour ticker change."""
         gainers, losers = [], []
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
@@ -195,23 +216,18 @@ class BinanceClient:
                 if self.rate_limited:
                     break
                 try:
-                    # USD-M Futures 1d klines use UTC 00:00 by default
-                    # (= Bangladesh 06:00); do not pass Spot-only timezone params.
-                    candles = self.exchange.fetch_ohlcv(
-                        self._ccxt_symbol(clean), timeframe="1d", limit=1
-                    )
-                    if not candles:
+                    change = data.get("percentage")
+                    if change is None:
+                        change = (data.get("info") or {}).get("priceChangePercent")
+                    if change is None:
                         continue
-                    daily_open = float(candles[-1][1])
-                    if daily_open <= 0:
-                        continue
-                    change = ((last - daily_open) / daily_open) * 100
+                    change = float(change)
                     rows.append({
                         "symbol": clean,
-                        "change": round(change, 4),
+                        "change": round(change, 2),
                         "volume": volume,
                         "price": last,
-                        "period": "UTC daily candle (BD 06:00)",
+                        "period": "rolling 24h",
                     })
                 except Exception as e:
                     self._mark_rate_limit(e)
