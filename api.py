@@ -228,6 +228,9 @@ class TradeUpdate(BaseModel):
     trailing_pct: Optional[float] = None  # legacy callback rate %
     trailing_activation_price: Optional[float] = None
     callback_rate: Optional[float] = None
+    profit_lock_enabled: Optional[bool] = None
+    profit_activation_pct: Optional[float] = None
+    profit_callback_pct: Optional[float] = None
 
 
 class DcaBody(BaseModel):
@@ -1842,6 +1845,15 @@ async def update_trade(tid: str, body: TradeUpdate):
         t["trough_price"] = float(t.get("current_price") or t.get("entry") or 0)
     if body.trailing_activation_price is not None:
         t["trailing_activation_price"] = max(0.0, float(body.trailing_activation_price)) or None
+    if body.profit_lock_enabled is not None:
+        t["profit_lock_enabled"] = bool(body.profit_lock_enabled)
+    if body.profit_activation_pct is not None:
+        t["profit_activation_pct"] = max(0.1, min(float(body.profit_activation_pct), 50.0))
+    if body.profit_callback_pct is not None:
+        t["profit_callback_pct"] = max(0.1, min(float(body.profit_callback_pct), 5.0))
+        t["callback_rate"] = t["profit_callback_pct"]
+        t["trailing_pct"] = t["profit_callback_pct"]
+        t["trailing_active"] = False
     _update_trade_liquidation_fields(t)
     db.save_trade(t)
     return {"ok": True, "trade": t}
@@ -2069,10 +2081,19 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
         <label>Coin watchlist <small class="bot-help">Blank means all eligible coins</small></label><input id="botSymbols" placeholder="BTCUSDT, ETHUSDT, SOLUSDT">
       </div>
       <div class="bot-section">
-        <div class="bot-section-title"><span>03</span> DCA & Scaled Entry</div>
+        <div class="bot-section-title"><span>03</span> Advanced Option</div>
+        <label>Advanced settings <select id="botAdvanced"><option value="false">OFF</option><option value="true">ON</option></select></label>
+        <div id="botAdvancedFields" style="display:none">
+        <div class="row2"><div><label>SL % override (0 = signal)</label><input id="botAdvSL" type="number" min="0" max="50" step="0.1" value="0"></div><div><label>TP1 % override (0 = signal)</label><input id="botAdvTP1" type="number" min="0" max="100" step="0.1" value="0"></div></div>
+        <div class="row2"><div><label>TP2 % override (0 = signal)</label><input id="botAdvTP2" type="number" min="0" max="200" step="0.1" value="0"></div><div><label>Limit Entry Offset % (0 = market)</label><input id="botAdvOffset" type="number" min="0" max="20" step="0.1" value="0"></div></div>
+        <div class="row2"><div><label>Profit-lock activation %</label><input id="botAdvActivation" type="number" min="0.1" max="50" step="0.1" value="0.8"></div><div><label>Profit-lock callback %</label><input id="botAdvCallback" type="number" min="0.1" max="5" step="0.1" value="0.5"></div></div>
+        <label><input id="botAdvProfitLock" type="checkbox"> Enable profit-lock trailing</label>
+        <div class="bot-section-title" style="margin-top:14px">DCA & Scaled Entry</div>
         <div class="row2"><div><label>Auto DCA / Scale</label><select id="botDcaEnabled"><option value="false">OFF</option><option value="true">ON</option></select></div><div><label>Entry gap (%)</label><input id="botDcaGap" type="number" min="0.1" max="20" step="0.1" value="1.5"></div></div>
         <div class="row2"><div><label>Maximum add orders</label><input id="botDcaMax" type="number" min="1" max="5" value="3"></div><div><label>Next order multiplier</label><input id="botDcaMultiplier" type="number" min="1" max="3" step="0.1" value="2"></div></div>
+        <div class="row2"><div><label>DCA lower price (optional)</label><input id="botDcaLow" type="number" min="0" step="any"></div><div><label>DCA upper price (optional)</label><input id="botDcaHigh" type="number" min="0" step="any"></div></div>
         <small class="bot-help">Adds to an existing bot position after each adverse price move by the configured gap. Adds are capped by order count and multiplier.</small>
+        </div>
       </div>
       <div class="bot-section">
         <div class="bot-section-title"><span>04</span> Position & limits</div>
@@ -2160,6 +2181,17 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Upper Range Price</label><input type="number" id="m_scale_high" min="0" step="any" placeholder="Range high" oninput="updateOrderPreview()"></div>
     </div>
     </div>
+    <details class="trade-details" id="addAdvanced"><summary>Advanced Option</summary>
+      <label><input type="checkbox" id="m_adv_dca"> Enable DCA</label>
+      <div class="row2"><div><label>DCA gap %</label><input type="number" id="m_dca_gap" min="0.1" max="20" step="0.1" value="1.5"></div><div><label>Maximum DCA orders</label><input type="number" id="m_dca_max" min="1" max="5" value="3"></div></div>
+      <div class="row2"><div><label>DCA multiplier</label><input type="number" id="m_dca_mult" min="1" max="3" step="0.1" value="1.5"></div><div><label>Limit Entry Offset %</label><input type="number" id="m_limit_offset" min="0" max="20" step="0.1" placeholder="Optional"></div></div>
+      <div class="row2"><div><label>DCA lower price (optional)</label><input type="number" id="m_dca_low" min="0" step="any"></div><div><label>DCA upper price (optional)</label><input type="number" id="m_dca_high" min="0" step="any"></div></div>
+      <div class="row2"><div><label>SL % override</label><input type="number" id="m_sl_pct" min="0" max="50" step="0.1" placeholder="Optional"></div><div><label>TP1 % override</label><input type="number" id="m_tp1_pct" min="0" max="100" step="0.1" placeholder="Optional"></div></div>
+      <div class="row2"><div><label>TP2 % override</label><input type="number" id="m_tp2_pct" min="0" max="200" step="0.1" placeholder="Optional"></div><div><label>Profit-lock activation %</label><input type="number" id="m_profit_activation" min="0.1" max="50" step="0.1" value="0.8"></div></div>
+      <label>Profit-lock callback %</label><input type="number" id="m_profit_callback" min="0.1" max="5" step="0.1" value="0.5">
+      <label><input type="checkbox" id="m_profit_lock"> Enable profit-lock trailing</label>
+      <p class="hint">DCA adds exposure. Maximum orders and order size are capped; use conservative values.</p>
+    </details>
     <div id="order_preview" class="order-preview">Value 0 USDT · Margin 0 USDT · Qty 0.000000</div><div id="liq_preview" class="liq-preview" aria-live="polite">Add amount + SL for liquidation estimate.</div><div id="scale_preview" class="scale-preview" style="display:none"></div>
     
     <div class="btns">
@@ -2172,9 +2204,10 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <script>
 let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
-async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score??75;botQuality.value=c.min_quality||'A';botStyle.value=['scalp','day','swing'].includes(c.trade_style)?c.trade_style:'day';document.querySelectorAll('input[name="botStyleChoice"]').forEach(x=>x.checked=x.value===botStyle.value);botDirection.value=c.direction||'both';botAmount.value=c.amount_usd??50;botMaxOpen.value=c.max_open??2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botDcaEnabled.value=String(!!c.dca_enabled);botDcaGap.value=c.dca_gap_pct??1.5;botDcaMax.value=c.dca_max_orders??3;botDcaMultiplier.value=c.dca_multiplier??2;botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';botState.style.color=c.enabled?'#53d5aa':'';}catch(e){}}
+async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score??75;botQuality.value=c.min_quality||'A';botStyle.value=['scalp','day','swing'].includes(c.trade_style)?c.trade_style:'day';document.querySelectorAll('input[name="botStyleChoice"]').forEach(x=>x.checked=x.value===botStyle.value);botDirection.value=c.direction||'both';botAmount.value=c.amount_usd??50;botMaxOpen.value=c.max_open??2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botDcaEnabled.value=String(!!c.dca_enabled);botDcaGap.value=c.dca_gap_pct??1.5;botDcaMax.value=c.dca_max_orders??3;botDcaMultiplier.value=c.dca_multiplier??2;botDcaLow.value=c.dca_lower_price??'';botDcaHigh.value=c.dca_upper_price??'';botAdvanced.value=String(!!c.advanced_enabled);botAdvancedFields.style.display=c.advanced_enabled?'block':'none';botAdvSL.value=c.advanced_sl_pct??0;botAdvTP1.value=c.advanced_tp1_pct??0;botAdvTP2.value=c.advanced_tp2_pct??0;botAdvOffset.value=c.advanced_limit_offset_pct??0;botAdvActivation.value=c.advanced_profit_activation_pct??0.8;botAdvCallback.value=c.advanced_profit_callback_pct??0.5;botAdvProfitLock.checked=!!c.advanced_profit_lock;botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';botState.style.color=c.enabled?'#53d5aa':'';}catch(e){}}
 document.addEventListener('change',e=>{if(e.target.matches('input[name="botStyleChoice"]'))botStyle.value=e.target.value;});
-async function saveBotSettings(){const p={enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,trade_style:botStyle.value,direction:botDirection.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,min_rr:+botMinRR.value,cooldown_minutes:+botCooldown.value,max_symbol_trades_day:+botMaxSymbolDay.value,max_daily_loss_pct:+botDailyLoss.value,symbols:botSymbols.value,dca_enabled:botDcaEnabled.value==='true',dca_gap_pct:+botDcaGap.value,dca_max_orders:+botDcaMax.value,dca_multiplier:+botDcaMultiplier.value,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';botState.style.color=d.config.enabled?'#53d5aa':'';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
+document.getElementById('botAdvanced').addEventListener('change',()=>{botAdvancedFields.style.display=botAdvanced.value==='true'?'block':'none';});
+async function saveBotSettings(){const p={advanced_enabled:botAdvanced.value==='true',advanced_sl_pct:+botAdvSL.value,advanced_tp1_pct:+botAdvTP1.value,advanced_tp2_pct:+botAdvTP2.value,advanced_limit_offset_pct:+botAdvOffset.value,advanced_profit_lock:botAdvProfitLock.checked,advanced_profit_activation_pct:+botAdvActivation.value,advanced_profit_callback_pct:+botAdvCallback.value,enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,trade_style:botStyle.value,direction:botDirection.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,min_rr:+botMinRR.value,cooldown_minutes:+botCooldown.value,max_symbol_trades_day:+botMaxSymbolDay.value,max_daily_loss_pct:+botDailyLoss.value,symbols:botSymbols.value,dca_enabled:botDcaEnabled.value==='true',dca_gap_pct:+botDcaGap.value,dca_max_orders:+botDcaMax.value,dca_multiplier:+botDcaMultiplier.value,dca_lower_price:+botDcaLow.value||0,dca_upper_price:+botDcaHigh.value||0,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';botState.style.color=d.config.enabled?'#53d5aa':'';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
 if('Notification'in window && Notification.permission==='default') Notification.requestPermission();
 
 function speak(text){if(!voiceOn||!('speechSynthesis'in window))return;try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.rate=1;u.lang='en-US';speechSynthesis.speak(u);}catch(e){}}
@@ -2457,7 +2490,8 @@ async function loadTrades(){
         ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
-      ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8px;margin:8px 0;border-radius:8px">⚠ '+t.analysis_alert+'</div>':''}
+${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8px;margin:8px 0;border-radius:8px">⚠ '+t.analysis_alert+'</div>':''}
+      ${t.trailing_recommendation?'<div class="hint" style="border:1px solid #22d3ee;padding:8px;margin:8px 0;border-radius:8px">Suggested trailing: activate at +'+t.trailing_recommendation.activation_profit_pct+'% profit · callback '+t.trailing_recommendation.callback_pct+'% <button class="btn dim" onclick="applySuggestedTrail(\''+t.id+'\','+t.trailing_recommendation.activation_profit_pct+','+t.trailing_recommendation.callback_pct+')">Apply</button></div>':''}
       ${marketSummaryHTML(t)}
       <div class="vals">
         <div><em>Average Entry</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div>
@@ -2529,6 +2563,7 @@ async function saveShareCard(){const blob=await shareCardBlob();if(!blob){toast(
 async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
 async function cancelAllPending(event){if(event){event.preventDefault();event.stopPropagation();}if(!confirm('Cancel ALL pending orders? Running positions will not be affected.'))return;try{const r=await fetch('/api/trades/pending',{method:'DELETE'}),d=await r.json();if(r.ok&&d.ok){toast(d.canceled+' pending orders canceled');loadTrades();}else toast(d.error||'Bulk cancel failed');}catch(e){toast('Bulk cancel failed: '+(e.message||'network error'));}}
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
+async function applySuggestedTrail(id,activationPct,callbackPct){const t=(window._tradeCache||{})[String(id)]||{};const entry=Number(t.entry)||0;if(!(entry>0))return;const act=entry*(String(t.side).toUpperCase()==='LONG'?1+activationPct/100:1-activationPct/100);try{const r=await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({callback_rate:callbackPct,trailing_activation_price:act,profit_lock_enabled:true,profit_activation_pct:activationPct,profit_callback_pct:callbackPct})}),d=await r.json();if(r.ok&&d.ok){toast('Suggested trailing protection applied');loadTrades();}else toast(d.error||'Could not apply trailing');}catch(e){toast('Could not apply trailing');}}
 function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
 function closeManage(){manageBg.style.display='none';}
 async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null,orig=window._manageOriginalLevels||{};if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}if(sl!==orig.sl)body.stop_loss=sl;if(tp1!==orig.tp1)body.tp1=tp1;if((tp2??0)!==(orig.tp2??0))body.tp2=tp2;if(!Object.keys(body).length){closeManage();toast('No protection changes');return;}}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1–5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}try{const response=await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await response.json();if(response.ok&&d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}catch(e){toast('Could not save protection: '+(e.message||'network error'),5000);}}
