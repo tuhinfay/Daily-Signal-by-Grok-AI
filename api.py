@@ -2365,7 +2365,7 @@ function openModal(s){
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';
+  m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';document.getElementById('addAdvanced').open=false;['m_adv_dca','m_profit_lock'].forEach(id=>document.getElementById(id).checked=false);['m_dca_gap','m_dca_max','m_dca_mult','m_limit_offset','m_dca_low','m_dca_high','m_sl_pct','m_tp1_pct','m_tp2_pct'].forEach(id=>document.getElementById(id).value='');m_profit_activation.value='0.8';m_profit_callback.value='0.5';
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
@@ -2384,7 +2384,9 @@ async function submitTrade(){
   if(!(size>0)){toast('Enter a valid order amount');return;}
   if(!(+m_sl.value>0)){toast('Enter a valid Stop Loss');return;}
   if(!(+m_tp1.value>0)){toast('Enter a valid TP1');return;}
-  const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null};
+  const adv=document.getElementById('addAdvanced').open,offset=adv?(+m_limit_offset.value||0):0;
+  if(offset>0&&typ!=='LIMIT'){toast('Choose Limit order to use Limit Entry Offset');return;}
+  const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null,advanced_enabled:adv,dca_enabled:adv&&m_adv_dca.checked,dca_gap_pct:+m_dca_gap.value||1.5,dca_max_orders:+m_dca_max.value||3,dca_multiplier:+m_dca_mult.value||1.5,dca_lower_price:+m_dca_low.value||null,dca_upper_price:+m_dca_high.value||null,limit_offset_pct:offset,sl_pct:adv?(+m_sl_pct.value||null):null,tp1_pct:adv?(+m_tp1_pct.value||null):null,tp2_pct:adv?(+m_tp2_pct.value||null):null,profit_lock_enabled:adv&&m_profit_lock.checked,profit_activation_pct:+m_profit_activation.value||0.8,profit_callback_pct:+m_profit_callback.value||0.5};
   if(mode==='amount')body.amount_usd=+m_amount.value;
   if(mode==='margin')body.margin_usd=+m_margin.value;
   if(mode==='risk')body.risk_pct=+m_risk.value||1;
