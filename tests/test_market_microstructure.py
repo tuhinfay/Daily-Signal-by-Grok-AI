@@ -31,18 +31,20 @@ class MarketMicrostructureTests(unittest.TestCase):
 
     def test_movers_match_usdm_perpetual_ticker_ranking(self):
         class MoverExchange:
-            def __init__(self):
-                self.markets_by_id = {
-                    "BTCUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "PERPETUAL", "status": "TRADING"}},
-                    "ETHUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "PERPETUAL", "status": "TRADING"}},
-                    "OLDUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "CURRENT_QUARTER", "status": "TRADING"}},
-                    "OFFUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "PERPETUAL", "status": "SETTLING"}},
-                }
+            def fapiPublicGetExchangeInfo(self):
+                return {"symbols": [
+                    {"symbol": "BTCUSDT", "quoteAsset": "USDT", "marginAsset": "USDT", "contractType": "PERPETUAL", "status": "TRADING"},
+                    {"symbol": "ETHUSDT", "quoteAsset": "USDT", "marginAsset": "USDT", "contractType": "PERPETUAL", "status": "TRADING"},
+                    {"symbol": "SOLUSDC", "quoteAsset": "USDC", "marginAsset": "USDC", "contractType": "PERPETUAL", "status": "TRADING"},
+                    {"symbol": "OLDUSDT", "quoteAsset": "USDT", "marginAsset": "USDT", "contractType": "CURRENT_QUARTER", "status": "TRADING"},
+                    {"symbol": "OFFUSDT", "quoteAsset": "USDT", "marginAsset": "USDT", "contractType": "PERPETUAL", "status": "SETTLING"},
+                ]}
 
             def fapiPublicGetTicker24hr(self):
                 return [
                     {"symbol": "BTCUSDT", "priceChangePercent": "8.0", "quoteVolume": "1", "lastPrice": "100"},
                     {"symbol": "ETHUSDT", "priceChangePercent": "-5.0", "quoteVolume": "1", "lastPrice": "50"},
+                    {"symbol": "SOLUSDC", "priceChangePercent": "12.0", "quoteVolume": "1", "lastPrice": "25"},
                     {"symbol": "OLDUSDT", "priceChangePercent": "99.0", "quoteVolume": "1", "lastPrice": "10"},
                     {"symbol": "OFFUSDT", "priceChangePercent": "-99.0", "quoteVolume": "1", "lastPrice": "10"},
                 ]
@@ -53,9 +55,9 @@ class MarketMicrostructureTests(unittest.TestCase):
         client._markets_loaded = True
         client.exchange = MoverExchange()
         result = client.get_movers(top_n=5, min_volume=1000000)
-        self.assertEqual([row["symbol"] for row in result["gainers"]], ["BTCUSDT"])
+        self.assertEqual([row["symbol"] for row in result["gainers"]], ["SOLUSDC", "BTCUSDT"])
         self.assertEqual([row["symbol"] for row in result["losers"]], ["ETHUSDT"])
-        self.assertEqual(result["gainers"][0]["change"], 8.0)
+        self.assertEqual(result["gainers"][0]["change"], 12.0)
 
     def test_order_book_uses_quote_notional_imbalance_and_spread(self):
         client = BinanceClient.__new__(BinanceClient)
