@@ -401,7 +401,7 @@ def run_scan(top_n: int = 12):
         engine = SignalEngine()
         pairs = client.get_top_usdt_pairs(top_n=top_n, min_volume=config.MIN_VOLUME_USDT)
         try:
-            mv = client.get_movers(top_n=40, min_volume=0)
+            mv = client.get_movers(top_n=1000, min_volume=0)
             _cache["gainers"] = mv.get("gainers", [])
             _cache["losers"] = mv.get("losers", [])
         except Exception as e:
@@ -1607,6 +1607,12 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .filters button.on{color:var(--cyan);border-color:#164e63;background:#0b1c2e}
 .note{margin:0 12px 8px;padding:8px 10px;background:var(--card);border:1px solid var(--line);border-radius:9px;color:var(--mut);font-size:11px}
 .card{margin:0 10px 8px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;border-left:3px solid var(--line)}
+.trade-section{display:block;width:100%;margin:0 0 10px;padding:0;background:transparent;border:0;border-radius:0;box-sizing:border-box}
+.trade-section>summary{display:block;width:100%;box-sizing:border-box;cursor:pointer;list-style:none;margin:0 0 8px;padding:11px 12px;background:var(--card);border:1px solid var(--line);border-radius:10px;font-weight:800}
+.trade-section>summary::-webkit-details-marker{display:none}
+.trade-section>.card{display:block;width:100%;box-sizing:border-box;margin:0 0 8px}
+.trade-section>.history-trade{width:100%;box-sizing:border-box;margin:0;padding:12px 10px;border-bottom:1px solid var(--line)}
+.trade-section>.history-trade:last-child{border-bottom:0}
 .card.L{border-left-color:var(--gn)}.card.S{border-left-color:var(--rd)}.card.hit{border-left-color:var(--gd)}
 .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .side{font-size:11px;font-weight:800}.side.L{color:var(--gn)}.side.S{color:var(--rd)}
@@ -2037,9 +2043,9 @@ async function loadTrades(){
   const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
-  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') <button class="btn bad" style="float:right" onclick="cancelAllPending(event)">Cancel All</button></summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtPrice(t.limit_price)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
+  if(pending.length){h+='<details id="pendingOrdersDetails" class="trade-section" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') <button class="btn bad" style="float:right" onclick="cancelAllPending(event)">Cancel All</button></summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtPrice(t.limit_price)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
   window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
-  if(open.length){h+='<details id="openTradesDetails" class="card" '+(openExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Running Trades ('+open.length+') · Click to collapse</summary>';h+=open.map(t=>{
+  if(open.length){h+='<details id="openTradesDetails" class="trade-section" '+(openExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Running Trades ('+open.length+')</summary>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
@@ -2074,7 +2080,7 @@ async function loadTrades(){
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
       <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');h+='</details>';}
-  if(closed.length){h+='<details id="closedTradesDetails" class="card" '+(closedExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Closed Trade History ('+closed.length+') · Click to expand</summary>';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
+  if(closed.length){h+='<details id="closedTradesDetails" class="trade-section" '+(closedExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Closed Trade History ('+closed.length+')</summary>';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
     const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
     const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
@@ -2125,7 +2131,7 @@ async function saveManage(){const id=manageTradeId.value;let body={};if(manageLe
 async function editLevels(id,sl,tp1,tp2){const t=(window._tradeCache||{})[String(id)]||{};manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';window._manageEntry=Number(t.entry)||0;window._manageSide=String(t.side||'LONG').toUpperCase();manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';syncLevelPct('sl','price');syncLevelPct('tp','price');syncLevelPct('tp2','price');window._manageOriginalLevels={sl:Number(sl),tp1:Number(tp1),tp2:Number(tp2)||0};manageBg.style.display='flex';}
 function syncLevelPct(kind,source){const isSL=kind==='sl',isTP2=kind==='tp2',priceEl=isSL?manageSL:(isTP2?manageTP2:manageTP1),pctEl=isSL?manageSLPct:(isTP2?manageTP2Pct:manageTP1Pct),entry=Number(window._manageEntry)||0,side=window._manageSide||'LONG';if(!(entry>0))return;if(source==='price'){const p=Number(priceEl.value);if(!(p>0))return;const pct=side==='LONG'?(isSL?(entry-p)/entry*100:(p-entry)/entry*100):(isSL?(p-entry)/entry*100:(entry-p)/entry*100);pctEl.value=Number.isFinite(pct)?Math.max(0,pct).toFixed(3):'';}else{const pct=Number(pctEl.value);if(!(pct>=0))return;const f=pct/100,p=side==='LONG'?(isSL?entry*(1-f):entry*(1+f)):(isSL?entry*(1+f):entry*(1-f));priceEl.value=p>0?Number(p.toPrecision(10)):'';}}
 async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
-function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
+function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace(/(USDT|USDC)$/,'')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
 async function adjustFunds(action){const input=document.getElementById('fundAmount'),amount=Number(input.value);if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}const label=action==='add'?'Add':'Remove';if(!confirm(label+' $'+fmt(amount)+' USDT '+(action==='add'?'to':'from')+' paper account?'))return;try{const r=await fetch('/api/account/funds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,amount})}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Balance adjustment failed');return;}setAcc(d.account);const account=await(await fetch('/api/account')).json();renderStats(account.stats,accStats);input.value='';toast(label+'ed $'+fmt(amount)+' USDT');loadTrades();}catch(e){toast('Balance adjustment failed: '+(e.message||'network error'));}}
 async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
