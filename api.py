@@ -51,6 +51,11 @@ _scan_max_leverage: Dict[str, Optional[int]] = {}
 _daily_open_cache: Dict[str, Dict[str, float]] = {}
 _symbol_price_precision: Dict[str, int] = {}
 _market_structure_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _market_symbol_key(symbol: Any) -> str:
+    """Canonical key shared by scanner cache and trade API (e.g. BTC/USDT:USDT -> BTCUSDT)."""
+    return str(symbol or "").upper().replace("/", "").split(":")[0]
 _bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both"}
 
 def _utc_daily_change_pct(df, current_price=None):
@@ -529,12 +534,12 @@ def run_scan(top_n: int = 12):
                 item["reasons"].append(f"Aligned BTC {btc_regime} regime")
 
         checked_derivatives = set()
-        priority_symbols = [str(t.get("symbol") or "") for t in _trades.values() if t.get("status") == "OPEN"]
+        priority_symbols = [_market_symbol_key(t.get("symbol")) for t in _trades.values() if t.get("status") == "OPEN"]
         recent_closed = sorted(
             (t for t in _trades.values() if t.get("status") == "CLOSED"),
             key=lambda t: str(t.get("closed_at") or ""), reverse=True,
         )[:3]
-        priority_symbols += [str(t.get("symbol") or "") for t in recent_closed]
+        priority_symbols += [_market_symbol_key(t.get("symbol")) for t in recent_closed]
         priority_symbols += [x["symbol"] for x in sorted(signals, key=lambda x: x["score"], reverse=True)]
         for sym in dict.fromkeys(priority_symbols):
             if not sym or len(checked_derivatives) >= 6 or client.rate_limited:
@@ -556,7 +561,7 @@ def run_scan(top_n: int = 12):
                 "mark_price": mark_price,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
-            _market_structure_cache[sym] = structure_snapshot
+            _market_structure_cache[_market_symbol_key(sym)] = structure_snapshot
             imbalance = book.get("book_imbalance_pct")
             spread = book.get("spread_pct")
             for item in signals:
@@ -1130,7 +1135,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     if r["price_precision"] is not None:
         _symbol_price_precision[sym] = r["price_precision"]
     r["market_structure"] = {**client.get_order_book_context(sym), **client.get_market_structure_context(sym), **client.get_derivatives_context(sym)}
-    _market_structure_cache[sym] = r["market_structure"]
+    _market_structure_cache[_market_symbol_key(sym)] = r["market_structure"]
     # Match Binance USDⓈ-M rolling 24h ticker percentage, not the UTC 1d candle open.
     change_24h_pct = client.get_24h_change_pct(sym)
     if change_24h_pct is not None:
@@ -1214,7 +1219,7 @@ async def api_trades():
     _calc_equity()
     trades = [dict(trade) for trade in _trades.values()]
     for trade in trades:
-        symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
+        symbol = _market_symbol_key(trade.get("symbol"))
         trade["price_precision"] = _symbol_price_precision.get(symbol)
         trade["market_structure"] = _market_structure_cache.get(symbol)
         trade["opened_at"] = _trade_opened_at(trade)
