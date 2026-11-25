@@ -439,6 +439,30 @@ class BinanceClient:
         return result
 
 
+    def get_daily_market_context(self, symbol: str, current_price: Optional[float] = None) -> Dict[str, Optional[float]]:
+        """Binance USD-M active UTC daily candle plus 7D/30D/1Y close-to-close returns."""
+        result: Dict[str, Optional[float]] = {
+            "daily_open": None, "daily_high": None, "daily_low": None,
+            "change_7d_pct": None, "change_30d_pct": None, "change_1y_pct": None,
+        }
+        df = self.fetch_ohlcv(symbol, timeframe="1d", limit=370)
+        if df is None or len(df) < 31:
+            return result
+        try:
+            last = df.iloc[-1]
+            price = float(current_price or last["close"])
+            for key, col in (("daily_open", "open"), ("daily_high", "high"), ("daily_low", "low")):
+                value = float(last[col])
+                result[key] = value if value > 0 else None
+            for days, key in ((7, "change_7d_pct"), (30, "change_30d_pct"), (365, "change_1y_pct")):
+                if len(df) > days:
+                    base = float(df["close"].iloc[-(days + 1)])
+                    if base > 0 and price > 0:
+                        result[key] = round((price / base - 1.0) * 100.0, 2)
+        except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+            pass
+        return result
+
     def get_price_precision(self, symbol: str) -> Optional[int]:
         """Return Binance's displayed price decimal places from PRICE_FILTER tickSize."""
         try:
