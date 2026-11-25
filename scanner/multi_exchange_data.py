@@ -84,7 +84,12 @@ def _venue_snapshot(exchange_id: str, base: str):
         if not symbol:
             result["error"] = "No active linear USDT/USDC perpetual for this asset"
             return result
-        trades = exchange.fetch_trades(symbol, limit=500) or []
+        trades_error = None
+        try:
+            trades = exchange.fetch_trades(symbol, limit=500) or []
+        except Exception as exc:
+            trades = []
+            trades_error = str(exc)[:140]
         now_ms = int(time.time() * 1000)
         windows = {"5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
         periods = {tf: {"buy_usdt": 0.0, "sell_usdt": 0.0, "total_volume_usdt": 0.0,
@@ -109,16 +114,26 @@ def _venue_snapshot(exchange_id: str, base: str):
                     row["total_volume_usdt"] += notional
                     row["buy_usdt" if side == "buy" else "sell_usdt"] += notional
                     row["trades_count"] += 1
-        book = exchange.fetch_order_book(symbol, limit=20) or {}
-        bids, asks = book.get("bids") or [], book.get("asks") or []
-        bid_value = sum(float(p) * float(q) * contract_size for p, q, *_ in bids if float(p) > 0 and float(q) > 0)
-        ask_value = sum(float(p) * float(q) * contract_size for p, q, *_ in asks if float(p) > 0 and float(q) > 0)
+        book_error = None
+        try:
+            book = exchange.fetch_order_book(symbol, limit=20) or {}
+            bids, asks = book.get("bids") or [], book.get("asks") or []
+            bid_value = sum(float(p) * float(q) * contract_size for p, q, *_ in bids if float(p) > 0 and float(q) > 0)
+            ask_value = sum(float(p) * float(q) * contract_size for p, q, *_ in asks if float(p) > 0 and float(q) > 0)
+        except Exception as exc:
+            bid_value = ask_value = 0.0
+            book_error = str(exc)[:140]
         depth_total = bid_value + ask_value
+        if trades_error and book_error:
+            result["error"] = "Trades: " + trades_error + " | Book: " + book_error
+            return result
         result.update({
             "status": "ok", "symbol": symbol, "timeframes": periods,
-            "bid_usdt": round(bid_value, 2), "ask_usdt": round(ask_value, 2),
-            "book_imbalance_pct": round((bid_value - ask_value) / depth_total * 100, 2) if depth_total else None,
+            "bid_usdt": round(bid_value, 2) if not book_error else None,
+            "ask_usdt": round(ask_value, 2) if not book_error else None,
+            "book_imbalance_pct": round((bid_value - ask_value) / depth_total * 100, 2) if depth_total and not book_error else None,
             "trades_count": len(trades), "updated_at": int(time.time() * 1000),
+            "trades_error": trades_error, "book_error": book_error,
             "latency_ms": round((time.time() - started) * 1000, 1),
         })
     except Exception as exc:
