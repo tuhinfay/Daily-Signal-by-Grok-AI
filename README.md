@@ -942,3 +942,18 @@ Supported style filters depend on the selected scanner mode; common V4 filters a
 ## 16. Disclaimer
 
 Daily Signal by Grok AI is an educational market-analysis and simulated paper-trading project. It is not financial advice, investment advice or a recommendation to buy or sell any asset. Cryptocurrency futures are highly leveraged and can result in rapid loss of capital. Verify data, understand liquidation risk and independently evaluate every trade. Never risk money you cannot afford to lose.
+
+
+### Latest signal-card presentation notes
+
+- The 24-hour daily-candle Open/High/Low and 7D/30D/1Y changes are displayed once on each Signal card, followed by Support (S) and Resistance (R) on that same line.
+- Positive 7D/30D/1Y changes are green; negative changes are red. Support is green and Resistance is red.
+- Signal cards show a compact trend label for each available timeframe: **15M, 1H, 4H and 1D**.
+- These timeframe labels are calculated from the timeframe candle close and EMA9/EMA21 alignment:
+  - **UP**: Close > EMA9 > EMA21.
+  - **DOWN**: Close < EMA9 < EMA21.
+  - **SIDE**: the three values do not form either strict alignment.
+- UP/DOWN/SIDE is a simple trend-state description, not a prediction or entry signal by itself. A timeframe can be omitted when there is not enough candle data.
+- In Market Structure, Long % is green and Short % is red. Buy/Sell notionals are colored according to which side has the larger value; total volume follows the dominant Buy/Sell side for quick reading. Liquidated Long (L) is green and Short (S) is red.
+- Market Structure table columns use fixed widths and right-aligned numeric cells to keep percentages and USDT amounts visually aligned on narrow screens.
+- In My Trades, Support and Resistance are shown on their own line below the daily-price summary: S in green, R in red. Closed-trade Opened/Closed/Time values retain the regular 12px text size while the gaps are kept compact.
