@@ -196,6 +196,35 @@ def _stats() -> Dict[str, Any]:
 
 
 
+
+def _trade_opened_at(trade: Dict[str, Any]) -> Optional[str]:
+    """Resolve the actual open/fill timestamp, with legacy DCA fallbacks."""
+    value = trade.get("filled_at") or trade.get("created_at")
+    if not value:
+        history = trade.get("dca_history") or []
+        stamps = [x.get("created_at") for x in history if isinstance(x, dict) and x.get("created_at")]
+        value = min(stamps) if stamps else None
+    return str(value) if value else None
+
+
+def _trade_duration_seconds(trade: Dict[str, Any]) -> Optional[int]:
+    """Return elapsed whole seconds between fill/open and close timestamps."""
+    opened = _trade_opened_at(trade)
+    closed = trade.get("closed_at")
+    if not opened or not closed:
+        return None
+    try:
+        start = datetime.fromisoformat(str(opened).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(closed).replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        return max(0, int((end - start).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _estimate_liquidation_price(trade: Dict[str, Any]) -> Optional[float]:
     """Portfolio-aware paper estimate; exchange tiers and fees are approximated."""
     try:
@@ -513,6 +542,16 @@ def run_scan(top_n: int = 12):
             constraints = client.get_order_constraints(sym) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else {}
             funding = context.get("funding_rate")
             oi_change = context.get("oi_change_pct")
+            # Cache for My Trades independently of whether this symbol produced a signal.
+            structure_snapshot = {
+                **book, **structure,
+                "funding_rate": funding,
+                "oi_change_1h_pct": round(oi_change, 2) if oi_change is not None else None,
+                "open_interest": context.get("open_interest"),
+                "mark_price": mark_price,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _market_structure_cache[sym] = structure_snapshot
             imbalance = book.get("book_imbalance_pct")
             spread = book.get("spread_pct")
             for item in signals:
@@ -525,8 +564,7 @@ def run_scan(top_n: int = 12):
                 item["oi_change_1h_pct"] = round(oi_change, 2) if oi_change is not None else None
                 item["orderbook_imbalance_pct"] = round(imbalance, 2) if imbalance is not None else None
                 item["spread_pct"] = round(spread, 4) if spread is not None else None
-                item["market_structure"] = {**book, **structure, "funding_rate": funding, "oi_change_1h_pct": round(oi_change, 2) if oi_change is not None else None}
-                _market_structure_cache[sym] = item["market_structure"]
+                item["market_structure"] = structure_snapshot
                 item["price_precision"] = _symbol_price_precision.get(sym)
                 item["mark_price"] = mark_price
                 item["qty_step"] = constraints.get("qty_step")
@@ -1174,6 +1212,8 @@ async def api_trades():
         symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
         trade["price_precision"] = _symbol_price_precision.get(symbol)
         trade["market_structure"] = _market_structure_cache.get(symbol)
+        trade["opened_at"] = _trade_opened_at(trade)
+        trade["duration_seconds"] = _trade_duration_seconds(trade)
         if trade.get("status") != "OPEN":
             continue
         cached = _daily_open_cache.get(symbol)
@@ -1685,7 +1725,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .modal .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .modal .btns{display:flex;gap:8px;margin-top:12px}
 .modal .btns .btn{flex:1;padding:12px}
- .hint{font-size:11px;color:var(--mut);margin-top:4px}.fund-tools{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.fund-tools label{display:block;color:var(--mut);font-size:11px;margin-bottom:6px}.fund-tools input{width:100%;padding:11px;border-radius:9px;background:#080e1a;border:1px solid var(--line);color:var(--text);font-size:14px}.fund-tools .actions{margin-top:8px}.share-bg{display:none;position:fixed;inset:0;background:#000b;z-index:120;align-items:center;justify-content:center;padding:14px}.share-modal{width:min(100%,480px);max-height:94vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.share-modal h3{font-size:15px;margin-bottom:10px}.share-preview{background:#070b14;border-radius:12px;padding:8px;text-align:center}.share-preview canvas{display:block;width:100%;height:auto;border-radius:8px}.share-modal .actions{display:flex;gap:7px;margin-top:10px}.share-modal .btn{flex:1}.history-trade{padding:12px 0;border-bottom:1px solid var(--line)}.history-trade:last-child{border-bottom:0}.history-trade .vals{margin-top:8px}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
+ .hint{font-size:11px;color:var(--mut);margin-top:4px}.fund-tools{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.fund-tools label{display:block;color:var(--mut);font-size:11px;margin-bottom:6px}.fund-tools input{width:100%;padding:11px;border-radius:9px;background:#080e1a;border:1px solid var(--line);color:var(--text);font-size:14px}.fund-tools .actions{margin-top:8px}.share-bg{display:none;position:fixed;inset:0;background:#000b;z-index:120;align-items:center;justify-content:center;padding:14px}.share-modal{width:min(100%,480px);max-height:94vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.share-modal h3{font-size:15px;margin-bottom:10px}.share-preview{background:#070b14;border-radius:12px;padding:8px;text-align:center}.share-preview canvas{display:block;width:100%;height:auto;border-radius:8px}.share-modal .actions{display:flex;gap:7px;margin-top:10px}.share-modal .btn{flex:1}.history-trade{padding:12px 0;border-bottom:1px solid var(--line)}.history-trade:last-child{border-bottom:0}.history-trade .vals{margin-top:8px}.history-trade .vals>div:last-child{min-width:72px;padding:4px 7px;border:1px solid var(--line);border-radius:7px;background:rgba(34,211,238,.06)}.history-trade .vals>div:last-child strong{color:var(--cyan)}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
 .sec{padding:10px 12px 4px;font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
 .mv{display:flex;gap:8px;overflow-x:auto;padding:0 12px 10px}
 .mv .i{min-width:108px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -1876,7 +1916,7 @@ function setStyle(s){style=s;pinManual=false;document.querySelectorAll('.filters
 function fmt(n){return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
 function fmtPrice(n,precision){const v=Number(n);if(!Number.isFinite(v))return '—';const p=precision!=null&&Number.isInteger(Number(precision))?Math.max(0,Math.min(Number(precision),12)):8;return p===0?v.toFixed(0):v.toFixed(p).replace(/0+$/,'').replace(/\.$/,'');}
 function fmtSymbolPrice(symbol,n,precision){return fmtPrice(n,precision);}
-function durationShort(start,end){const a=Date.parse(start||''),b=Date.parse(end||'');if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)return '—';let s=Math.floor((b-a)/1000);const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);s%=60;return [[d,'D'],[h,'H'],[m,'M'],[s,'S']].filter(x=>x[0]>0).map(x=>x[0]+x[1]).join(' ')||'0S';}
+function durationShort(start,end,seconds){let s=Number.isFinite(Number(seconds))&&seconds!=null?Math.max(0,Math.floor(Number(seconds))):null;if(s===null){const a=Date.parse(start||''),b=Date.parse(end||'');if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)return '—';s=Math.floor((b-a)/1000);}const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);s%=60;return [[d,'D'],[h,'H'],[m,'M'],[s,'S']].filter(x=>x[0]>0).map(x=>x[0]+x[1]).join(' ')||'0S';}
 function marketStructureHTML(m,p){if(!m)return '';const f=(v,d=2)=>v==null?'—':Number(v).toFixed(d);return '<div class="sub" style="margin-top:8px"><b>Market Structure</b> · L/S '+(m.long_short_ratio==null?'—':f(m.long_short_ratio,3))+' · Taker B/S '+(m.taker_buy_sell_ratio==null?'—':f(m.taker_buy_sell_ratio,3))+' · Book '+f(m.book_imbalance_pct)+'% · Spread '+f(m.spread_pct,4)+'%</div><div class="sub">Accounts L '+f(m.long_account_pct)+'% / S '+f(m.short_account_pct)+'% · Depth Bid '+(m.bid_depth_usdt==null?'—':fmt(m.bid_depth_usdt))+' / Ask '+(m.ask_depth_usdt==null?'—':fmt(m.ask_depth_usdt))+' USDT · Visible walls '+(m.bid_wall_price==null?'—':fmtPrice(m.bid_wall_price,p))+' / '+(m.ask_wall_price==null?'—':fmtPrice(m.ask_wall_price,p))+'</div><div class="sub">Liquidation heatmap/levels: Binance public feed does not provide these levels; not inferred from order book.</div>'; }
 function setAcc(a){if(!a)return;sBal.textContent='$'+fmt(a.balance);sEq.textContent='$'+fmt(a.equity);sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);sReal.className=a.realized_pnl>=0?'up':'dn';if(window.aStart){aStart.textContent='$'+fmt(a.start_balance);aBal.textContent='$'+fmt(a.balance);aEq.textContent='$'+fmt(a.equity);aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}}
 function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
@@ -2112,10 +2152,10 @@ async function loadTrades(){
       <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');h+='</details>';}
   if(closed.length){h+='<details id="closedTradesDetails" class="trade-section" '+(closedExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Closed Trade History ('+closed.length+')</summary>';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
     const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
-    const openedStamp=t.filled_at||t.created_at;const openedAt=openedStamp?new Date(openedStamp).toLocaleString():'—';
+    const openedStamp=t.opened_at||t.filled_at||t.created_at;const openedAt=openedStamp?new Date(openedStamp).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
-    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div><div><em>Time</em><strong>${durationShort(t.filled_at||t.created_at,t.closed_at)}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
+    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div><div><em>Time</em><strong>${durationShort(t.opened_at||t.filled_at||t.created_at,t.closed_at,t.duration_seconds)}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
   }).join('');h+='</details>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   // Defensive cleanup: never show TP2 as a field on an open My Trades card.
