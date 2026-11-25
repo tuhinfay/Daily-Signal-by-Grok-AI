@@ -1597,10 +1597,10 @@ def create_trade(body: TradeCreate):
             p = min(float(body.sl_pct), 50.0) / 100.0
             body.stop_loss = entry_price * (1 - p if side == "LONG" else 1 + p)
         if body.tp1_pct and body.tp1_pct > 0:
-            p = min(float(body.tp1_pct), 100.0) / 100.0
+            p = min(float(body.tp1_pct), 99.0 if side == "SHORT" else 100.0) / 100.0
             body.tp1 = entry_price * (1 + p if side == "LONG" else 1 - p)
         if body.tp2_pct and body.tp2_pct > 0:
-            p = min(float(body.tp2_pct), 200.0) / 100.0
+            p = min(float(body.tp2_pct), 99.0 if side == "SHORT" else 200.0) / 100.0
             body.tp2 = entry_price * (1 + p if side == "LONG" else 1 - p)
     if body.advanced_enabled and body.dca_enabled:
         lower, upper = float(body.dca_lower_price or 0), float(body.dca_upper_price or 0)
@@ -1685,8 +1685,8 @@ def create_trade(body: TradeCreate):
         "dca_upper_price": float(body.dca_upper_price or 0) or None,
         "auto_dca_base_usd": round(notional, 2),
         "sl_pct_setting": min(50.0, float(body.sl_pct or 0)) if body.advanced_enabled else 0,
-        "tp1_pct_setting": min(100.0, float(body.tp1_pct or 0)) if body.advanced_enabled else 0,
-        "tp2_pct_setting": min(200.0, float(body.tp2_pct or 0)) if body.advanced_enabled else 0,
+        "tp1_pct_setting": min(99.0 if side == "SHORT" else 100.0, float(body.tp1_pct or 0)) if body.advanced_enabled else 0,
+        "tp2_pct_setting": min(99.0 if side == "SHORT" else 200.0, float(body.tp2_pct or 0)) if body.advanced_enabled else 0,
         "profit_lock_enabled": bool(body.advanced_enabled and body.profit_lock_enabled),
         "profit_activation_pct": max(0.1, min(float(body.profit_activation_pct or 0.8), 50.0)),
         "profit_callback_pct": max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)),
@@ -1768,7 +1768,7 @@ def create_trade(body: TradeCreate):
         existing_trade["dca_count"] = int(existing_trade.get("dca_count") or 0) + 1
         existing_trade.setdefault("dca_history", []).append({"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()})
         if body.advanced_enabled:
-            existing_trade.update({"advanced_enabled": True, "advanced_dca_enabled": bool(body.dca_enabled), "dca_gap_pct": max(0.1,min(float(body.dca_gap_pct or 1.5),20.0)), "dca_max_orders": max(1,min(int(body.dca_max_orders or 3),5)), "dca_multiplier": max(1.0,min(float(body.dca_multiplier or 1.5),3.0)), "dca_lower_price": float(body.dca_lower_price or 0) or None, "dca_upper_price": float(body.dca_upper_price or 0) or None, "auto_dca_base_usd": round(notional,2), "sl_pct_setting": min(50.0,float(body.sl_pct or 0)), "tp1_pct_setting": min(100.0,float(body.tp1_pct or 0)), "tp2_pct_setting": min(200.0,float(body.tp2_pct or 0)), "profit_lock_enabled": bool(body.profit_lock_enabled), "profit_activation_pct": float(body.profit_activation_pct or 0.8), "profit_callback_pct": float(body.profit_callback_pct or 0.5)})
+            existing_trade.update({"advanced_enabled": True, "advanced_dca_enabled": bool(body.dca_enabled), "dca_gap_pct": max(0.1,min(float(body.dca_gap_pct or 1.5),20.0)), "dca_max_orders": max(1,min(int(body.dca_max_orders or 3),5)), "dca_multiplier": max(1.0,min(float(body.dca_multiplier or 1.5),3.0)), "dca_lower_price": float(body.dca_lower_price or 0) or None, "dca_upper_price": float(body.dca_upper_price or 0) or None, "auto_dca_base_usd": round(notional,2), "sl_pct_setting": min(50.0,float(body.sl_pct or 0)), "tp1_pct_setting": min(99.0 if side == "SHORT" else 100.0,float(body.tp1_pct or 0)), "tp2_pct_setting": min(99.0 if side == "SHORT" else 200.0,float(body.tp2_pct or 0)), "profit_lock_enabled": bool(body.profit_lock_enabled), "profit_activation_pct": float(body.profit_activation_pct or 0.8), "profit_callback_pct": float(body.profit_callback_pct or 0.5)})
             if existing_trade["profit_lock_enabled"]:
                 existing_trade["callback_rate"] = existing_trade["profit_callback_pct"]
                 existing_trade["trailing_pct"] = existing_trade["profit_callback_pct"]
