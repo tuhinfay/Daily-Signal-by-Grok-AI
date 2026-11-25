@@ -181,7 +181,7 @@ class BinanceClient:
         except (TypeError, ValueError, OverflowError):
             return None
 
-    def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
+    def get_movers(self, top_n: int = 12, min_volume: float = 0) -> Dict[str, List[dict]]:
         """Rank liquid USDT-M contracts by Binance rolling 24-hour ticker change."""
         gainers, losers = [], []
         if self.rate_limited:
@@ -212,7 +212,7 @@ class BinanceClient:
 
             # Rank each contract using its own Binance rolling-24h ticker percentage.
             rows = []
-            for clean, volume, last, ticker_data in candidates[:40]:
+            for clean, volume, last, ticker_data in candidates:
                 if self.rate_limited:
                     break
                 try:
@@ -231,7 +231,7 @@ class BinanceClient:
                     })
                 except Exception as e:
                     self._mark_rate_limit(e)
-                    print(f"mover daily candle {clean}: {e}")
+                    print(f"mover 24h ticker {clean}: {e}")
                     if self.rate_limited:
                         break
             rows.sort(key=lambda row: row["change"], reverse=True)
