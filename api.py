@@ -1927,7 +1927,7 @@ function cardHTML(s){
   const v5Structure=s.v5_structure?`<div class="sub">Structure · ${s.v5_structure.bias||'neutral'} · BOS ${s.v5_structure.bullish_bos?'↑':s.v5_structure.bearish_bos?'↓':'—'} · Sweep ${s.v5_structure.bullish_sweep?'bullish':s.v5_structure.bearish_sweep?'bearish':'—'} · Swing ${s.v5_structure.higher_highs&&s.v5_structure.higher_lows?'HH/HL':s.v5_structure.lower_highs&&s.v5_structure.lower_lows?'LH/LL':'mixed'}</div>`:'';
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span><span class="tag ${(Number(s.daily_change_pct)||0)>=0?'up':'dn'}">${s.daily_change_pct==null?'—':(Number(s.daily_change_pct)>=0?'+':'')+Number(s.daily_change_pct).toFixed(2)+'% 1D'}</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span><span class="tag ${(Number(s.daily_change_pct)||0)>=0?'up':'dn'}">${s.daily_change_pct==null?'—':(Number(s.daily_change_pct)>=0?'+':'')+Number(s.daily_change_pct).toFixed(2)+'% 24H'}</span></div>
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
@@ -2045,7 +2045,7 @@ async function loadTrades(){
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
         <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span><span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span>
-        <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'% 1D'}</span>
+        <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'% 24H'}</span>
         ${t.auto_trade?'<span class="tag" style="background:#164e3b;color:#6ee7b7">BOT</span>':''}
         ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
