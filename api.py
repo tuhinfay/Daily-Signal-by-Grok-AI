@@ -2118,7 +2118,7 @@ function timeframeHTML(s){
  const cls=v=>String(v||'').toLowerCase()==='bull'?'up':String(v||'').toLowerCase()==='bear'?'dn':'side';
  const htf='<span class="tf-chip '+(String(s.bias_1d).toLowerCase()==='bear'?'dn':String(s.bias_1d).toLowerCase()==='bull'?'up':'side')+'">HTF '+bias(s.bias_1d)+'/'+bias(s.bias_4h)+'</span>';
  const entry=s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||[s.style||'day'])[0]).toLowerCase()]||'15m');
- return '<div class="tf-strip">'+(items.map(x=>'<span class="tf-chip '+(x.trend==='UP'?'up':x.trend==='DOWN'?'dn':'side')+'">'+x.label+' '+x.trend+'</span>').join('')||'<span class="tf-chip side">TF —</span>')+htf+'<span class="tf-chip side">ENTRY '+entry+'</span></div>';
+ return '<div class="tf-strip">'+(items.map(x=>'<span class="tf-chip '+(x.trend==='UP'?'up':x.trend==='DOWN'?'dn':'side')+'">'+x.label+' '+x.trend+'</span>').join('')||'<span class="tf-chip side">TF —</span>')+htf+'</div>';
 }
 function marketSummaryHTML(t){
  const m=t.market_structure||t,price=(v)=>v==null?'—':fmtSymbolPrice(t.symbol,v,t.price_precision);
