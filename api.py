@@ -1768,7 +1768,7 @@ def create_trade(body: TradeCreate):
                 existing_trade["callback_rate"] = existing_trade["profit_callback_pct"]
                 existing_trade["trailing_pct"] = existing_trade["profit_callback_pct"]
                 existing_trade["trailing_active"] = False
-                existing_trade["peak_price"] = float(existing_trade.get("current_price") or avg if "avg" in locals() else existing_trade.get("entry") or 0)
+                existing_trade["peak_price"] = float(existing_trade.get("current_price") or existing_trade.get("entry") or 0)
                 existing_trade["trough_price"] = existing_trade["peak_price"]
             avg = float(existing_trade["entry"]); side_avg = str(existing_trade.get("side") or side).upper()
             if existing_trade["sl_pct_setting"] > 0:
