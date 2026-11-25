@@ -1952,19 +1952,19 @@ function marketStructureHTML(m,p){
  const labels=['5m','15m','1h','4h','1d'];
  const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
  const usd=v=>v==null?'—':fmt(v,2)+' USDT';
- const cell=(tf)=>{const x=tfs[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+(x.buy_pct==null?'—':fmt(x.buy_pct)+'%')+' / '+(x.sell_pct==null?'—':fmt(x.sell_pct)+'%')+'</td><td>'+usd(x.total_volume_usdt)+'</td></tr>';};
+ const cell=tf=>{const x=tfs[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+usd(x.buy_usdt)+' / '+usd(x.sell_usdt)+'</td><td>'+usd(x.total_volume_usdt)+'</td></tr>';};
  const liqCell=tf=>{const x=liq[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+usd(x.long_usdt)+'</td><td>'+usd(x.short_usdt)+'</td></tr>';};
  const hasRows=labels.some(tf=>tfs[tf]&&Object.values(tfs[tf]).some(v=>v!=null));
  const liqMeta=m.liquidations||{};
  const box='margin-top:8px;padding:8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:11px;line-height:1.35;overflow-x:auto';
- return '<details class="market-pressure" style="'+box+'"><summary style="cursor:pointer;font-weight:700">MARKET PRESSURE · BINANCE FUTURES</summary>'+
- '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:7px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG</th><th>SHORT</th><th>BUY / SELL</th><th>TOTAL VOL</th></tr></thead><tbody>'+
+ return '<div class="market-pressure" style="'+box+'"><b>MARKET PRESSURE · BINANCE FUTURES</b>'+
+ '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:7px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG</th><th>SHORT</th><th>BUY / SELL USDT</th><th>TOTAL VOL</th></tr></thead><tbody>'+
  labels.map(cell).join('')+'</tbody></table></div>'+
  '<div style="margin-top:8px;font-weight:700">LIQUIDATIONS · USDT</div>'+
  '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:4px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG LIQ.</th><th>SHORT LIQ.</th></tr></thead><tbody>'+labels.map(liqCell).join('')+'</tbody></table></div>'+
- '<div style="opacity:.75;margin-top:5px">'+(liqMeta.connected?'Live stream connected':'Liquidation stream connecting / offline')+' · collected since '+(liqMeta.collected_since||'service start')+'. Historical data before connection is unavailable.</div>'+
+ '<div style="opacity:.75;margin-top:5px">'+(liqMeta.connected?'Live sampled stream':'Liquidation stream connecting / offline')+' · may undercount · since '+(liqMeta.collected_since||'service start')+'. No historical data before connection.</div>'+
  (hasRows?'':'<div style="opacity:.75;margin-top:4px">Market data is not available yet for this symbol.</div>')+
- '</details>';
+ '</div>';
 }
 function setAcc(a){if(!a)return;sBal.textContent='$'+fmt(a.balance);sEq.textContent='$'+fmt(a.equity);sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);sReal.className=a.realized_pnl>=0?'up':'dn';if(window.aStart){aStart.textContent='$'+fmt(a.start_balance);aBal.textContent='$'+fmt(a.balance);aEq.textContent='$'+fmt(a.equity);aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}}
 function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
@@ -2065,7 +2065,6 @@ function cardHTML(s){
     ${v5Details}
     ${v5Structure}
     ${marketStructureHTML(s.market_structure,s.price_precision)}
-    <div class="sub">BTC ${s.market_regime||'—'} · Global OI 1h ${s.oi_change_1h_pct==null?'—':s.oi_change_1h_pct+'%'} (${(s.oi_sources||[]).join('/')||'no data'}) · Book ${s.orderbook_imbalance_pct==null?'—':s.orderbook_imbalance_pct+'%'} · Spread ${s.spread_pct==null?'—':s.spread_pct+'%'}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
     <div class="chartbox" id="${cid}"></div></article>`;
