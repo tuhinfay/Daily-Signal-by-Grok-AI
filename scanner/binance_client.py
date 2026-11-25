@@ -193,7 +193,6 @@ class BinanceClient:
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
         try:
-            self._ensure_markets()
             # Use Binance's authoritative USDⓈ-M exchangeInfo universe rather
             # than CCXT's normalized markets_by_id, which can omit valid contracts.
             exchange_info = self.exchange.fapiPublicGetExchangeInfo() or {}
