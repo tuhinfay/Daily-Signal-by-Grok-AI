@@ -54,6 +54,7 @@ _daily_open_cache: Dict[str, Dict[str, float]] = {}
 _symbol_price_precision: Dict[str, int] = {}
 _market_structure_cache: Dict[str, Dict[str, Any]] = {}
 _market_structure_refresh_at: Dict[str, float] = {}
+_market_structure_rotation = 0
 _daily_market_context_cache: Dict[str, Dict[str, Any]] = {}
 
 
@@ -477,7 +478,7 @@ def _run_paper_auto_bot(signals):
     except Exception as exc: print("[auto-bot] safe cycle error:", exc)
 
 def run_scan(top_n: int = 12):
-    global _scan_retry_after
+    global _scan_retry_after, _market_structure_rotation
     top_n = max(5, min(int(top_n or 26), 26))
     cooldown_remaining = int(_scan_retry_after - time_mod.monotonic())
     if cooldown_remaining > 0:
@@ -593,8 +594,13 @@ def run_scan(top_n: int = 12):
 
         checked_derivatives = set()
         priority_symbols = [_market_symbol_key(t.get("symbol")) for t in _trades.values() if t.get("status") == "OPEN"]
-        # Refresh every signal coin over successive scans; open trades always get first priority.
-        priority_symbols += [_market_symbol_key(x.get("symbol")) for x in sorted(signals, key=lambda x: x["score"], reverse=True)]
+        # Rotate the signal universe so lower-ranked coins also receive market-data refreshes.
+        signal_symbols = list(dict.fromkeys(_market_symbol_key(x.get("symbol")) for x in sorted(signals, key=lambda x: x["score"], reverse=True)))
+        if signal_symbols:
+            start_at = _market_structure_rotation % len(signal_symbols)
+            signal_symbols = signal_symbols[start_at:] + signal_symbols[:start_at]
+            _market_structure_rotation = (start_at + 10) % len(signal_symbols)
+        priority_symbols += signal_symbols
         for sym in dict.fromkeys(priority_symbols):
             if not sym or len(checked_derivatives) >= 10 or client.rate_limited:
                 continue
