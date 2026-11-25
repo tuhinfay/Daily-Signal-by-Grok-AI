@@ -356,7 +356,7 @@ def _run_paper_auto_bot(signals):
     min_quality = quality.get(str(cfg.get("min_quality", "A")).upper(), 2)
     symbols = {x.strip().upper().replace("/", "") for x in str(cfg.get("symbols") or "").split(",") if x.strip()}
     strategy = str(cfg.get("trade_style") or "day").lower()
-    if strategy not in ("scalp", "day", "swing", "hybrid"): strategy = "day"
+    if strategy not in ("scalp", "day", "swing"): strategy = "day"
     now = datetime.now(timezone.utc)
     today = now.date()
     cooldown = max(0, min(int(cfg.get("cooldown_minutes") or 0), 1440))
@@ -1178,7 +1178,7 @@ async def get_auto_trade():
 async def set_auto_trade(body: Dict[str, Any]):
     try:
         _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
-        if _bot_config["trade_style"] not in ("scalp","day","swing","hybrid"): _bot_config["trade_style"] = "day"
+        if _bot_config["trade_style"] not in ("scalp","day","swing"): _bot_config["trade_style"] = "day"
         if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
         if _bot_config["direction"] not in ("both","long","short"): _bot_config["direction"] = "both"
     except (TypeError,ValueError): return JSONResponse({"ok":False,"error":"Invalid Auto Trade settings"},status_code=400)
@@ -1961,7 +1961,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="scalp"><span><b>Scalping</b><small>Short moves · 5m–15m</small></span></label>
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="day" checked><span><b>Day trade</b><small>Intraday · 15m–4h</small></span></label>
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="swing"><span><b>Swing</b><small>Multi-session · 4h–1d</small></span></label>
-          <label class="bot-style"><input type="radio" name="botStyleChoice" value="hybrid"><span><b>Hybrid V5</b><small>Trend + intraday confirmation</small></span></label>
+          
         </div>
         <input type="hidden" id="botStyle" value="day">
         <div class="row2"><div><label>Trade direction</label><select id="botDirection"><option value="both">Long + Short</option><option value="long">Long only</option><option value="short">Short only</option></select></div><div><label>Minimum quality</label><select id="botQuality"><option>A+</option><option selected>A</option><option>B</option></select></div></div>
@@ -2075,7 +2075,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <script>
 let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
-async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score??75;botQuality.value=c.min_quality||'A';botStyle.value=c.trade_style||'day';document.querySelectorAll('input[name="botStyleChoice"]').forEach(x=>x.checked=x.value===botStyle.value);botDirection.value=c.direction||'both';botAmount.value=c.amount_usd??50;botMaxOpen.value=c.max_open??2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botDcaEnabled.value=String(!!c.dca_enabled);botDcaGap.value=c.dca_gap_pct??1.5;botDcaMax.value=c.dca_max_orders??3;botDcaMultiplier.value=c.dca_multiplier??2;botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';botState.style.color=c.enabled?'#53d5aa':'';}catch(e){}}
+async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score??75;botQuality.value=c.min_quality||'A';botStyle.value=['scalp','day','swing'].includes(c.trade_style)?c.trade_style:'day';document.querySelectorAll('input[name="botStyleChoice"]').forEach(x=>x.checked=x.value===botStyle.value);botDirection.value=c.direction||'both';botAmount.value=c.amount_usd??50;botMaxOpen.value=c.max_open??2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botDcaEnabled.value=String(!!c.dca_enabled);botDcaGap.value=c.dca_gap_pct??1.5;botDcaMax.value=c.dca_max_orders??3;botDcaMultiplier.value=c.dca_multiplier??2;botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';botState.style.color=c.enabled?'#53d5aa':'';}catch(e){}}
 document.addEventListener('change',e=>{if(e.target.matches('input[name="botStyleChoice"]'))botStyle.value=e.target.value;});
 async function saveBotSettings(){const p={enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,trade_style:botStyle.value,direction:botDirection.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,min_rr:+botMinRR.value,cooldown_minutes:+botCooldown.value,max_symbol_trades_day:+botMaxSymbolDay.value,max_daily_loss_pct:+botDailyLoss.value,symbols:botSymbols.value,dca_enabled:botDcaEnabled.value==='true',dca_gap_pct:+botDcaGap.value,dca_max_orders:+botDcaMax.value,dca_multiplier:+botDcaMultiplier.value,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';botState.style.color=d.config.enabled?'#53d5aa':'';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
 if('Notification'in window && Notification.permission==='default') Notification.requestPermission();
@@ -2213,7 +2213,7 @@ function cardHTML(s){
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
       <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span><span class="tag ${(Number(s.daily_change_pct)||0)>=0?'up':'dn'}">${s.daily_change_pct==null?'—':(Number(s.daily_change_pct)>=0?'+':'')+Number(s.daily_change_pct).toFixed(2)+'% 24H'}</span></div>
       <div class="score">${s.score}</div></div>
-      <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ENTRY ${s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||['day'])[0]).toLowerCase()]||'15m')} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
+      <div class="sub">${s.setup||''} · ${(s.styles||[]).map(x=>({scalp:'Scalp',day:'Day',swing:'Swing',hybrid:'Hybrid'}[String(x).toLowerCase()]||String(x))).join('/')} · Entry ${s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||['day'])[0]).toLowerCase()]||'15m')} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
       ${timeframeHTML(s)}
       ${marketSummaryHTML(s)}
     <div class="vals">
