@@ -113,7 +113,7 @@ def _timeframe_trend_map(data: Dict[str, Any]) -> Dict[str, str]:
 def _market_symbol_key(symbol: Any) -> str:
     """Canonical key shared by scanner cache and trade API (e.g. BTC/USDT:USDT -> BTCUSDT)."""
     return str(symbol or "").upper().replace("/", "").split(":")[0]
-_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both", "advanced_enabled": False, "advanced_sl_pct": 0.0, "advanced_tp1_pct": 0.0, "advanced_tp2_pct": 0.0, "advanced_limit_offset_pct": 0.0, "advanced_profit_lock": False, "advanced_profit_activation_pct": 0.8, "advanced_profit_callback_pct": 0.5}
+_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both", "advanced_enabled": False, "advanced_sl_pct": 0.0, "advanced_tp1_pct": 0.0, "advanced_tp2_pct": 0.0, "advanced_limit_offset_pct": 0.0, "advanced_profit_lock": False, "advanced_profit_activation_pct": 0.8, "advanced_profit_callback_pct": 0.5, "dca_lower_price": 0.0, "dca_upper_price": 0.0}
 
 def _utc_daily_change_pct(df, current_price=None):
     """Calculate change from Binance Futures' active UTC 1d candle open (BD 06:00)."""
@@ -378,7 +378,7 @@ def _run_paper_auto_bot(signals):
     max_daily_loss = max(0.0, float(_account.get("start_balance") or _account.get("balance") or 0) * max(0.0, min(float(cfg.get("max_daily_loss_pct") or 0), 20.0)) / 100.0)
     try:
         opened = [t for t in _trades.values() if t.get("status") == "OPEN"]
-        if cfg.get("dca_enabled") and strategy != "hybrid":
+        if cfg.get("advanced_enabled") and cfg.get("dca_enabled") and strategy != "hybrid":
             gap = max(0.1, min(float(cfg.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
             max_adds = max(1, min(int(cfg.get("dca_max_orders") or 3), 5))
             multiplier = max(1.0, min(float(cfg.get("dca_multiplier") or 2.0), 3.0))
@@ -393,7 +393,8 @@ def _run_paper_auto_bot(signals):
                 anchor = float(history[-1].get("price") or entry0) if history else entry0
                 side0 = str(position.get("side") or "").upper()
                 triggered = mark <= anchor * (1-gap) if side0 == "LONG" else mark >= anchor * (1+gap)
-                if not triggered: continue
+                lower = float(cfg.get("dca_lower_price") or 0); upper = float(cfg.get("dca_upper_price") or 0)
+                if not triggered or (lower and mark < lower) or (upper and mark > upper): continue
                 base_notional = float(position.get("auto_dca_base_usd") or cfg.get("amount_usd") or 50)
                 add_notional = base_notional * (multiplier ** adds)
                 lev0 = max(1, int(position.get("leverage") or 1))
@@ -457,12 +458,29 @@ def _run_paper_auto_bot(signals):
                 if not sizing.get("ok"):
                     continue
                 quantity = sizing["quantity"]
+            advanced = bool(cfg.get("advanced_enabled")) and strategy != "hybrid"
+            sl_pct = float(cfg.get("advanced_sl_pct") or 0) if advanced else 0
+            tp1_pct = float(cfg.get("advanced_tp1_pct") or 0) if advanced else 0
+            tp2_pct = float(cfg.get("advanced_tp2_pct") or 0) if advanced else 0
+            offset_pct = float(cfg.get("advanced_limit_offset_pct") or 0) if advanced else 0
+            if sl_pct > 0: sl = entry * (1 - sl_pct/100 if side == "LONG" else 1 + sl_pct/100)
+            if tp1_pct > 0: tp = entry * (1 + tp1_pct/100 if side == "LONG" else 1 - tp1_pct/100)
+            tp2 = sig.get("tp2")
+            if tp2_pct > 0: tp2 = entry * (1 + tp2_pct/100 if side == "LONG" else 1 - tp2_pct/100)
+            limit_px = entry * (1 - offset_pct/100 if side == "LONG" else 1 + offset_pct/100) if offset_pct > 0 else None
             req = TradeCreate(
-                symbol=sym, side=side, entry=entry, stop_loss=sl, tp1=tp, tp2=sig.get("tp2"),
+                symbol=sym, side=side, entry=limit_px or entry, stop_loss=sl, tp1=tp, tp2=tp2,
+                order_type="LIMIT" if limit_px else "MARKET", limit_price=limit_px,
                 leverage=min(_symbol_leverage_cap(sym), int(sig.get("max_leverage") or 20)),
                 quantity=quantity,
                 amount_usd=None if strategy == "hybrid" else float(cfg.get("amount_usd") or 50),
-                risk_pct=None,
+                risk_pct=None, advanced_enabled=advanced,
+                dca_enabled=bool(cfg.get("dca_enabled")) if advanced else False,
+                dca_gap_pct=cfg.get("dca_gap_pct"), dca_max_orders=cfg.get("dca_max_orders"), dca_multiplier=cfg.get("dca_multiplier"),
+                dca_lower_price=cfg.get("dca_lower_price"), dca_upper_price=cfg.get("dca_upper_price"),
+                sl_pct=sl_pct, tp1_pct=tp1_pct, tp2_pct=tp2_pct,
+                profit_lock_enabled=bool(cfg.get("advanced_profit_lock")) if advanced else False,
+                profit_activation_pct=cfg.get("advanced_profit_activation_pct"), profit_callback_pct=cfg.get("advanced_profit_callback_pct"),
                 note="V5 · exchange-step risk-sized simulated paper trade" if strategy == "hybrid" else "Auto Bot · simulated paper trade",
             )
             result = create_trade(req)
@@ -476,6 +494,10 @@ def _run_paper_auto_bot(signals):
                         trade["auto_dca_base_usd"] = float(cfg.get("amount_usd") or 50)
                         rate = float(cfg.get("trailing_pct") or 0)
                         if rate >= 0.1: trade["callback_rate"] = min(rate, 5.0)
+                        if advanced and cfg.get("advanced_profit_lock"):
+                            trade["callback_rate"] = float(cfg.get("advanced_profit_callback_pct") or 0.5)
+                            trade["profit_lock_enabled"] = True
+                            trade["profit_activation_pct"] = float(cfg.get("advanced_profit_activation_pct") or 0.8)
                         db.save_trade(trade); opened.append(trade)
                         break
         if cfg.get("exit_on_opposite"):
@@ -1224,7 +1246,7 @@ async def get_auto_trade():
 @app.post("/api/auto-trade")
 async def set_auto_trade(body: Dict[str, Any]):
     try:
-        _bot_config.update({"advanced_enabled": bool(body.get("advanced_enabled", False)), "advanced_sl_pct": max(0.0,min(float(body.get("advanced_sl_pct",0)),50.0)), "advanced_tp1_pct": max(0.0,min(float(body.get("advanced_tp1_pct",0)),100.0)), "advanced_tp2_pct": max(0.0,min(float(body.get("advanced_tp2_pct",0)),200.0)), "advanced_limit_offset_pct": max(0.0,min(float(body.get("advanced_limit_offset_pct",0)),20.0)), "advanced_profit_lock": bool(body.get("advanced_profit_lock",False)), "advanced_profit_activation_pct": max(0.1,min(float(body.get("advanced_profit_activation_pct",0.8)),50.0)), "advanced_profit_callback_pct": max(0.1,min(float(body.get("advanced_profit_callback_pct",0.5)),5.0)), "enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
+        _bot_config.update({"advanced_enabled": bool(body.get("advanced_enabled", False)), "advanced_sl_pct": max(0.0,min(float(body.get("advanced_sl_pct",0)),50.0)), "advanced_tp1_pct": max(0.0,min(float(body.get("advanced_tp1_pct",0)),100.0)), "advanced_tp2_pct": max(0.0,min(float(body.get("advanced_tp2_pct",0)),200.0)), "advanced_limit_offset_pct": max(0.0,min(float(body.get("advanced_limit_offset_pct",0)),20.0)), "advanced_profit_lock": bool(body.get("advanced_profit_lock",False)), "advanced_profit_activation_pct": max(0.1,min(float(body.get("advanced_profit_activation_pct",0.8)),50.0)), "advanced_profit_callback_pct": max(0.1,min(float(body.get("advanced_profit_callback_pct",0.5)),5.0)), "dca_lower_price": max(0.0,float(body.get("dca_lower_price",0))), "dca_upper_price": max(0.0,float(body.get("dca_upper_price",0))), "enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
         if _bot_config["trade_style"] not in ("scalp","day","swing"): _bot_config["trade_style"] = "day"
         if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
         if _bot_config["direction"] not in ("both","long","short"): _bot_config["direction"] = "both"
