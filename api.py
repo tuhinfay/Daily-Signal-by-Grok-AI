@@ -583,8 +583,13 @@ def run_scan(top_n: int = 12):
             # Cache for My Trades independently of whether this symbol produced a signal.
             daily_context = client.get_daily_market_context(sym, prices.get(sym))
             _daily_market_context_cache[_market_symbol_key(sym)] = daily_context
+            first_signal = next((x for x in signals if x["symbol"] == sym), {})
+            sr_context = {}
+            if first_signal:
+                strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}.get((first_signal.get("styles") or ["day"])[0], "1h")
+                sr_context = _nearest_support_resistance(data.get(strategy_tf), prices.get(sym) or first_signal.get("market_price") or first_signal.get("entry"))
             structure_snapshot = {
-                **book, **structure, **daily_context,
+                **book, **structure, **daily_context, **sr_context,
                 "market_pressure": market_pressure,
                 "liquidations": get_liquidation_summary(sym),
                 "funding_rate": funding,
@@ -1074,8 +1079,9 @@ def api_market_structure(symbol: str):
     crowd = client.get_market_structure_context(clean)
     pressure = client.get_market_pressure_context(clean)
     pressure["multi_exchange"] = get_multi_exchange_context(clean)
+    daily_context = client.get_daily_market_context(clean, client.get_current_price(clean))
     snapshot = {
-        **book, **crowd,
+        **book, **crowd, **daily_context,
         "market_pressure": pressure,
         "liquidations": get_liquidation_summary(clean),
         "funding_rate": derivatives.get("funding_rate"),
@@ -1216,6 +1222,7 @@ def analyze_one(symbol: str, style: str = Query("day")):
     r.update(daily_context)
     r.update(_nearest_support_resistance(data.get(strategy_tf), px or r.get("entry")))
     r["market_structure"] = {**daily_context, **client.get_order_book_context(sym), **client.get_market_structure_context(sym), **client.get_derivatives_context(sym)}
+    r["market_structure"].update({k: r.get(k) for k in ("support", "resistance")})
     r["market_structure"]["market_pressure"] = client.get_market_pressure_context(sym)
     multi_exchange = get_multi_exchange_context(sym)
     r["market_structure"]["market_pressure"]["multi_exchange"] = multi_exchange
