@@ -556,6 +556,47 @@ def run_scan(top_n: int = 12):
             filtered.append(item)
         signals = filtered
         signals.sort(key=lambda x: x["score"], reverse=True)
+        # Advisory-only position review from the latest completed signal analysis.
+        latest_by_symbol = {str(x.get("symbol")): x for x in signals}
+        for position in list(_trades.values()):
+            if position.get("status") != "OPEN":
+                continue
+            candidate = latest_by_symbol.get(str(position.get("symbol")))
+            if not candidate:
+                continue
+            mark = float(prices.get(position.get("symbol")) or position.get("current_price") or 0)
+            entry = float(position.get("entry") or 0)
+            pnl = float(position.get("unrealized_pnl") or 0)
+            opposite = str(candidate.get("side") or "").upper() != str(position.get("side") or "").upper()
+            score = int(candidate.get("score") or 0)
+            advice = None
+            if opposite and score >= 75:
+                advice = "OPPOSITE SIGNAL · Review closing or reducing this position"
+                side_now = str(position.get("side") or "").upper()
+                profitable_side = mark > entry if side_now == "LONG" else (mark < entry if side_now == "SHORT" else False)
+                if pnl > 0 and profitable_side and entry > 0:
+                    old_sl = float(position.get("stop_loss") or 0)
+                    improves = old_sl < entry if side_now == "LONG" else (old_sl > entry if side_now == "SHORT" else False)
+                    if improves:
+                        position["stop_loss"] = entry
+                        position["auto_sl_protected"] = True
+                        advice = "PROFIT PROTECTED · SL moved to breakeven after opposite signal"
+                        db.save_trade(position)
+            elif not opposite and score >= 75 and pnl < 0:
+                advice = "DCA WATCH · Directional analysis still agrees; review risk before adding"
+            elif pnl > 0 and entry > 0 and mark > 0:
+                side_now = str(position.get("side") or "").upper()
+                favorable = mark > entry if side_now == "LONG" else mark < entry
+                if favorable and abs(mark - entry) / entry * 100 <= 0.5:
+                    advice = "ENTRY RETEST · Consider protecting remaining profit"
+            if advice:
+                position["analysis_alert"] = advice
+                position["analysis_alert_at"] = datetime.now(timezone.utc).isoformat()
+                db.save_trade(position)
+            elif position.get("analysis_alert"):
+                position["analysis_alert"] = None
+                position["analysis_alert_at"] = datetime.now(timezone.utc).isoformat()
+                db.save_trade(position)
         _cache["signals"] = signals
         _cache["prices"] = prices
         _run_paper_auto_bot(signals)
@@ -2002,6 +2043,7 @@ async function loadTrades(){
         ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
+      ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8px;margin:8px 0;border-radius:8px">⚠ '+t.analysis_alert+'</div>':''}
       <div class="vals">
         <div><em>Average Entry</em><strong>${fmtPrice(t.entry)}</strong></div>
         <div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
