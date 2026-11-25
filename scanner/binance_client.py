@@ -185,7 +185,7 @@ class BinanceClient:
         """Match Binance USDⓈ-M Futures 24h Top Gainer/Loser ticker ranking.
 
         Uses the official all-symbol /fapi/v1/ticker/24hr payload and ranks
-        active USDT-margined perpetual contracts by priceChangePercent.
+        active USDT- and USDC-margined perpetual contracts by priceChangePercent.
         min_volume is retained for call compatibility but intentionally ignored:
         Binance's ranking is not restricted by our local liquidity threshold.
         """
