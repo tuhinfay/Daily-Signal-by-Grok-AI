@@ -401,7 +401,7 @@ def run_scan(top_n: int = 12):
         engine = SignalEngine()
         pairs = client.get_top_usdt_pairs(top_n=top_n, min_volume=config.MIN_VOLUME_USDT)
         try:
-            mv = client.get_movers(top_n=40, min_volume=3_000_000)
+            mv = client.get_movers(top_n=40, min_volume=0)
             _cache["gainers"] = mv.get("gainers", [])
             _cache["losers"] = mv.get("losers", [])
         except Exception as e:
