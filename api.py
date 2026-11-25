@@ -1082,6 +1082,11 @@ def analyze_one(symbol: str, style: str = Query("day")):
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
                 "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
     r["market_price"] = (r.get("mark_price") if selected_style == "hybrid" else None) or px or r["entry"]
+    r["price_precision"] = client.get_price_precision(sym)
+    if r["price_precision"] is not None:
+        _symbol_price_precision[sym] = r["price_precision"]
+    r["market_structure"] = {**client.get_order_book_context(sym), **client.get_market_structure_context(sym), **client.get_derivatives_context(sym)}
+    _market_structure_cache[sym] = r["market_structure"]
     # Match Binance USDⓈ-M rolling 24h ticker percentage, not the UTC 1d candle open.
     change_24h_pct = client.get_24h_change_pct(sym)
     if change_24h_pct is not None:
@@ -1868,7 +1873,7 @@ async function toggleAuto(){autoScan=!autoScan;await fetch('/api/auto-scan?enabl
 function showTab(n){['signals','trades','movers','account'].forEach(x=>{const el=document.getElementById('tab-'+x);if(el)el.style.display=x===n?'block':'none';});document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===n));if(n==='trades')loadTrades();if(n==='movers')loadMovers();if(n==='account')loadAccount();}
 function setStyle(s){style=s;pinManual=false;document.querySelectorAll('.filters button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));loadSignals();}
 function fmt(n){return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
-function fmtPrice(n,precision){const v=Number(n);if(!Number.isFinite(v))return '—';const p=Number.isInteger(Number(precision))?Math.max(0,Math.min(Number(precision),12)):8;return v.toFixed(p).replace(/\.?0+$/,'').replace(/\.$/,'');}
+function fmtPrice(n,precision){const v=Number(n);if(!Number.isFinite(v))return '—';const p=Number.isInteger(Number(precision))?Math.max(0,Math.min(Number(precision),12)):8;return p===0?v.toFixed(0):v.toFixed(p).replace(/0+$/,'').replace(/\.$/,'');}
 function fmtSymbolPrice(symbol,n,precision){return fmtPrice(n,precision);}
 function durationShort(start,end){const a=Date.parse(start||''),b=Date.parse(end||'');if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)return '—';let s=Math.floor((b-a)/1000);const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);s%=60;return [[d,'D'],[h,'H'],[m,'M'],[s,'S']].filter(x=>x[0]>0).map(x=>x[0]+x[1]).join(' ')||'0S';}
 function marketStructureHTML(m,p){if(!m)return '<div class="sub">Market Structure · Waiting for Binance data</div>';const f=(v,d=2)=>v==null?'—':Number(v).toFixed(d);return '<div class="sub" style="margin-top:8px"><b>Market Structure</b> · L/S '+(m.long_short_ratio==null?'—':f(m.long_short_ratio,3))+' · Taker B/S '+(m.taker_buy_sell_ratio==null?'—':f(m.taker_buy_sell_ratio,3))+' · Book '+f(m.book_imbalance_pct)+'% · Spread '+f(m.spread_pct,4)+'%</div><div class="sub">Accounts L '+f(m.long_account_pct)+'% / S '+f(m.short_account_pct)+'% · Depth Bid '+(m.bid_depth_usdt==null?'—':fmt(m.bid_depth_usdt))+' / Ask '+(m.ask_depth_usdt==null?'—':fmt(m.ask_depth_usdt))+' USDT · Visible walls '+(m.bid_wall_price==null?'—':fmtPrice(m.bid_wall_price,p))+' / '+(m.ask_wall_price==null?'—':fmtPrice(m.ask_wall_price,p))+'</div><div class="sub">Liquidation heatmap/levels: Binance public feed does not provide these levels; not inferred from order book.</div>'; }
