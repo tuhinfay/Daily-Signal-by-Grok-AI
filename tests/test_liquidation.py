@@ -48,7 +48,7 @@ class LiquidationEstimateTests(unittest.TestCase):
         self.assertIsNone(api._estimate_liquidation_price({"side": "LONG", "qty": 0}))
 
 
-    def test_liquidation_summary_includes_one_minute_window(self):
+    def test_liquidation_summary_only_exposes_one_hour_window(self):
         now_ms = int(__import__("time").time() * 1000)
         with liquidation_feed._lock:
             original = dict(liquidation_feed._orders)
@@ -63,10 +63,9 @@ class LiquidationEstimateTests(unittest.TestCase):
             }
         try:
             result = liquidation_feed.get_liquidation_summary("BTCUSDT")
-            self.assertEqual(result["timeframes"]["1m"]["long_usdt"], 125.0)
-            self.assertEqual(result["timeframes"]["1m"]["short_usdt"], 0.0)
-            self.assertEqual(result["timeframes"]["5m"]["short_usdt"], 75.0)
-            self.assertIn("1m", result["timeframes"])
+            self.assertEqual(list(result["timeframes"]), ["1h"])
+            self.assertEqual(result["timeframes"]["1h"]["long_usdt"], 125.0)
+            self.assertEqual(result["timeframes"]["1h"]["short_usdt"], 75.0)
         finally:
             with liquidation_feed._lock:
                 liquidation_feed._orders.clear()
