@@ -546,8 +546,7 @@ def run_scan(top_n: int = 12):
                     prices[symbol] = px
                 for style_name in (("hybrid",) if getattr(config, "V5_ENABLED", False) else ("scalp", "day", "swing")):
                     r = engine.analyze_pair(symbol, data, volume_24h=vol, style=style_name)
-                    if not r:
-                        continue
+                    if not r: continue
                     r["timeframe_trends"] = _timeframe_trend_map(data)
                     r["market_price"] = px or r["entry"]
                     daily_change_pct = client.get_24h_change_pct(symbol)
