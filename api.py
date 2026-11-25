@@ -11,6 +11,7 @@ import uvicorn, os, json, traceback, uuid, threading, time as time_mod
 
 from scanner.binance_client import BinanceClient
 from scanner.liquidation_feed import start_liquidation_feed, get_liquidation_summary
+from scanner.multi_exchange_data import get_multi_exchange_context
 from scanner.signal_engine import SignalEngine
 from scanner.v5_analysis import qualify_v5_signal
 from scanner.risk_sizing import calculate_position_size
@@ -550,6 +551,11 @@ def run_scan(top_n: int = 12):
             book = client.get_order_book_context(sym) if not client.rate_limited else {}
             structure = client.get_market_structure_context(sym) if not client.rate_limited else {}
             market_pressure = client.get_market_pressure_context(sym) if not client.rate_limited else {"timeframes": {}}
+            multi_exchange = get_multi_exchange_context(sym)
+            market_pressure["multi_exchange"] = multi_exchange
+            for tf, values in (multi_exchange.get("timeframes") or {}).items():
+                if tf in market_pressure.get("timeframes", {}) and values.get("total_volume_usdt") is not None:
+                    market_pressure["timeframes"][tf].update(values)
             mark_price = (context.get("mark_price") or client.get_mark_price(sym)) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else None
             constraints = client.get_order_constraints(sym) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else {}
             funding = context.get("funding_rate")
@@ -1142,6 +1148,11 @@ def analyze_one(symbol: str, style: str = Query("day")):
         _symbol_price_precision[sym] = r["price_precision"]
     r["market_structure"] = {**client.get_order_book_context(sym), **client.get_market_structure_context(sym), **client.get_derivatives_context(sym)}
     r["market_structure"]["market_pressure"] = client.get_market_pressure_context(sym)
+    multi_exchange = get_multi_exchange_context(sym)
+    r["market_structure"]["market_pressure"]["multi_exchange"] = multi_exchange
+    for tf, values in (multi_exchange.get("timeframes") or {}).items():
+        if tf in r["market_structure"]["market_pressure"].get("timeframes", {}) and values.get("total_volume_usdt") is not None:
+            r["market_structure"]["market_pressure"]["timeframes"][tf].update(values)
     _market_structure_cache[_market_symbol_key(sym)] = r["market_structure"]
     # Match Binance USDⓈ-M rolling 24h ticker percentage, not the UTC 1d candle open.
     change_24h_pct = client.get_24h_change_pct(sym)
@@ -1948,21 +1959,28 @@ function fmtSymbolPrice(symbol,n,precision){return fmtPrice(n,precision);}
 function durationShort(start,end,seconds){let s=Number.isFinite(Number(seconds))&&seconds!=null?Math.max(0,Math.floor(Number(seconds))):null;if(s===null){const a=Date.parse(start||''),b=Date.parse(end||'');if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)return '—';s=Math.floor((b-a)/1000);}const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);s%=60;return [[d,'D'],[h,'H'],[m,'M'],[s,'S']].filter(x=>x[0]>0).map(x=>x[0]+x[1]).join(' ')||'0S';}
 function marketStructureHTML(m,p){
  if(!m)return '';
- const pressure=m.market_pressure||{},tfs=pressure.timeframes||{},liq=(m.liquidations||{}).timeframes||{};
+ const pressure=m.market_pressure||{},tfs=pressure.timeframes||{},multi=pressure.multi_exchange||{};
+ const localLiq=(m.liquidations||{}),liq={...(localLiq.timeframes||{}),...((multi.marketlight||{}).liquidations||{})};
  const labels=['5m','15m','1h','4h','1d'];
  const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
  const usd=v=>v==null?'—':fmt(v,2)+' USDT';
- const cell=tf=>{const x=tfs[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+usd(x.buy_usdt)+' / '+usd(x.sell_usdt)+'</td><td>'+usd(x.total_volume_usdt)+'</td></tr>';};
+ const cell=tf=>{const x=tfs[tf]||{};const coverage=x.exchange_count==null?'': ' · '+x.exchange_count+'/'+(multi.exchange_total||8)+' venues';return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+usd(x.buy_usdt)+' / '+usd(x.sell_usdt)+'</td><td>'+usd(x.total_volume_usdt)+coverage+'</td></tr>';};
  const liqCell=tf=>{const x=liq[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+usd(x.long_usdt)+'</td><td>'+usd(x.short_usdt)+'</td></tr>';};
  const hasRows=labels.some(tf=>tfs[tf]&&Object.values(tfs[tf]).some(v=>v!=null));
- const liqMeta=m.liquidations||{};
+ const liqMeta=m.liquidations||{},ml=(multi.marketlight||{});
+ const oi=ml.open_interest_usd==null?'—':usd(ml.open_interest_usd);
+ const oiChange=ml.oi_change_24h_pct==null?'—':fmt(ml.oi_change_24h_pct)+'%';
+ const book=multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%';
  const box='margin-top:8px;padding:8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:11px;line-height:1.35;overflow-x:auto';
- return '<div class="market-pressure" style="'+box+'"><b>MARKET PRESSURE · BINANCE FUTURES</b>'+
- '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:7px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG</th><th>SHORT</th><th>BUY / SELL USDT</th><th>TOTAL VOL</th></tr></thead><tbody>'+
+ return '<div class="market-pressure" style="'+box+'"><b>MULTI-EXCHANGE MARKET PRESSURE</b>'+
+ '<div style="opacity:.75;margin-top:3px">Trade / book venues: '+(multi.exchange_count||0)+'/'+(multi.exchange_total||8)+' · Aggregated visible-book imbalance: '+book+'</div>'+
+ '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:7px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG*</th><th>SHORT*</th><th>BUY / SELL USDT</th><th>SAMPLED VOL</th></tr></thead><tbody>'+
  labels.map(cell).join('')+'</tbody></table></div>'+
  '<div style="margin-top:8px;font-weight:700">LIQUIDATIONS · USDT</div>'+
  '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:4px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG LIQ.</th><th>SHORT LIQ.</th></tr></thead><tbody>'+labels.map(liqCell).join('')+'</tbody></table></div>'+
- '<div style="opacity:.75;margin-top:5px">'+(liqMeta.connected?'Live sampled stream':'Liquidation stream connecting / offline')+' · may undercount · since '+(liqMeta.collected_since||'service start')+'. No historical data before connection.</div>'+
+ '<div style="opacity:.75;margin-top:5px">*Long/Short = Binance global account ratio, not position size or trader count. Buy/Sell volume = recent public trade sample, not guaranteed full-period exchange turnover.</div>'+
+ '<div style="opacity:.75;margin-top:3px">Global OI: '+oi+' · OI 24h: '+oiChange+' · funding venues: '+((ml.funding_by_exchange||[]).length)+'</div>'+
+ '<div style="opacity:.75;margin-top:3px">Liquidations: 5m/15m from Binance stream (sampled); 1h/4h/1d from Marketlight hourly multi-exchange feed where available. Marketlight data CC BY 4.0.</div>'+
  (hasRows?'':'<div style="opacity:.75;margin-top:4px">Market data is not available yet for this symbol.</div>')+
  '</div>';
 }
