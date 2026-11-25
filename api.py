@@ -1971,9 +1971,11 @@ function marketStructureHTML(m,p){
  const oi=ml.open_interest_usd==null?'—':usd(ml.open_interest_usd);
  const oiChange=ml.oi_change_24h_pct==null?'—':fmt(ml.oi_change_24h_pct)+'%';
  const book=multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%';
+ const venueStatus=(multi.exchanges||[]).map(v=>v.exchange+': '+(v.status==='ok'?'OK':'—')).join(' · ');
  const box='margin-top:8px;padding:8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:11px;line-height:1.35;overflow-x:auto';
  return '<div class="market-pressure" style="'+box+'"><b>MULTI-EXCHANGE MARKET PRESSURE</b>'+
  '<div style="opacity:.75;margin-top:3px">Trade / book venues: '+(multi.exchange_count||0)+'/'+(multi.exchange_total||8)+' · Aggregated visible-book imbalance: '+book+'</div>'+
+ '<div style="opacity:.65;margin-top:2px">'+venueStatus+'</div>'+
  '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:7px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG*</th><th>SHORT*</th><th>BUY / SELL USDT</th><th>SAMPLED VOL</th></tr></thead><tbody>'+
  labels.map(cell).join('')+'</tbody></table></div>'+
  '<div style="margin-top:8px;font-weight:700">LIQUIDATIONS · USDT</div>'+
