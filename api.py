@@ -585,9 +585,11 @@ def run_scan(top_n: int = 12):
             _daily_market_context_cache[_market_symbol_key(sym)] = daily_context
             first_signal = next((x for x in signals if x["symbol"] == sym), {})
             sr_context = {}
-            if first_signal:
+            sr_df = None
+            if first_signal and not client.rate_limited:
                 strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}.get((first_signal.get("styles") or ["day"])[0], "1h")
-                sr_context = _nearest_support_resistance(data.get(strategy_tf), prices.get(sym) or first_signal.get("market_price") or first_signal.get("entry"))
+                sr_df = client.fetch_ohlcv(sym, timeframe=strategy_tf, limit=120)
+                sr_context = _nearest_support_resistance(sr_df, prices.get(sym) or first_signal.get("market_price") or first_signal.get("entry"))
             structure_snapshot = {
                 **book, **structure, **daily_context, **sr_context,
                 "market_pressure": market_pressure,
@@ -609,7 +611,7 @@ def run_scan(top_n: int = 12):
                     continue
                 item.update(daily_context)
                 strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}.get((item.get("styles") or ["day"])[0], "1h")
-                item.update(_nearest_support_resistance(data.get(strategy_tf), prices.get(sym) or item.get("market_price") or item.get("entry")))
+                item.update(sr_context if sr_context else _nearest_support_resistance(sr_df, prices.get(sym) or item.get("market_price") or item.get("entry")))
                 item["funding_rate"] = funding
                 item["oi_sources"] = context.get("oi_sources") or ["Binance"]
                 item["oi_coverage"] = context.get("oi_coverage", 1)
