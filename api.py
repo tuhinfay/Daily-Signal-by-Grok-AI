@@ -54,6 +54,28 @@ _daily_open_cache: Dict[str, Dict[str, float]] = {}
 _symbol_price_precision: Dict[str, int] = {}
 _market_structure_cache: Dict[str, Dict[str, Any]] = {}
 _market_structure_refresh_at: Dict[str, float] = {}
+_daily_market_context_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _nearest_support_resistance(df, price):
+    """Nearest confirmed local pivot support/resistance from the strategy timeframe."""
+    result = {"support": None, "resistance": None}
+    try:
+        if df is None or len(df) < 8 or float(price or 0) <= 0:
+            return result
+        lows, highs = [], []
+        start = max(2, len(df) - 100)
+        for i in range(start, len(df) - 2):
+            low, high = float(df["low"].iloc[i]), float(df["high"].iloc[i])
+            if low <= float(df["low"].iloc[i-1]) and low <= float(df["low"].iloc[i-2]) and low < float(df["low"].iloc[i+1]) and low < float(df["low"].iloc[i+2]):
+                if low < float(price): lows.append(low)
+            if high >= float(df["high"].iloc[i-1]) and high >= float(df["high"].iloc[i-2]) and high > float(df["high"].iloc[i+1]) and high > float(df["high"].iloc[i+2]):
+                if high > float(price): highs.append(high)
+        result["support"] = max(lows) if lows else None
+        result["resistance"] = min(highs) if highs else None
+    except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+        pass
+    return result
 
 
 def _market_symbol_key(symbol: Any) -> str:
@@ -559,8 +581,10 @@ def run_scan(top_n: int = 12):
             funding = context.get("funding_rate")
             oi_change = context.get("oi_change_pct")
             # Cache for My Trades independently of whether this symbol produced a signal.
+            daily_context = client.get_daily_market_context(sym, prices.get(sym))
+            _daily_market_context_cache[_market_symbol_key(sym)] = daily_context
             structure_snapshot = {
-                **book, **structure,
+                **book, **structure, **daily_context,
                 "market_pressure": market_pressure,
                 "liquidations": get_liquidation_summary(sym),
                 "funding_rate": funding,
@@ -578,6 +602,9 @@ def run_scan(top_n: int = 12):
             for item in signals:
                 if item["symbol"] != sym:
                     continue
+                item.update(daily_context)
+                strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}.get((item.get("styles") or ["day"])[0], "1h")
+                item.update(_nearest_support_resistance(data.get(strategy_tf), prices.get(sym) or item.get("market_price") or item.get("entry")))
                 item["funding_rate"] = funding
                 item["oi_sources"] = context.get("oi_sources") or ["Binance"]
                 item["oi_coverage"] = context.get("oi_coverage", 1)
@@ -1183,7 +1210,12 @@ def analyze_one(symbol: str, style: str = Query("day")):
     r["price_precision"] = client.get_price_precision(sym)
     if r["price_precision"] is not None:
         _symbol_price_precision[sym] = r["price_precision"]
-    r["market_structure"] = {**client.get_order_book_context(sym), **client.get_market_structure_context(sym), **client.get_derivatives_context(sym)}
+    daily_context = client.get_daily_market_context(sym, px)
+    _daily_market_context_cache[_market_symbol_key(sym)] = daily_context
+    strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}[selected_style]
+    r.update(daily_context)
+    r.update(_nearest_support_resistance(data.get(strategy_tf), px or r.get("entry")))
+    r["market_structure"] = {**daily_context, **client.get_order_book_context(sym), **client.get_market_structure_context(sym), **client.get_derivatives_context(sym)}
     r["market_structure"]["market_pressure"] = client.get_market_pressure_context(sym)
     multi_exchange = get_multi_exchange_context(sym)
     r["market_structure"]["market_pressure"]["multi_exchange"] = multi_exchange
@@ -1275,6 +1307,8 @@ async def api_trades():
         symbol = _market_symbol_key(trade.get("symbol"))
         trade["price_precision"] = _symbol_price_precision.get(symbol)
         trade["market_structure"] = dict(_market_structure_cache.get(symbol) or {})
+        trade.update(_daily_market_context_cache.get(symbol) or {})
+        trade["market_structure"].update(_daily_market_context_cache.get(symbol) or {})
         trade["market_structure"]["liquidations"] = get_liquidation_summary(symbol)
         trade["opened_at"] = _trade_opened_at(trade)
         trade["duration_seconds"] = _trade_duration_seconds(trade)
