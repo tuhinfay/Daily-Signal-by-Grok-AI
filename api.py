@@ -53,6 +53,7 @@ _scan_max_leverage: Dict[str, Optional[int]] = {}
 _daily_open_cache: Dict[str, Dict[str, float]] = {}
 _symbol_price_precision: Dict[str, int] = {}
 _market_structure_cache: Dict[str, Dict[str, Any]] = {}
+_market_structure_refresh_at: Dict[str, float] = {}
 
 
 def _market_symbol_key(symbol: Any) -> str:
@@ -1027,6 +1028,41 @@ def shutdown():
     global _monitor_running
     _monitor_running = False
     _persist()
+
+
+@app.get("/api/market-structure/{symbol}")
+def api_market_structure(symbol: str):
+    """Refresh per-symbol market context at a bounded cadence for the live Signals view."""
+    clean = _market_symbol_key(symbol)
+    now = time_mod.monotonic()
+    cached = _market_structure_cache.get(clean) or {}
+    if cached and now - _market_structure_refresh_at.get(clean, 0.0) < 30.0:
+        return {"ok": True, "market_structure": cached, "cached": True}
+    client = BinanceClient(futures=True)
+    if client.rate_limited:
+        return {"ok": bool(cached), "market_structure": cached, "cached": True,
+                "warning": "Binance rate limit active; showing last available snapshot"}
+    derivatives = client.get_derivatives_context(clean)
+    book = client.get_order_book_context(clean)
+    crowd = client.get_market_structure_context(clean)
+    pressure = client.get_market_pressure_context(clean)
+    pressure["multi_exchange"] = get_multi_exchange_context(clean)
+    snapshot = {
+        **book, **crowd,
+        "market_pressure": pressure,
+        "liquidations": get_liquidation_summary(clean),
+        "funding_rate": derivatives.get("funding_rate"),
+        "oi_change_1h_pct": derivatives.get("oi_change_pct"),
+        "open_interest": derivatives.get("open_interest"),
+        "open_interest_usd": derivatives.get("open_interest_usd"),
+        "oi_change_24h_pct": derivatives.get("oi_change_24h_pct"),
+        "oi_updated_at": derivatives.get("oi_updated_at"),
+        "mark_price": derivatives.get("mark_price"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _market_structure_cache[clean] = snapshot
+    _market_structure_refresh_at[clean] = now
+    return {"ok": True, "market_structure": snapshot, "cached": False}
 
 
 @app.get("/api/signals")
@@ -2082,7 +2118,7 @@ function cardHTML(s){
     </div>
     ${v5Details}
     ${v5Structure}
-    ${marketStructureHTML(s.market_structure,s.price_precision)}
+    <div id="ms_${cid}">${marketStructureHTML(s.market_structure,s.price_precision)}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
     <div class="chartbox" id="${cid}"></div></article>`;
@@ -2102,6 +2138,7 @@ async function loadSignals(){
     if(lastSig&&h!==lastSig){beep(2);const neu=d.signals.filter(s=>!lastSig.includes(s.symbol+s.side));if(neu.length)speak(neu.slice(0,3).map(s=>`${s.side} ${s.symbol.replace('USDT','')}`).join(', '));}
     lastSig=h;
     list.innerHTML=d.signals.map(cardHTML).join('');
+    refreshSignalMarketStructures(d.signals);
   }catch(e){status.textContent='Load failed';}
 }
 function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=26').then(()=>setTimeout(loadSignals,3000));}
@@ -2116,6 +2153,19 @@ async function analyzeManual(){
     <div class="actions"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
   list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
+}
+async function refreshSignalMarketStructures(signals){
+  for(const s of (signals||[]).slice(0,3)){
+    const cid='ch_'+s.symbol+'_'+(s.style||'day');
+    const target=document.getElementById('ms_'+cid);
+    if(!target)continue;
+    try{
+      const response=await fetch('/api/market-structure/'+encodeURIComponent(s.symbol));
+      if(!response.ok)continue;
+      const data=await response.json();
+      if(data.ok&&data.market_structure)target.innerHTML=marketStructureHTML(data.market_structure,s.price_precision);
+    }catch(e){}
+  }
 }
 function openSignalTrade(symbol,side){
   const signal=window._signalCache&&window._signalCache[String(symbol)+'|'+String(side)];
