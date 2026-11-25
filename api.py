@@ -1868,7 +1868,10 @@ async function toggleAuto(){autoScan=!autoScan;await fetch('/api/auto-scan?enabl
 function showTab(n){['signals','trades','movers','account'].forEach(x=>{const el=document.getElementById('tab-'+x);if(el)el.style.display=x===n?'block':'none';});document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===n));if(n==='trades')loadTrades();if(n==='movers')loadMovers();if(n==='account')loadAccount();}
 function setStyle(s){style=s;pinManual=false;document.querySelectorAll('.filters button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));loadSignals();}
 function fmt(n){return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
-function fmtPrice(n){const v=Number(n);if(!Number.isFinite(v))return '—';return v.toFixed(8).replace(/0+$/,'').replace(/\.$/,'');}
+function fmtPrice(n,precision){const v=Number(n);if(!Number.isFinite(v))return '—';const p=Number.isInteger(Number(precision))?Math.max(0,Math.min(Number(precision),12)):8;return v.toFixed(p).replace(/\.?0+$/,'').replace(/\.$/,'');}
+function fmtSymbolPrice(symbol,n,precision){return fmtPrice(n,precision);}
+function durationShort(start,end){const a=Date.parse(start||''),b=Date.parse(end||'');if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)return '—';let s=Math.floor((b-a)/1000);const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);s%=60;return [[d,'D'],[h,'H'],[m,'M'],[s,'S']].filter(x=>x[0]>0).map(x=>x[0]+x[1]).join(' ')||'0S';}
+function marketStructureHTML(m,p){if(!m)return '<div class="sub">Market Structure · Waiting for Binance data</div>';const f=(v,d=2)=>v==null?'—':Number(v).toFixed(d);return '<div class="sub" style="margin-top:8px"><b>Market Structure</b> · L/S '+(m.long_short_ratio==null?'—':f(m.long_short_ratio,3))+' · Taker B/S '+(m.taker_buy_sell_ratio==null?'—':f(m.taker_buy_sell_ratio,3))+' · Book '+f(m.book_imbalance_pct)+'% · Spread '+f(m.spread_pct,4)+'%</div><div class="sub">Accounts L '+f(m.long_account_pct)+'% / S '+f(m.short_account_pct)+'% · Depth Bid '+(m.bid_depth_usdt==null?'—':fmt(m.bid_depth_usdt))+' / Ask '+(m.ask_depth_usdt==null?'—':fmt(m.ask_depth_usdt))+' USDT · Visible walls '+(m.bid_wall_price==null?'—':fmtPrice(m.bid_wall_price,p))+' / '+(m.ask_wall_price==null?'—':fmtPrice(m.ask_wall_price,p))+'</div><div class="sub">Liquidation heatmap/levels: Binance public feed does not provide these levels; not inferred from order book.</div>'; }
 function setAcc(a){if(!a)return;sBal.textContent='$'+fmt(a.balance);sEq.textContent='$'+fmt(a.equity);sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);sReal.className=a.realized_pnl>=0?'up':'dn';if(window.aStart){aStart.textContent='$'+fmt(a.start_balance);aBal.textContent='$'+fmt(a.balance);aEq.textContent='$'+fmt(a.equity);aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}}
 function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
   <div class="metric"><label>Trades</label><b>${st.total_trades||0}</b></div>
@@ -1956,17 +1959,18 @@ function cardHTML(s){
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="vals">
-      <div><em>Entry</em><strong>${s.entry}</strong></div>
-      <div><em>Market</em><strong>${mp}</strong></div>
-      <div><em>SL</em><strong>${s.stop_loss}</strong></div>
-      <div><em>TP1</em><strong>${s.tp1}</strong></div>
-      <div><em>TP2</em><strong>${s.tp2}</strong></div>
+      <div><em>Entry</em><strong>${fmtSymbolPrice(s.symbol,s.entry,s.price_precision)}</strong></div>
+      <div><em>Market</em><strong>${fmtSymbolPrice(s.symbol,mp,s.price_precision)}</strong></div>
+      <div><em>SL</em><strong>${fmtSymbolPrice(s.symbol,s.stop_loss,s.price_precision)}</strong></div>
+      <div><em>TP1</em><strong>${fmtSymbolPrice(s.symbol,s.tp1,s.price_precision)}</strong></div>
+      <div><em>TP2</em><strong>${fmtSymbolPrice(s.symbol,s.tp2,s.price_precision)}</strong></div>
       <div><em>TP1 RR</em><strong>1:${s.rr}</strong></div>
       <div><em>TP2 RR</em><strong>1:${(s.rr_tp2??'—')}</strong></div>
     </div>
     <div class="sub" style="margin-top:8px">${s.summary||''}</div>
     ${v5Details}
     ${v5Structure}
+    ${marketStructureHTML(s.market_structure,s.price_precision)}
     <div class="sub">BTC ${s.market_regime||'—'} · Global OI 1h ${s.oi_change_1h_pct==null?'—':s.oi_change_1h_pct+'%'} (${(s.oi_sources||[]).join('/')||'no data'}) · Book ${s.orderbook_imbalance_pct==null?'—':s.orderbook_imbalance_pct+'%'} · Spread ${s.spread_pct==null?'—':s.spread_pct+'%'}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
@@ -2077,12 +2081,12 @@ async function loadTrades(){
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
       ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8px;margin:8px 0;border-radius:8px">⚠ '+t.analysis_alert+'</div>':''}
       <div class="vals">
-        <div><em>Average Entry</em><strong>${fmtPrice(t.entry)}</strong></div>
-        <div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>Average Entry</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div>
+        <div><em>Mark Price</em><strong>${t.current_price==null?'—':fmtSymbolPrice(t.symbol,t.current_price,t.price_precision)}</strong></div>
         <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
-<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmt(t.liquidation_price):"—"}</strong></div>
-        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
-        <div><em>TP1</em><strong>${t.tp1}</strong></div>
+<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmtSymbolPrice(t.symbol,t.liquidation_price,t.price_precision):"—"}</strong></div>
+        <div><em>SL</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)}</strong></div>
+        <div><em>TP1</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)}</strong></div>
                 <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
@@ -2091,6 +2095,7 @@ async function loadTrades(){
 
         <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
       </div>
+      ${marketStructureHTML(t.market_structure,t.price_precision)}
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
         <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
@@ -2104,7 +2109,7 @@ async function loadTrades(){
     const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
-    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtPrice(t.entry)}</strong></div><div><em>Close Price</em><strong>${exit?fmtPrice(exit):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
+    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtPrice(t.entry)}</strong></div><div><em>Close Price</em><strong>${exit?fmtPrice(exit):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div><div><em>Time</em><strong>${durationShort(t.created_at,t.closed_at)}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
   }).join('');h+='</details>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   // Defensive cleanup: never show TP2 as a field on an open My Trades card.
