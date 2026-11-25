@@ -29,6 +29,34 @@ class MarketMicrostructureTests(unittest.TestCase):
         client._tickers_cache = {}
         self.assertEqual(client.get_24h_change_pct("BTCUSDT"), 4.57)
 
+    def test_movers_match_usdm_perpetual_ticker_ranking(self):
+        class MoverExchange:
+            def __init__(self):
+                self.markets_by_id = {
+                    "BTCUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "PERPETUAL", "status": "TRADING"}},
+                    "ETHUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "PERPETUAL", "status": "TRADING"}},
+                    "OLDUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "CURRENT_QUARTER", "status": "TRADING"}},
+                    "OFFUSDT": {"quote": "USDT", "swap": True, "info": {"contractType": "PERPETUAL", "status": "SETTLING"}},
+                }
+
+            def fapiPublicGetTicker24hr(self):
+                return [
+                    {"symbol": "BTCUSDT", "priceChangePercent": "8.0", "quoteVolume": "1", "lastPrice": "100"},
+                    {"symbol": "ETHUSDT", "priceChangePercent": "-5.0", "quoteVolume": "1", "lastPrice": "50"},
+                    {"symbol": "OLDUSDT", "priceChangePercent": "99.0", "quoteVolume": "1", "lastPrice": "10"},
+                    {"symbol": "OFFUSDT", "priceChangePercent": "-99.0", "quoteVolume": "1", "lastPrice": "10"},
+                ]
+
+        client = BinanceClient.__new__(BinanceClient)
+        client.rate_limited = False
+        client.rate_limit_until = 0
+        client._markets_loaded = True
+        client.exchange = MoverExchange()
+        result = client.get_movers(top_n=5, min_volume=1000000)
+        self.assertEqual([row["symbol"] for row in result["gainers"]], ["BTCUSDT"])
+        self.assertEqual([row["symbol"] for row in result["losers"]], ["ETHUSDT"])
+        self.assertEqual(result["gainers"][0]["change"], 8.0)
+
     def test_order_book_uses_quote_notional_imbalance_and_spread(self):
         client = BinanceClient.__new__(BinanceClient)
         client.rate_limited = False
