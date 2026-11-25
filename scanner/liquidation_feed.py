@@ -84,7 +84,7 @@ def start_liquidation_feed():
         while True:
             try:
                 ws = websocket.WebSocketApp(
-                    "wss://fstream.binance.com/ws/!forceOrder@arr",
+                    "wss://fstream.binance.com/market/ws/!forceOrder@arr",
                     on_open=_on_open,
                     on_message=_on_message,
                     on_error=_on_error,
