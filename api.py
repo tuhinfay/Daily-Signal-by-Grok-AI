@@ -500,9 +500,10 @@ def run_scan(top_n: int = 12):
                 item["reasons"].append(f"Aligned BTC {btc_regime} regime")
 
         checked_derivatives = set()
-        for candidate in sorted(signals, key=lambda x: x["score"], reverse=True):
-            sym = candidate["symbol"]
-            if sym in checked_derivatives or len(checked_derivatives) >= 4 or client.rate_limited:
+        priority_symbols = [str(t.get("symbol") or "") for t in _trades.values() if t.get("status") == "OPEN"]
+        priority_symbols += [x["symbol"] for x in sorted(signals, key=lambda x: x["score"], reverse=True)]
+        for sym in dict.fromkeys(priority_symbols):
+            if not sym or len(checked_derivatives) >= 6 or client.rate_limited:
                 continue
             checked_derivatives.add(sym)
             context = client.get_global_derivatives_context(sym)
