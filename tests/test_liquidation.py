@@ -48,7 +48,7 @@ class LiquidationEstimateTests(unittest.TestCase):
         self.assertIsNone(api._estimate_liquidation_price({"side": "LONG", "qty": 0}))
 
 
-    def test_liquidation_summary_only_exposes_one_hour_window(self):
+    def test_liquidation_summary_has_distinct_1h_4h_and_1d_windows(self):
         now_ms = int(__import__("time").time() * 1000)
         with liquidation_feed._lock:
             original = dict(liquidation_feed._orders)
@@ -61,12 +61,23 @@ class LiquidationEstimateTests(unittest.TestCase):
                 "symbol": "BTCUSDT", "liquidated_side": "SHORT",
                 "timestamp_ms": now_ms - 120_000, "notional_usdt": 75.0,
             }
+            liquidation_feed._orders["BTCUSDT:3"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "LONG",
+                "timestamp_ms": now_ms - 7_200_000, "notional_usdt": 300.0,
+            }
+            liquidation_feed._orders["BTCUSDT:4"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "SHORT",
+                "timestamp_ms": now_ms - 43_200_000, "notional_usdt": 500.0,
+            }
         try:
             result = liquidation_feed.get_liquidation_summary("BTCUSDT")
             self.assertEqual(list(result["timeframes"]), ["1h", "4h", "1d"])
-            for timeframe in ("1h", "4h", "1d"):
-                self.assertEqual(result["timeframes"][timeframe]["long_usdt"], 125.0)
-                self.assertEqual(result["timeframes"][timeframe]["short_usdt"], 75.0)
+            self.assertEqual(result["timeframes"]["1h"]["long_usdt"], 125.0)
+            self.assertEqual(result["timeframes"]["1h"]["short_usdt"], 75.0)
+            self.assertEqual(result["timeframes"]["4h"]["long_usdt"], 425.0)
+            self.assertEqual(result["timeframes"]["4h"]["short_usdt"], 75.0)
+            self.assertEqual(result["timeframes"]["1d"]["long_usdt"], 425.0)
+            self.assertEqual(result["timeframes"]["1d"]["short_usdt"], 575.0)
         finally:
             with liquidation_feed._lock:
                 liquidation_feed._orders.clear()
