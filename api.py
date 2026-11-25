@@ -113,7 +113,7 @@ def _timeframe_trend_map(data: Dict[str, Any]) -> Dict[str, str]:
 def _market_symbol_key(symbol: Any) -> str:
     """Canonical key shared by scanner cache and trade API (e.g. BTC/USDT:USDT -> BTCUSDT)."""
     return str(symbol or "").upper().replace("/", "").split(":")[0]
-_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both"}
+_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both", "advanced_enabled": False, "advanced_sl_pct": 0.0, "advanced_tp1_pct": 0.0, "advanced_tp2_pct": 0.0, "advanced_limit_offset_pct": 0.0, "advanced_profit_lock": False, "advanced_profit_activation_pct": 0.8, "advanced_profit_callback_pct": 0.5}
 
 def _utc_daily_change_pct(df, current_price=None):
     """Calculate change from Binance Futures' active UTC 1d candle open (BD 06:00)."""
@@ -205,6 +205,20 @@ class TradeCreate(BaseModel):
     scale_orders: Optional[int] = None
     scale_lower_price: Optional[float] = None
     scale_upper_price: Optional[float] = None
+    advanced_enabled: bool = False
+    dca_enabled: bool = False
+    dca_gap_pct: Optional[float] = None
+    dca_max_orders: Optional[int] = None
+    dca_multiplier: Optional[float] = None
+    dca_lower_price: Optional[float] = None
+    dca_upper_price: Optional[float] = None
+    sl_pct: Optional[float] = None
+    tp1_pct: Optional[float] = None
+    tp2_pct: Optional[float] = None
+    limit_offset_pct: Optional[float] = None
+    profit_lock_enabled: bool = False
+    profit_activation_pct: Optional[float] = None
+    profit_callback_pct: Optional[float] = None
 
 
 class TradeUpdate(BaseModel):
@@ -743,8 +757,12 @@ def run_scan(top_n: int = 12):
             elif pnl > 0 and entry > 0 and mark > 0:
                 side_now = str(position.get("side") or "").upper()
                 favorable = mark > entry if side_now == "LONG" else mark < entry
-                if favorable and abs(mark - entry) / entry * 100 <= 0.5:
-                    advice = "ENTRY RETEST · Consider protecting remaining profit"
+                profit_pct = abs(mark-entry)/entry*100 if favorable else 0
+                if favorable and profit_pct >= 0.5:
+                    callback_pct = max(0.2, min(1.5, profit_pct * 0.25))
+                    activation_pct = max(0.5, min(profit_pct * 0.5, profit_pct))
+                    position["trailing_recommendation"] = {"activation_profit_pct": round(activation_pct,2), "callback_pct": round(callback_pct,2), "based_on_profit_pct": round(profit_pct,2), "mark_price": mark}
+                    advice = f"PROFIT TRAIL SUGGESTION · Activate +{activation_pct:.2f}% · Callback {callback_pct:.2f}% (review before applying)"
             if advice:
                 position["analysis_alert"] = advice
                 position["analysis_alert_at"] = datetime.now(timezone.utc).isoformat()
@@ -848,8 +866,37 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
         if entry <= 0 or qty <= 0:
             continue
 
+        # Optional per-position DCA: adverse move from latest fill, bounded by count and optional range.
+        if t.get("advanced_dca_enabled") and int(t.get("dca_count") or 0) < int(t.get("dca_max_orders") or 3):
+            adds = int(t.get("dca_count") or 0); hist = t.get("dca_history") or []
+            anchor = float(hist[-1].get("price") or entry) if hist else entry
+            gap = max(0.001, min(float(t.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
+            adverse = price <= anchor * (1-gap) if side == "LONG" else price >= anchor * (1+gap)
+            lower, upper = float(t.get("dca_lower_price") or 0), float(t.get("dca_upper_price") or 0)
+            in_range = (not lower or price >= lower) and (not upper or price <= upper)
+            base = float(t.get("auto_dca_base_usd") or t.get("notional") or 0)
+            add_notional = base * (max(1.0, min(float(t.get("dca_multiplier") or 1.5), 3.0)) ** adds)
+            add_margin = add_notional / max(1, int(t.get("leverage") or 1))
+            if adverse and in_range and add_notional > 0 and add_margin <= max(0.0, float(_account.get("balance") or 0)):
+                add_qty = add_notional / price; old_qty = float(t.get("qty") or 0); new_qty = old_qty + add_qty
+                old_entry = float(t.get("entry") or entry)
+                if new_qty > 0:
+                    t["entry"] = round((old_entry*old_qty + price*add_qty)/new_qty, 8); t["qty"] = round(new_qty, 8)
+                    t["notional"] = round(float(t.get("notional") or 0)+add_notional, 2); t["margin"] = round(float(t.get("margin") or 0)+add_margin, 2)
+                    t["dca_count"] = adds+1; t.setdefault("dca_history", []).append({"price":price,"qty":round(add_qty,8),"notional":round(add_notional,2),"margin":round(add_margin,2),"created_at":datetime.now(timezone.utc).isoformat(),"auto":True})
+                    entry = float(t["entry"]); qty = float(t["qty"])
+                    if float(t.get("sl_pct_setting") or 0)>0:
+                        p=float(t["sl_pct_setting"])/100; t["stop_loss"]=entry*(1-p if side=="LONG" else 1+p)
+                    if float(t.get("tp1_pct_setting") or 0)>0:
+                        p=float(t["tp1_pct_setting"])/100; t["tp1"]=entry*(1+p if side=="LONG" else 1-p)
+                    if float(t.get("tp2_pct_setting") or 0)>0:
+                        p=float(t["tp2_pct_setting"])/100; t["tp2"]=entry*(1+p if side=="LONG" else 1-p)
+                    print(f"[trade-dca] {t.get('symbol')} add {adds+1} @ {price}")
         callback = float(t.get("callback_rate") or t.get("trailing_pct") or 0)
         activation = float(t.get("trailing_activation_price") or 0)
+        if t.get("profit_lock_enabled") and float(t.get("profit_activation_pct") or 0)>0:
+            ap=float(t.get("profit_activation_pct") or 0.8)/100
+            activation=entry*(1+ap if side=="LONG" else 1-ap)
         active = bool(t.get("trailing_active"))
         if callback > 0:
             if not active:
@@ -1177,7 +1224,7 @@ async def get_auto_trade():
 @app.post("/api/auto-trade")
 async def set_auto_trade(body: Dict[str, Any]):
     try:
-        _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
+        _bot_config.update({"advanced_enabled": bool(body.get("advanced_enabled", False)), "advanced_sl_pct": max(0.0,min(float(body.get("advanced_sl_pct",0)),50.0)), "advanced_tp1_pct": max(0.0,min(float(body.get("advanced_tp1_pct",0)),100.0)), "advanced_tp2_pct": max(0.0,min(float(body.get("advanced_tp2_pct",0)),200.0)), "advanced_limit_offset_pct": max(0.0,min(float(body.get("advanced_limit_offset_pct",0)),20.0)), "advanced_profit_lock": bool(body.get("advanced_profit_lock",False)), "advanced_profit_activation_pct": max(0.1,min(float(body.get("advanced_profit_activation_pct",0.8)),50.0)), "advanced_profit_callback_pct": max(0.1,min(float(body.get("advanced_profit_callback_pct",0.5)),5.0)), "enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
         if _bot_config["trade_style"] not in ("scalp","day","swing"): _bot_config["trade_style"] = "day"
         if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
         if _bot_config["direction"] not in ("both","long","short"): _bot_config["direction"] = "both"
@@ -1484,6 +1531,20 @@ def create_trade(body: TradeCreate):
         entry_price = (scale_low + scale_high) / 2
     else:
         entry_price = float((body.limit_price or body.entry) if order_type == "LIMIT" else body.entry)
+    market_reference = float(_cache.get("prices", {}).get(sym) or body.entry or 0)
+    if body.advanced_enabled and order_type == "LIMIT" and body.limit_offset_pct and body.limit_offset_pct > 0 and market_reference > 0:
+        offset = min(float(body.limit_offset_pct), 20.0) / 100.0
+        entry_price = market_reference * (1 - offset if side == "LONG" else 1 + offset)
+    if body.advanced_enabled:
+        if body.sl_pct and body.sl_pct > 0:
+            p = min(float(body.sl_pct), 50.0) / 100.0
+            body.stop_loss = entry_price * (1 - p if side == "LONG" else 1 + p)
+        if body.tp1_pct and body.tp1_pct > 0:
+            p = min(float(body.tp1_pct), 100.0) / 100.0
+            body.tp1 = entry_price * (1 + p if side == "LONG" else 1 - p)
+        if body.tp2_pct and body.tp2_pct > 0:
+            p = min(float(body.tp2_pct), 200.0) / 100.0
+            body.tp2 = entry_price * (1 + p if side == "LONG" else 1 - p)
     if entry_price <= 0: return JSONResponse({"ok": False, "error": "invalid entry price"}, status_code=400)
     # No Binance client/network I/O in the order-submit path.
     # The modal/scanner refreshes market prices in the background.
@@ -1553,6 +1614,20 @@ def create_trade(body: TradeCreate):
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
         "trailing_pct": None, "callback_rate": None, "trailing_activation_price": None,
         "trailing_active": False, "peak_price": entry_price, "trough_price": entry_price,
+        "advanced_enabled": bool(body.advanced_enabled),
+        "advanced_dca_enabled": bool(body.advanced_enabled and body.dca_enabled),
+        "dca_gap_pct": max(0.1, min(float(body.dca_gap_pct or 1.5), 20.0)),
+        "dca_max_orders": max(1, min(int(body.dca_max_orders or 3), 5)),
+        "dca_multiplier": max(1.0, min(float(body.dca_multiplier or 1.5), 3.0)),
+        "dca_lower_price": float(body.dca_lower_price or 0) or None,
+        "dca_upper_price": float(body.dca_upper_price or 0) or None,
+        "auto_dca_base_usd": round(notional, 2),
+        "sl_pct_setting": float(body.sl_pct or 0) if body.advanced_enabled else 0,
+        "tp1_pct_setting": float(body.tp1_pct or 0) if body.advanced_enabled else 0,
+        "tp2_pct_setting": float(body.tp2_pct or 0) if body.advanced_enabled else 0,
+        "profit_lock_enabled": bool(body.advanced_enabled and body.profit_lock_enabled),
+        "profit_activation_pct": max(0.1, min(float(body.profit_activation_pct or 0.8), 50.0)),
+        "profit_callback_pct": max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)),
         "scale_mode": scale_mode, "scale_orders": scale_orders,
         "dca_history": [{"price": entry_price, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()}],
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
