@@ -56,7 +56,7 @@ class MarketMicrostructureTests(unittest.TestCase):
         client.exchange = MoverExchange()
         result = client.get_movers(top_n=5, min_volume=1000000)
         self.assertEqual([row["symbol"] for row in result["gainers"]], ["SOLUSDC", "BTCUSDT", "ETHUSDT"])
-        self.assertEqual([row["symbol"] for row in result["losers"]], ["ETHUSDT"])
+        self.assertEqual([row["symbol"] for row in result["losers"]], ["ETHUSDT", "BTCUSDT", "SOLUSDC"])
         self.assertEqual(result["gainers"][0]["change"], 12.0)
 
     def test_order_book_uses_quote_notional_imbalance_and_spread(self):
