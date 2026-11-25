@@ -564,6 +564,7 @@ def run_scan(top_n: int = 12):
             structure_snapshot = {
                 **book, **structure,
                 "market_pressure": market_pressure,
+                "liquidations": get_liquidation_summary(sym),
                 "funding_rate": funding,
                 "oi_change_1h_pct": round(oi_change, 2) if oi_change is not None else None,
                 "open_interest": context.get("open_interest"),
@@ -1343,7 +1344,10 @@ async def api_alerts():
 
 @app.post("/api/trades")
 def create_trade(body: TradeCreate):
-    sym = body.symbol.upper().replace("/", "")
+    # Canonicalize symbols exactly like scanner/cache keys (e.g. BTC/USDT:USDT -> BTCUSDT).
+    sym = _market_symbol_key(body.symbol)
+    if not sym:
+        return JSONResponse({"ok": False, "error": "Invalid trade symbol"}, status_code=400)
     side = body.side.upper()
     order_type = (body.order_type or "MARKET").upper()
     if side not in ("LONG", "SHORT"): return JSONResponse({"ok": False, "error": "side must be LONG or SHORT"}, status_code=400)
@@ -1960,16 +1964,17 @@ function durationShort(start,end,seconds){let s=Number.isFinite(Number(seconds))
 function marketStructureHTML(m,p){
  if(!m)return '';
  const pressure=m.market_pressure||{},tfs=pressure.timeframes||{},multi=pressure.multi_exchange||{};
- const liq=(m.liquidations||{}).timeframes||{},lx=liq['1h']||{},ml=multi.marketlight||{};
+ const localLiq=(m.liquidations||{}).timeframes||{},ml=multi.marketlight||{},remoteLiq=ml.liquidations||{};
  const labels=['5m','15m','1h','4h','1d'];
  const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
- const compact=v=>{if(v==null||!Number.isFinite(Number(v)))return '—';const n=Number(v),a=Math.abs(n);return a>=1e9?(n/1e9).toFixed(2)+'B':a>=1e6?(n/1e6).toFixed(2)+'M':a>=1e3?(n/1e3).toFixed(1)+'K':n.toFixed(0);};
+ const compact=v=>{if(v==null||!Number.isFinite(Number(v)))return '—';const n=Number(v),a=Math.abs(n);return a>=1e9?(n/1e9).toFixed(1)+'B':a>=1e6?(n/1e6).toFixed(1)+'M':a>=1e3?(n/1e3).toFixed(1)+'K':n.toFixed(0);};
  const cell=tf=>{const x=tfs[tf]||{};return '<tr><td><b>'+tf+'</b></td><td>'+(x.long_pct==null?'—':fmt(x.long_pct)+'%')+'</td><td>'+(x.short_pct==null?'—':fmt(x.short_pct)+'%')+'</td><td>'+compact(x.buy_usdt)+' / '+compact(x.sell_usdt)+'</td><td>'+compact(x.total_volume_usdt)+'</td></tr>';};
  const hasRows=labels.some(tf=>tfs[tf]&&Object.values(tfs[tf]).some(v=>v!=null));
+ const liqRow=tf=>{const remote=remoteLiq[tf]||{},local=localLiq[tf]||{};const x=(remote.long_usdt!=null||remote.short_usdt!=null)?remote:local;return '<span style="white-space:nowrap"><b>'+tf.toUpperCase()+'</b> L '+compact(x.long_usdt)+' / S '+compact(x.short_usdt)+'</span>';};
  const box='margin-top:8px;padding:8px;border:1px solid var(--bd,#263449);border-radius:8px;font-size:11px;line-height:1.4;overflow-x:auto';
- return '<div class="market-pressure" style="'+box+'"><b>MARKET STRUCTURE</b>'+
- '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:6px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG</th><th>SHORT</th><th>BUY / SELL</th><th>VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
- '<div style="margin-top:8px"><b>LIQ 1H</b> &nbsp; L '+compact(lx.long_usdt)+' &nbsp; / &nbsp; S '+compact(lx.short_usdt)+'</div>'+
+ return '<div class="market-pressure" style="'+box+'"><b>MARKET STRUCTURE</b> <span style="opacity:.65">· Long/Short = accounts</span>'+
+ '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:6px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG %</th><th>SHORT %</th><th>BUY / SELL</th><th>VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
+ '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px"><b>LIQ</b>'+['1h','4h','1d'].map(liqRow).join('')+'</div>'+
  '<div style="opacity:.7;margin-top:5px">OI '+compact(ml.open_interest_usd)+' · OI 24H '+(ml.oi_change_24h_pct==null?'—':fmt(ml.oi_change_24h_pct)+'%')+' · Book '+(multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%')+'</div>'+
  (hasRows?'':'<div style="opacity:.7;margin-top:4px">No market data yet</div>')+
  '</div>';
@@ -2052,7 +2057,10 @@ function toggleChart(id,sym){
 }
 function cardHTML(s){
   const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
-  const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
+  // Keep signal payload out of inline HTML/JS: reasons or setup text may contain apostrophes.
+  window._signalCache=window._signalCache||Object.create(null);
+  window._signalCache[String(s.symbol)+'|'+String(s.side)]=s;
+  const btn=`<button class="btn good" onclick="openSignalTrade('${String(s.symbol)}','${String(s.side)}')">Add Trade</button>`;
   const v5Details=s.v5_score_breakdown?'<div class="sub">V5 Score · '+Object.entries(s.v5_score_breakdown).map(([k,v])=>k.replaceAll('_',' ')+' '+v.points+'/'+v.weight).join(' · ')+'</div>':'';
   const v5Structure=s.v5_structure?`<div class="sub">Structure · ${s.v5_structure.bias||'neutral'} · BOS ${s.v5_structure.bullish_bos?'↑':s.v5_structure.bearish_bos?'↓':'—'} · Sweep ${s.v5_structure.bullish_sweep?'bullish':s.v5_structure.bearish_sweep?'bearish':'—'} · Swing ${s.v5_structure.higher_highs&&s.v5_structure.higher_lows?'HH/HL':s.v5_structure.lower_highs&&s.v5_structure.lower_lows?'LH/LL':'mixed'}</div>`:'';
   return `<article class="card ${L?'L':'S'}">
@@ -2107,6 +2115,11 @@ async function analyzeManual(){
   list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
 }
+function openSignalTrade(symbol,side){
+  const signal=window._signalCache&&window._signalCache[String(symbol)+'|'+String(side)];
+  if(!signal){toast('Signal details expired. Refresh signals and try again.',5000);return;}
+  openModal(signal);
+}
 function openModal(s){
   window._selectedTradeStrategy=(style!=='all'?style:((s.styles||[]).find(x=>['scalp','day','swing'].includes(x))||'day'));
   mTitle.textContent=s.symbol;
@@ -2120,7 +2133,8 @@ function openModal(s){
 function closeModal(){modalBg.style.display='none';}
 async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
 async function submitTrade(){
-  const submitBtn=document.querySelector('#modalBg .btn.good');
+  const submitBtn=document.querySelector('#modalBg .btns .btn.good');
+  if(!submitBtn){toast('Open Trade button not found. Refresh the page and try again.',5000);return;}
   if(submitBtn.disabled)return;
   const mode=m_mode.value,typ=actualOrderType();
   let px=typ==='MARKET'?(+m_mkt.value||+m_entry.value):(+m_entry.value);
@@ -2145,7 +2159,7 @@ async function submitTrade(){
   try{
     const response=await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await response.json();
-    if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;showTab('trades');loadTrades();loadSignals();}
+    if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Position updated':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');if(d.account)setAcc(d.account);pinManual=false;showTab('trades');await loadTrades();loadSignals();}
     else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed · HTTP '+response.status),5000);}
   }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
   finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
