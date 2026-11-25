@@ -182,61 +182,62 @@ class BinanceClient:
             return None
 
     def get_movers(self, top_n: int = 12, min_volume: float = 0) -> Dict[str, List[dict]]:
-        """Rank liquid USDT-M contracts by Binance rolling 24-hour ticker change."""
+        """Match Binance USDⓈ-M Futures 24h Top Gainer/Loser ticker ranking.
+
+        Uses the official all-symbol /fapi/v1/ticker/24hr payload and ranks
+        active USDT-margined perpetual contracts by priceChangePercent.
+        min_volume is retained for call compatibility but intentionally ignored:
+        Binance's ranking is not restricted by our local liquidity threshold.
+        """
         gainers, losers = [], []
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
         try:
             self._ensure_markets()
-            tickers = self._tickers_cache or self.exchange.fetch_tickers()
-            self._tickers_cache = tickers or {}
-            candidates = []
-            for symbol, data in tickers.items():
-                clean = self._clean_symbol(symbol)
-                if not clean.endswith("USDT"):
-                    continue
-                base = clean[:-4]
-                if any(x in base for x in ("UP", "DOWN", "BULL", "BEAR", "2L", "2S", "3L", "3S")):
-                    continue
-                qv = data.get("quoteVolume")
-                if qv is None:
-                    qv = (data.get("info") or {}).get("quoteVolume")
-                try:
-                    volume = float(qv or 0)
-                    last = float(data.get("last") or 0)
-                except Exception:
-                    continue
-                if volume >= min_volume and last > 0:
-                    candidates.append((clean, volume, last, data))
-            candidates.sort(key=lambda row: row[1], reverse=True)
-
-            # Rank each contract using its own Binance rolling-24h ticker percentage.
+            # CCXT's raw endpoint maps directly to GET /fapi/v1/ticker/24hr.
+            # With no symbol, Binance returns the complete USDⓈ-M ticker array.
+            tickers = self.exchange.fapiPublicGetTicker24hr()
             rows = []
-            for clean, volume, last, ticker_data in candidates:
-                if self.rate_limited:
-                    break
+            for ticker in tickers or []:
+                symbol = str(ticker.get("symbol") or "").upper()
+                if not symbol.endswith("USDT"):
+                    continue
+                market = self.exchange.markets_by_id.get(symbol)
+                if isinstance(market, list):
+                    market = market[0] if market else None
+                if not market:
+                    continue
+                market_info = market.get("info") or {}
+                if (
+                    market.get("quote") != "USDT"
+                    or not market.get("swap")
+                    or market_info.get("contractType") != "PERPETUAL"
+                    or market_info.get("status") != "TRADING"
+                ):
+                    continue
                 try:
-                    change = ticker_data.get("percentage")
-                    if change is None:
-                        change = (ticker_data.get("info") or {}).get("priceChangePercent")
-                    if change is None:
+                    change = float(ticker.get("priceChangePercent"))
+                    volume = float(ticker.get("quoteVolume") or 0)
+                    last = float(ticker.get("lastPrice") or 0)
+                    if not all(map(lambda value: value == value and abs(value) != float("inf"), (change, volume, last))):
                         continue
-                    change = float(change)
-                    rows.append({
-                        "symbol": clean,
-                        "change": round(change, 2),
-                        "volume": volume,
-                        "price": last,
-                        "period": "rolling 24h",
-                    })
-                except Exception as e:
-                    self._mark_rate_limit(e)
-                    print(f"mover 24h ticker {clean}: {e}")
-                    if self.rate_limited:
-                        break
-            rows.sort(key=lambda row: row["change"], reverse=True)
-            gainers = rows[:top_n]
-            losers = list(reversed(rows[-top_n:])) if rows else []
+                    if last <= 0:
+                        continue
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                rows.append({
+                    "symbol": symbol,
+                    "change": round(change, 2),
+                    "volume": volume,
+                    "price": last,
+                    "period": "rolling 24h",
+                })
+
+            # Gainers: highest percentage first. Losers: lowest percentage first.
+            rows.sort(key=lambda row: row["change"])
+            count = max(0, int(top_n))
+            losers = rows[:count]
+            gainers = list(reversed(rows[-count:])) if count else []
         except Exception as e:
             self._mark_rate_limit(e)
             print("movers", e)
