@@ -57,6 +57,18 @@ _market_structure_refresh_at: Dict[str, float] = {}
 _daily_market_context_cache: Dict[str, Dict[str, Any]] = {}
 
 
+def _freeze_trade_market_context(trade: Dict[str, Any]) -> None:
+    """Freeze the latest available market snapshot at the moment a trade closes."""
+    symbol = _market_symbol_key(str(trade.get("symbol") or ""))
+    snapshot = dict(_market_structure_cache.get(symbol) or {})
+    snapshot.update(_daily_market_context_cache.get(symbol) or {})
+    if snapshot:
+        trade["market_structure"] = snapshot
+        for key in ("daily_open", "daily_high", "daily_low", "change_7d_pct", "change_30d_pct", "change_1y_pct"):
+            if snapshot.get(key) is not None:
+                trade[key] = snapshot[key]
+
+
 def _nearest_support_resistance(df, price):
     """Nearest confirmed local pivot support/resistance from the strategy timeframe."""
     result = {"support": None, "resistance": None}
@@ -440,6 +452,7 @@ def _run_paper_auto_bot(signals):
                 price = float(_cache.get("prices", {}).get(trade.get("symbol")) or trade.get("current_price") or trade.get("entry") or 0); qty = float(trade.get("qty") or 0); entry = float(trade.get("entry") or 0)
                 pnl = (price-entry)*qty if trade.get("side") == "LONG" else (entry-price)*qty
                 _account["balance"] = round(float(_account.get("balance") or 0)+pnl, 2); _account["realized_pnl"] = round(float(_account.get("realized_pnl") or 0)+pnl, 2)
+                _freeze_trade_market_context(trade)
                 trade.update({"status":"CLOSED", "hit":"AUTO_SIGNAL_EXIT", "close_price":price, "realized_pnl":round(float(trade.get("realized_pnl") or 0)+pnl,4), "unrealized_pnl":0.0, "closed_at":datetime.now(timezone.utc).isoformat(), "needs_alert":True}); db.save_trade(trade)
         _calc_equity(); db.save_account(_account)
     except Exception as exc: print("[auto-bot] safe cycle error:", exc)
@@ -863,6 +876,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
             _account["balance"] = round(float(_account.get("balance", 0)) + pnl, 2)
             _account["realized_pnl"] = round(float(_account.get("realized_pnl", 0)) + pnl, 2)
             t["realized_pnl"] = round(float(t.get("realized_pnl") or 0) + pnl, 4)
+            _freeze_trade_market_context(t)
             t.update({
                 "status": "CLOSED", "hit": trigger, "unrealized_pnl": 0.0,
                 "close_price": float(t.get("current_price") or t.get("entry") or 0),
@@ -1719,6 +1733,7 @@ async def close_trade(tid: str):
     _account["balance"] = round(_account["balance"] + pnl, 2)
     _account["realized_pnl"] = round(_account["realized_pnl"] + pnl, 2)
     total_realized = round(float(t.get("realized_pnl") or 0) + pnl, 2)
+    _freeze_trade_market_context(t)
     t.update({"status": "CLOSED", "needs_alert": False,
               "closed_at": datetime.now(timezone.utc).isoformat(),
               "close_price": float(t.get("current_price") or t.get("entry") or 0),
@@ -1846,7 +1861,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .modal .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .modal .btns{display:flex;gap:8px;margin-top:12px}
 .modal .btns .btn{flex:1;padding:12px}
- .hint{font-size:11px;color:var(--mut);margin-top:4px}.fund-tools{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.fund-tools label{display:block;color:var(--mut);font-size:11px;margin-bottom:6px}.fund-tools input{width:100%;padding:11px;border-radius:9px;background:#080e1a;border:1px solid var(--line);color:var(--text);font-size:14px}.fund-tools .actions{margin-top:8px}.share-bg{display:none;position:fixed;inset:0;background:#000b;z-index:120;align-items:center;justify-content:center;padding:14px}.share-modal{width:min(100%,480px);max-height:94vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.share-modal h3{font-size:15px;margin-bottom:10px}.share-preview{background:#070b14;border-radius:12px;padding:8px;text-align:center}.share-preview canvas{display:block;width:100%;height:auto;border-radius:8px}.share-modal .actions{display:flex;gap:7px;margin-top:10px}.share-modal .btn{flex:1}.history-trade{padding:12px 0;border-bottom:1px solid var(--line)}.history-trade:last-child{border-bottom:0}.history-trade .vals{margin-top:8px}.history-trade .vals>div:last-child{min-width:0;padding:0;border:0;border-radius:0;background:transparent}.history-trade .vals>div:last-child strong{color:var(--text)}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
+ .hint{font-size:11px;color:var(--mut);margin-top:4px}.fund-tools{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.fund-tools label{display:block;color:var(--mut);font-size:11px;margin-bottom:6px}.fund-tools input{width:100%;padding:11px;border-radius:9px;background:#080e1a;border:1px solid var(--line);color:var(--text);font-size:14px}.fund-tools .actions{margin-top:8px}.share-bg{display:none;position:fixed;inset:0;background:#000b;z-index:120;align-items:center;justify-content:center;padding:14px}.share-modal{width:min(100%,480px);max-height:94vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.share-modal h3{font-size:15px;margin-bottom:10px}.share-preview{background:#070b14;border-radius:12px;padding:8px;text-align:center}.share-preview canvas{display:block;width:100%;height:auto;border-radius:8px}.share-modal .actions{display:flex;gap:7px;margin-top:10px}.share-modal .btn{flex:1}.history-trade{padding:12px 0;border-bottom:1px solid var(--line)}.history-trade:last-child{border-bottom:0}.history-trade .vals{margin-top:8px;column-gap:7px;row-gap:6px}.history-trade .vals .trade-time{min-width:0}.history-trade .vals .trade-time strong{font-size:10px;letter-spacing:-.2px}.history-trade .vals>div:last-child{min-width:0;padding:0;border:0;border-radius:0;background:transparent}.history-trade .vals>div:last-child strong{color:var(--text)}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
 .sec{padding:10px 12px 4px;font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
 .mv{display:flex;gap:8px;overflow-x:auto;padding:0 12px 10px}
 .mv .i{min-width:108px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -2055,7 +2070,6 @@ function marketStructureHTML(m,p){
  '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:6px;white-space:nowrap"><thead><tr><th style="text-align:left">TF</th><th>LONG %</th><th>SHORT %</th><th>BUY / SELL</th><th>VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
  '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px"><b>LIQ</b>'+['1h','4h','1d'].map(liqRow).join('')+'</div>'+
  '<div style="opacity:.7;margin-top:5px">OI '+compact(oiUsd)+' USDT · OI 24H '+(oi24h==null?'—':fmt(oi24h)+'%')+' · Book '+(multi.book_imbalance_pct==null?'—':fmt(multi.book_imbalance_pct)+'%')+'</div>'+
- (m.support!=null||m.resistance!=null?'<div style="margin-top:5px">S: '+(m.support==null?'—':fmtSymbolPrice('',m.support,p))+' · R: '+(m.resistance==null?'—':fmtSymbolPrice('',m.resistance,p))+'</div>':'')+
 
  (hasRows?'':'<div style="opacity:.7;margin-top:4px">No market data yet</div>')+
  '</div>';
@@ -2150,7 +2164,7 @@ function cardHTML(s){
       <div class="score">${s.score}</div></div>
     <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
     <div class="sub">24H O: ${fmtSymbolPrice(s.symbol,s.daily_open,s.price_precision)} · H: ${fmtSymbolPrice(s.symbol,s.daily_high,s.price_precision)} · L: ${fmtSymbolPrice(s.symbol,s.daily_low,s.price_precision)} · 7D ${s.change_7d_pct==null?'—':fmt(s.change_7d_pct)+'%'} · 30D ${s.change_30d_pct==null?'—':fmt(s.change_30d_pct)+'%'} · 1Y ${s.change_1y_pct==null?'—':fmt(s.change_1y_pct)+'%'}</div>
-    <div class="sub">S: ${s.support==null?'—':fmtSymbolPrice(s.symbol,s.support,s.price_precision)} · R: ${s.resistance==null?'—':fmtSymbolPrice(s.symbol,s.resistance,s.price_precision)}</div>
+    <div class="sub">24H O: ${fmtSymbolPrice(s.symbol,s.daily_open,s.price_precision)} · H: ${fmtSymbolPrice(s.symbol,s.daily_high,s.price_precision)} · L: ${fmtSymbolPrice(s.symbol,s.daily_low,s.price_precision)} · 7D ${s.change_7d_pct==null?'—':fmt(s.change_7d_pct)+'%'} · 30D ${s.change_30d_pct==null?'—':fmt(s.change_30d_pct)+'%'} · 1Y ${s.change_1y_pct==null?'—':fmt(s.change_1y_pct)+'%'} · S: ${s.support==null?'—':fmtSymbolPrice(s.symbol,s.support,s.price_precision)} · R: ${s.resistance==null?'—':fmtSymbolPrice(s.symbol,s.resistance,s.price_precision)}</div>
     <div class="vals">
       <div><em>Entry</em><strong>${fmtSymbolPrice(s.symbol,s.entry,s.price_precision)}</strong></div>
       <div><em>Market</em><strong>${fmtSymbolPrice(s.symbol,mp,s.price_precision)}</strong></div>
@@ -2300,8 +2314,8 @@ async function loadTrades(){
         <div><em>Mark Price</em><strong>${t.current_price==null?'—':fmtSymbolPrice(t.symbol,t.current_price,t.price_precision)}</strong></div>
         <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
 <div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmtSymbolPrice(t.symbol,t.liquidation_price,t.price_precision):"—"}</strong></div>
-        <div><em>SL</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)}</strong></div>
-        <div><em>TP1</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)}</strong></div>
+        <div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
+        <div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
                 <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
@@ -2309,9 +2323,9 @@ async function loadTrades(){
         <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"—":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
 
         <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
-        <div><em>Opened</em><strong>${(t.opened_at||t.filled_at||t.created_at)?new Date(t.opened_at||t.filled_at||t.created_at).toLocaleString():'—'}</strong></div>
-        <div><em>Duration</em><strong>${durationShort(t.opened_at||t.filled_at||t.created_at,null,t.duration_seconds)}</strong></div>
+        <div class="trade-time"><em>Opened</em><strong>${(t.opened_at||t.filled_at||t.created_at)?new Date(t.opened_at||t.filled_at||t.created_at).toLocaleString():'—'}</strong></div>
       </div>
+      <div class="sub">S: ${t.market_structure?.support==null?'—':fmtSymbolPrice(t.symbol,t.market_structure.support,t.price_precision)} · R: ${t.market_structure?.resistance==null?'—':fmtSymbolPrice(t.symbol,t.market_structure.resistance,t.price_precision)}</div>
       ${marketStructureHTML(t.market_structure,t.price_precision)}
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
@@ -2326,7 +2340,7 @@ async function loadTrades(){
     const openedStamp=t.opened_at||t.filled_at||t.created_at;const openedAt=openedStamp?new Date(openedStamp).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
-    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div><div><em>Duration</em><strong>${durationShort(openedStamp,t.closed_at,t.duration_seconds)}</strong></div></div><div class="sub">24H O: ${fmtSymbolPrice(t.symbol,t.daily_open,t.price_precision)} · H: ${fmtSymbolPrice(t.symbol,t.daily_high,t.price_precision)} · L: ${fmtSymbolPrice(t.symbol,t.daily_low,t.price_precision)} · 7D ${t.change_7d_pct==null?'—':fmt(t.change_7d_pct)+'%'} · 30D ${t.change_30d_pct==null?'—':fmt(t.change_30d_pct)+'%'} · 1Y ${t.change_1y_pct==null?'—':fmt(t.change_1y_pct)+'%'}</div>${marketStructureHTML(t.market_structure,t.price_precision)}<div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
+    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div class="trade-time"><em>Opened</em><strong>${openedAt}</strong></div><div class="trade-time"><em>Closed</em><strong>${closedAt}</strong></div><div class="trade-time"><em>Time</em><strong>${durationShort(openedStamp,t.closed_at,t.duration_seconds)}</strong></div><div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div></div><div class="sub">24H O: ${fmtSymbolPrice(t.symbol,t.daily_open,t.price_precision)} · H: ${fmtSymbolPrice(t.symbol,t.daily_high,t.price_precision)} · L: ${fmtSymbolPrice(t.symbol,t.daily_low,t.price_precision)} · 7D ${t.change_7d_pct==null?'—':fmt(t.change_7d_pct)+'%'} · 30D ${t.change_30d_pct==null?'—':fmt(t.change_30d_pct)+'%'} · 1Y ${t.change_1y_pct==null?'—':fmt(t.change_1y_pct)+'%'}</div><div class="sub">S: ${t.market_structure?.support==null?'—':fmtSymbolPrice(t.symbol,t.market_structure.support,t.price_precision)} · R: ${t.market_structure?.resistance==null?'—':fmtSymbolPrice(t.symbol,t.market_structure.resistance,t.price_precision)}</div>${marketStructureHTML(t.market_structure,t.price_precision)}<div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
   }).join('');h+='</details>';}
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   // Defensive cleanup: never show TP2 as a field on an open My Trades card.
