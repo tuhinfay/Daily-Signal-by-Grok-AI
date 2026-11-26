@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 import uvicorn, os, json, traceback, uuid, threading, time as time_mod
 
 from scanner.binance_client import BinanceClient
+from scanner.liquidation_feed import start_liquidation_feed, get_liquidation_summary
+from scanner.multi_exchange_data import get_multi_exchange_context
 from scanner.signal_engine import SignalEngine
 from scanner.v5_analysis import qualify_v5_signal
 from scanner.risk_sizing import calculate_position_size
@@ -49,7 +51,69 @@ _scan_lock = threading.Lock()
 _scan_retry_after = 0.0
 _scan_max_leverage: Dict[str, Optional[int]] = {}
 _daily_open_cache: Dict[str, Dict[str, float]] = {}
-_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both"}
+_symbol_price_precision: Dict[str, int] = {}
+_market_structure_cache: Dict[str, Dict[str, Any]] = {}
+_market_structure_refresh_at: Dict[str, float] = {}
+_market_structure_rotation = 0
+_daily_market_context_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _freeze_trade_market_context(trade: Dict[str, Any]) -> None:
+    """Freeze the latest available market snapshot at the moment a trade closes."""
+    symbol = _market_symbol_key(str(trade.get("symbol") or ""))
+    snapshot = dict(_market_structure_cache.get(symbol) or {})
+    snapshot.update(_daily_market_context_cache.get(symbol) or {})
+    if snapshot:
+        trade["market_structure"] = snapshot
+        for key in ("daily_open", "daily_high", "daily_low", "change_7d_pct", "change_30d_pct", "change_1y_pct"):
+            if snapshot.get(key) is not None:
+                trade[key] = snapshot[key]
+
+
+def _nearest_support_resistance(df, price):
+    """Nearest confirmed local pivot support/resistance from the strategy timeframe."""
+    result = {"support": None, "resistance": None}
+    try:
+        if df is None or len(df) < 8 or float(price or 0) <= 0:
+            return result
+        lows, highs = [], []
+        start = max(2, len(df) - 100)
+        for i in range(start, len(df) - 2):
+            low, high = float(df["low"].iloc[i]), float(df["high"].iloc[i])
+            if low <= float(df["low"].iloc[i-1]) and low <= float(df["low"].iloc[i-2]) and low < float(df["low"].iloc[i+1]) and low < float(df["low"].iloc[i+2]):
+                if low < float(price):
+                    lows.append(low)
+            if high >= float(df["high"].iloc[i-1]) and high >= float(df["high"].iloc[i-2]) and high > float(df["high"].iloc[i+1]) and high > float(df["high"].iloc[i+2]):
+                if high > float(price):
+                    highs.append(high)
+        result["support"] = max(lows) if lows else None
+        result["resistance"] = min(highs) if highs else None
+    except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+        pass
+    return result
+
+
+def _timeframe_trend_map(data: Dict[str, Any]) -> Dict[str, str]:
+    """EMA9/EMA21 trend labels for available signal timeframes."""
+    trends = {}
+    for tf in ("15m", "1h", "4h", "1d"):
+        try:
+            frame = data.get(tf)
+            if frame is None or len(frame) < 25:
+                continue
+            latest = get_latest(add_indicators(frame))
+            close, fast, slow = (float(latest.get(k) or 0) for k in ("close", "ema9", "ema21"))
+            if close > 0 and fast > 0 and slow > 0:
+                trends[tf] = "UP" if close > fast > slow else "DOWN" if close < fast < slow else "SIDE"
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+    return trends
+
+
+def _market_symbol_key(symbol: Any) -> str:
+    """Canonical key shared by scanner cache and trade API (e.g. BTC/USDT:USDT -> BTCUSDT)."""
+    return str(symbol or "").upper().replace("/", "").split(":")[0]
+_bot_config = {"enabled": False, "symbols": "", "min_score": 75, "min_quality": "A", "amount_usd": 50.0, "max_open": 2, "trailing_pct": 0.8, "exit_on_opposite": True, "trade_style": "day", "cooldown_minutes": 30, "max_symbol_trades_day": 3, "max_daily_loss_pct": 2.0, "min_rr": 1.5, "direction": "both", "advanced_enabled": False, "advanced_sl_pct": 0.0, "advanced_tp1_pct": 0.0, "advanced_tp2_pct": 0.0, "advanced_limit_offset_pct": 0.0, "advanced_profit_lock": False, "advanced_profit_activation_pct": 0.8, "advanced_profit_callback_pct": 0.5, "dca_range_min_pct": 0.0, "dca_range_max_pct": 0.0}
 
 def _utc_daily_change_pct(df, current_price=None):
     """Calculate change from Binance Futures' active UTC 1d candle open (BD 06:00)."""
@@ -135,11 +199,26 @@ class TradeCreate(BaseModel):
     amount_usd: Optional[float] = None  # total notional
     quantity: Optional[float] = None
     margin_mode: str = "CROSS"  # CROSS | ISOLATED
+    trade_style: Optional[str] = None
     note: Optional[str] = ""
     scale_mode: Optional[str] = None  # flat | ascending
     scale_orders: Optional[int] = None
     scale_lower_price: Optional[float] = None
     scale_upper_price: Optional[float] = None
+    advanced_enabled: bool = False
+    dca_enabled: bool = False
+    dca_gap_pct: Optional[float] = None
+    dca_max_orders: Optional[int] = None
+    dca_multiplier: Optional[float] = None
+    dca_lower_price: Optional[float] = None
+    dca_upper_price: Optional[float] = None
+    sl_pct: Optional[float] = None
+    tp1_pct: Optional[float] = None
+    tp2_pct: Optional[float] = None
+    limit_offset_pct: Optional[float] = None
+    profit_lock_enabled: bool = False
+    profit_activation_pct: Optional[float] = None
+    profit_callback_pct: Optional[float] = None
 
 
 class TradeUpdate(BaseModel):
@@ -149,6 +228,9 @@ class TradeUpdate(BaseModel):
     trailing_pct: Optional[float] = None  # legacy callback rate %
     trailing_activation_price: Optional[float] = None
     callback_rate: Optional[float] = None
+    profit_lock_enabled: Optional[bool] = None
+    profit_activation_pct: Optional[float] = None
+    profit_callback_pct: Optional[float] = None
 
 
 class DcaBody(BaseModel):
@@ -191,6 +273,35 @@ def _stats() -> Dict[str, Any]:
         "unrealized_pnl": round(unrealized_pnl, 2),
     }
 
+
+
+
+def _trade_opened_at(trade: Dict[str, Any]) -> Optional[str]:
+    """Resolve the actual open/fill timestamp, with legacy DCA fallbacks."""
+    value = trade.get("filled_at") or trade.get("created_at")
+    if not value:
+        history = trade.get("dca_history") or []
+        stamps = [x.get("created_at") for x in history if isinstance(x, dict) and x.get("created_at")]
+        value = min(stamps) if stamps else None
+    return str(value) if value else None
+
+
+def _trade_duration_seconds(trade: Dict[str, Any]) -> Optional[int]:
+    """Return elapsed whole seconds between fill/open and close timestamps."""
+    opened = _trade_opened_at(trade)
+    closed = trade.get("closed_at")
+    if not opened or not closed:
+        return None
+    try:
+        start = datetime.fromisoformat(str(opened).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(closed).replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        return max(0, int((end - start).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _estimate_liquidation_price(trade: Dict[str, Any]) -> Optional[float]:
@@ -262,15 +373,15 @@ def _run_paper_auto_bot(signals):
     min_quality = quality.get(str(cfg.get("min_quality", "A")).upper(), 2)
     symbols = {x.strip().upper().replace("/", "") for x in str(cfg.get("symbols") or "").split(",") if x.strip()}
     strategy = str(cfg.get("trade_style") or "day").lower()
-    if strategy not in ("scalp", "day", "swing", "hybrid"): strategy = "day"
+    if strategy not in ("scalp", "day", "swing"): strategy = "day"
     now = datetime.now(timezone.utc)
     today = now.date()
     cooldown = max(0, min(int(cfg.get("cooldown_minutes") or 0), 1440))
     max_symbol_day = max(1, min(int(cfg.get("max_symbol_trades_day") or 3), 30))
     max_daily_loss = max(0.0, float(_account.get("start_balance") or _account.get("balance") or 0) * max(0.0, min(float(cfg.get("max_daily_loss_pct") or 0), 20.0)) / 100.0)
     try:
-        opened = [t for t in _trades.values() if t.get("status") == "OPEN"]
-        if cfg.get("dca_enabled") and strategy != "hybrid":
+        opened = [t for t in _trades.values() if t.get("status") in ("OPEN", "PENDING")]
+        if cfg.get("advanced_enabled") and cfg.get("dca_enabled") and strategy != "hybrid":
             gap = max(0.1, min(float(cfg.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
             max_adds = max(1, min(int(cfg.get("dca_max_orders") or 3), 5))
             multiplier = max(1.0, min(float(cfg.get("dca_multiplier") or 2.0), 3.0))
@@ -285,7 +396,10 @@ def _run_paper_auto_bot(signals):
                 anchor = float(history[-1].get("price") or entry0) if history else entry0
                 side0 = str(position.get("side") or "").upper()
                 triggered = mark <= anchor * (1-gap) if side0 == "LONG" else mark >= anchor * (1+gap)
-                if not triggered: continue
+                dca_reference = float(position.get("dca_reference_entry") or entry0)
+                adverse_pct = ((dca_reference-mark)/dca_reference*100.0) if side0 == "LONG" and dca_reference > 0 else ((mark-dca_reference)/dca_reference*100.0) if dca_reference > 0 else 0.0
+                range_min = max(0.0, float(cfg.get("dca_range_min_pct") or 0)); range_max = max(0.0, float(cfg.get("dca_range_max_pct") or 0))
+                if not triggered or adverse_pct < range_min or (range_max and adverse_pct > range_max): continue
                 base_notional = float(position.get("auto_dca_base_usd") or cfg.get("amount_usd") or 50)
                 add_notional = base_notional * (multiplier ** adds)
                 lev0 = max(1, int(position.get("leverage") or 1))
@@ -297,6 +411,16 @@ def _run_paper_auto_bot(signals):
                 if new_qty <= 0: continue
                 position["entry"] = round((entry0 * old_qty + mark * add_qty) / new_qty, 8)
                 position["qty"] = round(new_qty, 8)
+                avg_entry = float(position["entry"])
+                if float(position.get("sl_pct_setting") or 0) > 0:
+                    p = float(position["sl_pct_setting"]) / 100.0
+                    position["stop_loss"] = avg_entry * (1-p if position.get("side") == "LONG" else 1+p)
+                if float(position.get("tp1_pct_setting") or 0) > 0:
+                    p = float(position["tp1_pct_setting"]) / 100.0
+                    position["tp1"] = avg_entry * (1+p if position.get("side") == "LONG" else 1-p)
+                if float(position.get("tp2_pct_setting") or 0) > 0:
+                    p = float(position["tp2_pct_setting"]) / 100.0
+                    position["tp2"] = avg_entry * (1+p if position.get("side") == "LONG" else 1-p)
                 position["notional"] = round(float(position.get("notional") or 0) + add_notional, 2)
                 position["margin"] = round(float(position.get("margin") or 0) + add_margin, 2)
                 position["dca_count"] = adds + 1
@@ -330,7 +454,7 @@ def _run_paper_auto_bot(signals):
                     if (now - datetime.fromisoformat(recent_close.replace("Z", "+00:00"))).total_seconds() < cooldown * 60: continue
                 except ValueError: pass
             if quality.get(str(sig.get("quality") or "B").upper(), 0) < min_quality: continue
-            if any(t.get("status") == "OPEN" and t.get("symbol") == sym for t in _trades.values()): continue
+            if any(t.get("status") in ("OPEN", "PENDING") and t.get("symbol") == sym for t in _trades.values()): continue
             entry = float((sig.get("mark_price") if strategy == "hybrid" else None) or sig.get("market_price") or sig.get("entry") or 0); sl = float(sig.get("stop_loss") or 0); tp = float(sig.get("tp1") or 0)
             if entry <= 0 or sl <= 0 or tp <= 0: continue
             if (side == "LONG" and not sl < entry < tp) or (side == "SHORT" and not tp < entry < sl): continue
@@ -349,12 +473,29 @@ def _run_paper_auto_bot(signals):
                 if not sizing.get("ok"):
                     continue
                 quantity = sizing["quantity"]
+            advanced = bool(cfg.get("advanced_enabled")) and strategy != "hybrid"
+            sl_pct = float(cfg.get("advanced_sl_pct") or 0) if advanced else 0
+            tp1_pct = float(cfg.get("advanced_tp1_pct") or 0) if advanced else 0
+            tp2_pct = float(cfg.get("advanced_tp2_pct") or 0) if advanced else 0
+            offset_pct = float(cfg.get("advanced_limit_offset_pct") or 0) if advanced else 0
+            if sl_pct > 0: sl = entry * (1 - sl_pct/100 if side == "LONG" else 1 + sl_pct/100)
+            if tp1_pct > 0: tp = entry * (1 + tp1_pct/100 if side == "LONG" else 1 - tp1_pct/100)
+            tp2 = sig.get("tp2")
+            if tp2_pct > 0: tp2 = entry * (1 + tp2_pct/100 if side == "LONG" else 1 - tp2_pct/100)
+            limit_px = entry * (1 - offset_pct/100 if side == "LONG" else 1 + offset_pct/100) if offset_pct > 0 else None
             req = TradeCreate(
-                symbol=sym, side=side, entry=entry, stop_loss=sl, tp1=tp, tp2=sig.get("tp2"),
+                symbol=sym, side=side, entry=limit_px or entry, stop_loss=sl, tp1=tp, tp2=tp2,
+                order_type="LIMIT" if limit_px else "MARKET", limit_price=limit_px,
                 leverage=min(_symbol_leverage_cap(sym), int(sig.get("max_leverage") or 20)),
                 quantity=quantity,
                 amount_usd=None if strategy == "hybrid" else float(cfg.get("amount_usd") or 50),
-                risk_pct=None,
+                risk_pct=None, advanced_enabled=advanced,
+                dca_enabled=bool(cfg.get("dca_enabled")) if advanced else False,
+                dca_gap_pct=cfg.get("dca_gap_pct"), dca_max_orders=cfg.get("dca_max_orders"), dca_multiplier=cfg.get("dca_multiplier"),
+                dca_lower_price=None, dca_upper_price=None,
+                sl_pct=sl_pct, tp1_pct=tp1_pct, tp2_pct=tp2_pct,
+                profit_lock_enabled=bool(cfg.get("advanced_profit_lock")) if advanced else False,
+                profit_activation_pct=cfg.get("advanced_profit_activation_pct"), profit_callback_pct=cfg.get("advanced_profit_callback_pct"),
                 note="V5 · exchange-step risk-sized simulated paper trade" if strategy == "hybrid" else "Auto Bot · simulated paper trade",
             )
             result = create_trade(req)
@@ -368,6 +509,10 @@ def _run_paper_auto_bot(signals):
                         trade["auto_dca_base_usd"] = float(cfg.get("amount_usd") or 50)
                         rate = float(cfg.get("trailing_pct") or 0)
                         if rate >= 0.1: trade["callback_rate"] = min(rate, 5.0)
+                        if advanced and cfg.get("advanced_profit_lock"):
+                            trade["callback_rate"] = float(cfg.get("advanced_profit_callback_pct") or 0.5)
+                            trade["profit_lock_enabled"] = True
+                            trade["profit_activation_pct"] = float(cfg.get("advanced_profit_activation_pct") or 0.8)
                         db.save_trade(trade); opened.append(trade)
                         break
         if cfg.get("exit_on_opposite"):
@@ -378,12 +523,13 @@ def _run_paper_auto_bot(signals):
                 price = float(_cache.get("prices", {}).get(trade.get("symbol")) or trade.get("current_price") or trade.get("entry") or 0); qty = float(trade.get("qty") or 0); entry = float(trade.get("entry") or 0)
                 pnl = (price-entry)*qty if trade.get("side") == "LONG" else (entry-price)*qty
                 _account["balance"] = round(float(_account.get("balance") or 0)+pnl, 2); _account["realized_pnl"] = round(float(_account.get("realized_pnl") or 0)+pnl, 2)
+                _freeze_trade_market_context(trade)
                 trade.update({"status":"CLOSED", "hit":"AUTO_SIGNAL_EXIT", "close_price":price, "realized_pnl":round(float(trade.get("realized_pnl") or 0)+pnl,4), "unrealized_pnl":0.0, "closed_at":datetime.now(timezone.utc).isoformat(), "needs_alert":True}); db.save_trade(trade)
         _calc_equity(); db.save_account(_account)
     except Exception as exc: print("[auto-bot] safe cycle error:", exc)
 
 def run_scan(top_n: int = 12):
-    global _scan_retry_after
+    global _scan_retry_after, _market_structure_rotation
     top_n = max(5, min(int(top_n or 26), 26))
     cooldown_remaining = int(_scan_retry_after - time_mod.monotonic())
     if cooldown_remaining > 0:
@@ -399,8 +545,18 @@ def run_scan(top_n: int = 12):
         client = BinanceClient(futures=True)
         engine = SignalEngine()
         pairs = client.get_top_usdt_pairs(top_n=top_n, min_volume=config.MIN_VOLUME_USDT)
+        for pair_symbol, _ in pairs:
+            precision = client.get_price_precision(pair_symbol)
+            if precision is not None:
+                _symbol_price_precision[pair_symbol] = precision
+        for existing_trade in _trades.values():
+            trade_symbol = str(existing_trade.get("symbol") or "")
+            if existing_trade.get("status") in ("OPEN", "CLOSED") and trade_symbol and trade_symbol not in _symbol_price_precision:
+                precision = client.get_price_precision(trade_symbol)
+                if precision is not None:
+                    _symbol_price_precision[trade_symbol] = precision
         try:
-            mv = client.get_movers(top_n=40, min_volume=3_000_000)
+            mv = client.get_movers(top_n=1000, min_volume=0)
             _cache["gainers"] = mv.get("gainers", [])
             _cache["losers"] = mv.get("losers", [])
         except Exception as e:
@@ -442,10 +598,11 @@ def run_scan(top_n: int = 12):
                     prices[symbol] = px
                 for style_name in (("hybrid",) if getattr(config, "V5_ENABLED", False) else ("scalp", "day", "swing")):
                     r = engine.analyze_pair(symbol, data, volume_24h=vol, style=style_name)
-                    if not r:
-                        continue
+                    if not r: continue
+                    r["timeframe_trends"] = _timeframe_trend_map(data)
+                    r["entry_timeframe"] = {"scalp": "5m", "day": "15m", "swing": "1h", "hybrid": "15m"}.get(style_name, "15m")
                     r["market_price"] = px or r["entry"]
-                    daily_change_pct = _utc_daily_change_pct(data.get("1d"), px)
+                    daily_change_pct = client.get_24h_change_pct(symbol)
                     if daily_change_pct is not None:
                         r["daily_change_pct"] = daily_change_pct
                     r["max_leverage"] = max_leverage
@@ -487,27 +644,78 @@ def run_scan(top_n: int = 12):
                 item["reasons"].append(f"Aligned BTC {btc_regime} regime")
 
         checked_derivatives = set()
-        for candidate in sorted(signals, key=lambda x: x["score"], reverse=True):
-            sym = candidate["symbol"]
-            if sym in checked_derivatives or len(checked_derivatives) >= 4 or client.rate_limited:
+        priority_symbols = [_market_symbol_key(t.get("symbol")) for t in _trades.values() if t.get("status") == "OPEN"]
+        # Rotate the signal universe so lower-ranked coins also receive market-data refreshes.
+        signal_symbols = list(dict.fromkeys(_market_symbol_key(x.get("symbol")) for x in sorted(signals, key=lambda x: x["score"], reverse=True)))
+        if signal_symbols:
+            start_at = _market_structure_rotation % len(signal_symbols)
+            signal_symbols = signal_symbols[start_at:] + signal_symbols[:start_at]
+            _market_structure_rotation = (start_at + 10) % len(signal_symbols)
+        priority_symbols += signal_symbols
+        for sym in dict.fromkeys(priority_symbols):
+            if not sym or len(checked_derivatives) >= 10 or client.rate_limited:
                 continue
             checked_derivatives.add(sym)
-            context = client.get_derivatives_context(sym)
+            context = client.get_global_derivatives_context(sym)
             book = client.get_order_book_context(sym) if not client.rate_limited else {}
+            structure = client.get_market_structure_context(sym) if not client.rate_limited else {}
+            market_pressure = client.get_market_pressure_context(sym) if not client.rate_limited else {"timeframes": {}}
+            multi_exchange = get_multi_exchange_context(sym)
+            market_pressure["multi_exchange"] = multi_exchange
             mark_price = (context.get("mark_price") or client.get_mark_price(sym)) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else None
             constraints = client.get_order_constraints(sym) if getattr(config, "V5_ENABLED", False) and not client.rate_limited else {}
             funding = context.get("funding_rate")
             oi_change = context.get("oi_change_pct")
+            # Cache for My Trades independently of whether this symbol produced a signal.
+            daily_context = client.get_daily_market_context(sym, prices.get(sym))
+            _daily_market_context_cache[_market_symbol_key(sym)] = daily_context
+            first_signal = next((x for x in signals if x["symbol"] == sym), {})
+            sr_context = {}
+            sr_df = None
+            if first_signal and not client.rate_limited:
+                strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}.get((first_signal.get("styles") or ["day"])[0], "1h")
+                sr_df = client.fetch_ohlcv(sym, timeframe=strategy_tf, limit=120)
+                sr_context = _nearest_support_resistance(sr_df, prices.get(sym) or first_signal.get("market_price") or first_signal.get("entry"))
+            structure_snapshot = {
+                **book, **structure, **daily_context, **sr_context,
+                "market_pressure": market_pressure,
+                "liquidations": get_liquidation_summary(sym),
+                "funding_rate": funding,
+                "oi_change_1h_pct": round(oi_change, 2) if oi_change is not None else None,
+                "open_interest": context.get("open_interest"),
+                "open_interest_usd": context.get("open_interest_usd"),
+                "oi_change_24h_pct": context.get("oi_change_24h_pct"),
+                "oi_updated_at": context.get("oi_updated_at"),
+                "mark_price": mark_price,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _market_structure_cache[_market_symbol_key(sym)] = structure_snapshot
+            _market_structure_refresh_at[_market_symbol_key(sym)] = time_mod.monotonic()
+            # Keep running-trade market context live; closed trades are intentionally immutable.
+            for position in _trades.values():
+                if position.get("status") == "OPEN" and _market_symbol_key(position.get("symbol")) == _market_symbol_key(sym):
+                    position["market_structure"] = dict(structure_snapshot)
+                    for field in ("daily_open", "daily_high", "daily_low", "change_7d_pct", "change_30d_pct", "change_1y_pct"):
+                        if structure_snapshot.get(field) is not None:
+                            position[field] = structure_snapshot[field]
+                    db.save_trade(position)
             imbalance = book.get("book_imbalance_pct")
             spread = book.get("spread_pct")
             for item in signals:
                 if item["symbol"] != sym:
                     continue
+                item.update(daily_context)
+                strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}.get((item.get("styles") or ["day"])[0], "1h")
+                item.update(sr_context if sr_context else _nearest_support_resistance(sr_df, prices.get(sym) or item.get("market_price") or item.get("entry")))
                 item["funding_rate"] = funding
+                item["oi_sources"] = context.get("oi_sources") or ["Binance"]
+                item["oi_coverage"] = context.get("oi_coverage", 1)
                 item["open_interest"] = context.get("open_interest")
                 item["oi_change_1h_pct"] = round(oi_change, 2) if oi_change is not None else None
                 item["orderbook_imbalance_pct"] = round(imbalance, 2) if imbalance is not None else None
                 item["spread_pct"] = round(spread, 4) if spread is not None else None
+                item["market_structure"] = structure_snapshot
+                item["price_precision"] = _symbol_price_precision.get(sym)
                 item["mark_price"] = mark_price
                 item["qty_step"] = constraints.get("qty_step")
                 item["min_qty"] = constraints.get("min_qty")
@@ -555,6 +763,52 @@ def run_scan(top_n: int = 12):
             filtered.append(item)
         signals = filtered
         signals.sort(key=lambda x: x["score"], reverse=True)
+        # Advisory-only position review from the latest completed signal analysis.
+        latest_by_symbol = {str(x.get("symbol")): x for x in signals}
+        for position in list(_trades.values()):
+            if position.get("status") != "OPEN":
+                continue
+            candidate = latest_by_symbol.get(str(position.get("symbol")))
+            if not candidate:
+                continue
+            mark = float(prices.get(position.get("symbol")) or position.get("current_price") or 0)
+            entry = float(position.get("entry") or 0)
+            pnl = float(position.get("unrealized_pnl") or 0)
+            opposite = str(candidate.get("side") or "").upper() != str(position.get("side") or "").upper()
+            score = int(candidate.get("score") or 0)
+            advice = None
+            if opposite and score >= 75:
+                advice = "OPPOSITE SIGNAL · Review closing or reducing this position"
+                side_now = str(position.get("side") or "").upper()
+                profitable_side = mark > entry if side_now == "LONG" else (mark < entry if side_now == "SHORT" else False)
+                if pnl > 0 and profitable_side and entry > 0:
+                    old_sl = float(position.get("stop_loss") or 0)
+                    improves = old_sl < entry if side_now == "LONG" else (old_sl > entry if side_now == "SHORT" else False)
+                    if improves:
+                        position["stop_loss"] = entry
+                        position["auto_sl_protected"] = True
+                        advice = "PROFIT PROTECTED · SL moved to breakeven after opposite signal"
+                        db.save_trade(position)
+            elif not opposite and score >= 75 and pnl < 0:
+                advice = "DCA WATCH · Directional analysis still agrees; review risk before adding"
+            elif pnl > 0 and entry > 0 and mark > 0:
+                side_now = str(position.get("side") or "").upper()
+                favorable = mark > entry if side_now == "LONG" else mark < entry
+                profit_pct = abs(mark-entry)/entry*100 if favorable else 0
+                if favorable and profit_pct >= 0.5:
+                    callback_pct = max(0.2, min(1.5, profit_pct * 0.25))
+                    activation_pct = max(0.5, min(profit_pct * 0.5, profit_pct))
+                    position["trailing_recommendation"] = {"activation_profit_pct": round(activation_pct,2), "callback_pct": round(callback_pct,2), "based_on_profit_pct": round(profit_pct,2), "mark_price": mark}
+                    advice = f"PROFIT TRAIL SUGGESTION · Activate +{activation_pct:.2f}% · Callback {callback_pct:.2f}% (review before applying)"
+            if advice:
+                position["analysis_alert"] = advice
+                position["analysis_alert_at"] = datetime.now(timezone.utc).isoformat()
+                db.save_trade(position)
+            elif position.get("analysis_alert") or position.get("trailing_recommendation"):
+                position["analysis_alert"] = None
+                position["trailing_recommendation"] = None
+                position["analysis_alert_at"] = datetime.now(timezone.utc).isoformat()
+                db.save_trade(position)
         _cache["signals"] = signals
         _cache["prices"] = prices
         _run_paper_auto_bot(signals)
@@ -623,6 +877,16 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
                 matching["margin"] = round(float(matching.get("margin") or 0) + float(t.get("margin") or 0), 2)
                 matching["dca_count"] = int(matching.get("dca_count") or 0) + 1
                 matching.setdefault("dca_history", []).append({"price": limit_px, "qty": add_qty, "notional": round(limit_px * add_qty, 2), "margin": t.get("margin", 0), "created_at": datetime.now(timezone.utc).isoformat()})
+                if t.get("advanced_enabled"):
+                    for key in ("advanced_enabled","advanced_dca_enabled","dca_gap_pct","dca_max_orders","dca_multiplier","dca_lower_price","dca_upper_price","auto_dca_base_usd","dca_reference_entry","sl_pct_setting","tp1_pct_setting","tp2_pct_setting","profit_lock_enabled","profit_activation_pct","profit_callback_pct","callback_rate","trailing_pct"):
+                        if key in t: matching[key] = t[key]
+                    avg = float(matching.get("entry") or 0); s0 = str(matching.get("side") or "").upper()
+                    if float(matching.get("sl_pct_setting") or 0)>0:
+                        p=float(matching["sl_pct_setting"])/100; matching["stop_loss"]=avg*(1-p if s0=="LONG" else 1+p)
+                    if float(matching.get("tp1_pct_setting") or 0)>0:
+                        p=float(matching["tp1_pct_setting"])/100; matching["tp1"]=avg*(1+p if s0=="LONG" else 1-p)
+                    if float(matching.get("tp2_pct_setting") or 0)>0:
+                        p=float(matching["tp2_pct_setting"])/100; matching["tp2"]=avg*(1+p if s0=="LONG" else 1-p)
                 matching["current_price"] = price
                 if pending_side == "LONG":
                     matching["unrealized_pnl"] = round((price - matching["entry"]) * total_qty, 4)
@@ -650,8 +914,37 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
         if entry <= 0 or qty <= 0:
             continue
 
+        # Optional per-position DCA: adverse move from latest fill, bounded by count and optional range.
+        if t.get("advanced_dca_enabled") and not t.get("auto_trade") and int(t.get("dca_count") or 0) < int(t.get("dca_max_orders") or 3):
+            adds = int(t.get("dca_count") or 0); hist = t.get("dca_history") or []
+            anchor = float(hist[-1].get("price") or entry) if hist else entry
+            gap = max(0.001, min(float(t.get("dca_gap_pct") or 1.5), 20.0)) / 100.0
+            adverse = price <= anchor * (1-gap) if side == "LONG" else price >= anchor * (1+gap)
+            lower, upper = float(t.get("dca_lower_price") or 0), float(t.get("dca_upper_price") or 0)
+            in_range = (not lower or price >= lower) and (not upper or price <= upper)
+            base = float(t.get("auto_dca_base_usd") or t.get("notional") or 0)
+            add_notional = base * (max(1.0, min(float(t.get("dca_multiplier") or 1.5), 3.0)) ** adds)
+            add_margin = add_notional / max(1, int(t.get("leverage") or 1))
+            if adverse and in_range and add_notional > 0 and add_margin <= max(0.0, float(_account.get("balance") or 0)):
+                add_qty = add_notional / price; old_qty = float(t.get("qty") or 0); new_qty = old_qty + add_qty
+                old_entry = float(t.get("entry") or entry)
+                if new_qty > 0:
+                    t["entry"] = round((old_entry*old_qty + price*add_qty)/new_qty, 8); t["qty"] = round(new_qty, 8)
+                    t["notional"] = round(float(t.get("notional") or 0)+add_notional, 2); t["margin"] = round(float(t.get("margin") or 0)+add_margin, 2)
+                    t["dca_count"] = adds+1; t.setdefault("dca_history", []).append({"price":price,"qty":round(add_qty,8),"notional":round(add_notional,2),"margin":round(add_margin,2),"created_at":datetime.now(timezone.utc).isoformat(),"auto":True})
+                    entry = float(t["entry"]); qty = float(t["qty"])
+                    if float(t.get("sl_pct_setting") or 0)>0:
+                        p=float(t["sl_pct_setting"])/100; t["stop_loss"]=entry*(1-p if side=="LONG" else 1+p)
+                    if float(t.get("tp1_pct_setting") or 0)>0:
+                        p=float(t["tp1_pct_setting"])/100; t["tp1"]=entry*(1+p if side=="LONG" else 1-p)
+                    if float(t.get("tp2_pct_setting") or 0)>0:
+                        p=float(t["tp2_pct_setting"])/100; t["tp2"]=entry*(1+p if side=="LONG" else 1-p)
+                    print(f"[trade-dca] {t.get('symbol')} add {adds+1} @ {price}")
         callback = float(t.get("callback_rate") or t.get("trailing_pct") or 0)
         activation = float(t.get("trailing_activation_price") or 0)
+        if t.get("profit_lock_enabled") and float(t.get("profit_activation_pct") or 0)>0:
+            ap=float(t.get("profit_activation_pct") or 0.8)/100
+            activation=entry*(1+ap if side=="LONG" else 1-ap)
         active = bool(t.get("trailing_active"))
         if callback > 0:
             if not active:
@@ -709,6 +1002,7 @@ def _apply_trade_price(symbol: str, price: float) -> bool:
             _account["balance"] = round(float(_account.get("balance", 0)) + pnl, 2)
             _account["realized_pnl"] = round(float(_account.get("realized_pnl", 0)) + pnl, 2)
             t["realized_pnl"] = round(float(t.get("realized_pnl") or 0) + pnl, 4)
+            _freeze_trade_market_context(t)
             t.update({
                 "status": "CLOSED", "hit": trigger, "unrealized_pnl": 0.0,
                 "close_price": float(t.get("current_price") or t.get("entry") or 0),
@@ -850,7 +1144,7 @@ def price_monitor_loop():
 
 
 def daily_open_cache_loop():
-    """Refresh daily-open context off the request path so My Trades stays responsive."""
+    """Refresh rolling 24h ticker change off-request so My Trades stays responsive."""
     client = None
     while _monitor_running:
         try:
@@ -866,11 +1160,9 @@ def daily_open_cache_loop():
                     continue
                 try:
                     client = client or BinanceClient(futures=True)
-                    daily_df = client.fetch_ohlcv(symbol, timeframe="1d", limit=31)
-                    if daily_df is not None and len(daily_df):
-                        daily_open = float(daily_df["open"].iloc[-1])
-                        if daily_open > 0:
-                            _daily_open_cache[symbol] = {"open": daily_open, "ts": now}
+                    daily_change = client.get_24h_change_pct(symbol)
+                    if daily_change is not None:
+                        _daily_open_cache[symbol] = {"change": daily_change, "ts": now}
                 except Exception as exc:
                     print(f"[trade-daily-change] {symbol}: {exc}")
         except Exception as exc:
@@ -899,6 +1191,7 @@ def startup():
         print(f"[startup] preference/cooldown restore failed: {e}")
         _cache["auto_scan"] = True
     _monitor_running = True
+    start_liquidation_feed()
     threading.Thread(target=auto_scan_loop, daemon=True).start()
     threading.Thread(target=price_monitor_loop, daemon=True).start()
     threading.Thread(target=daily_open_cache_loop, daemon=True).start()
@@ -911,6 +1204,42 @@ def shutdown():
     _persist()
 
 
+@app.get("/api/market-structure/{symbol}")
+def api_market_structure(symbol: str):
+    """Refresh per-symbol market context at a bounded cadence for the live Signals view."""
+    clean = _market_symbol_key(symbol)
+    now = time_mod.monotonic()
+    cached = _market_structure_cache.get(clean) or {}
+    if cached and now - _market_structure_refresh_at.get(clean, 0.0) < 30.0:
+        return {"ok": True, "market_structure": cached, "cached": True}
+    client = BinanceClient(futures=True)
+    if client.rate_limited:
+        return {"ok": bool(cached), "market_structure": cached, "cached": True,
+                "warning": "Binance rate limit active; showing last available snapshot"}
+    derivatives = client.get_derivatives_context(clean)
+    book = client.get_order_book_context(clean)
+    crowd = client.get_market_structure_context(clean)
+    pressure = client.get_market_pressure_context(clean)
+    pressure["multi_exchange"] = get_multi_exchange_context(clean)
+    daily_context = client.get_daily_market_context(clean, client.get_current_price(clean))
+    snapshot = {
+        **book, **crowd, **daily_context,
+        "market_pressure": pressure,
+        "liquidations": get_liquidation_summary(clean),
+        "funding_rate": derivatives.get("funding_rate"),
+        "oi_change_1h_pct": derivatives.get("oi_change_pct"),
+        "open_interest": derivatives.get("open_interest"),
+        "open_interest_usd": derivatives.get("open_interest_usd"),
+        "oi_change_24h_pct": derivatives.get("oi_change_24h_pct"),
+        "oi_updated_at": derivatives.get("oi_updated_at"),
+        "mark_price": derivatives.get("mark_price"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _market_structure_cache[clean] = snapshot
+    _market_structure_refresh_at[clean] = now
+    return {"ok": True, "market_structure": snapshot, "cached": False}
+
+
 @app.get("/api/signals")
 async def api_signals(style: str = Query("all")):
     open_keys = {(t["symbol"], t["side"]) for t in _trades.values() if t.get("status") == "OPEN"}
@@ -918,6 +1247,9 @@ async def api_signals(style: str = Query("all")):
     for s in _cache["signals"]:
         s2 = dict(s)
         s2["already_added"] = (s["symbol"], s["side"]) in open_keys
+        s2["market_structure"] = dict(_market_structure_cache.get(_market_symbol_key(s2.get("symbol"))) or s2.get("market_structure") or {})
+        s2["market_structure"]["liquidations"] = get_liquidation_summary(s2.get("symbol"))
+        s2["price_precision"] = _symbol_price_precision.get(str(s2.get("symbol") or ""))
         if s2["symbol"] in _cache.get("prices", {}):
             s2["market_price"] = _cache["prices"][s2["symbol"]]
         if style != "all" and style not in (s2.get("styles") or []):
@@ -940,8 +1272,10 @@ async def get_auto_trade():
 @app.post("/api/auto-trade")
 async def set_auto_trade(body: Dict[str, Any]):
     try:
-        _bot_config.update({"enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
-        if _bot_config["trade_style"] not in ("scalp","day","swing","hybrid"): _bot_config["trade_style"] = "day"
+        _bot_config.update({"advanced_enabled": bool(body.get("advanced_enabled", False)), "advanced_sl_pct": max(0.0,min(float(body.get("advanced_sl_pct",0)),50.0)), "advanced_tp1_pct": max(0.0,min(float(body.get("advanced_tp1_pct",0)),100.0)), "advanced_tp2_pct": max(0.0,min(float(body.get("advanced_tp2_pct",0)),200.0)), "advanced_limit_offset_pct": max(0.0,min(float(body.get("advanced_limit_offset_pct",0)),20.0)), "advanced_profit_lock": bool(body.get("advanced_profit_lock",False)), "advanced_profit_activation_pct": max(0.1,min(float(body.get("advanced_profit_activation_pct",0.8)),50.0)), "advanced_profit_callback_pct": max(0.1,min(float(body.get("advanced_profit_callback_pct",0.5)),5.0)), "dca_range_min_pct": max(0.0,min(float(body.get("dca_range_min_pct",0)),50.0)), "dca_range_max_pct": max(0.0,min(float(body.get("dca_range_max_pct",0)),100.0)), "enabled": bool(body.get("enabled", False)), "symbols": str(body.get("symbols") or "").upper().replace(" ", "")[:500], "min_score": max(60,min(int(body.get("min_score",75)),100)), "min_quality": str(body.get("min_quality") or "A").upper(), "amount_usd": max(5.0,min(float(body.get("amount_usd",50)),1000000.0)), "max_open": max(1,min(int(body.get("max_open",2)),10)), "trailing_pct": max(0.0,min(float(body.get("trailing_pct",0.8)),5.0)), "exit_on_opposite": bool(body.get("exit_on_opposite",True)), "trade_style": str(body.get("trade_style") or "day").lower(), "cooldown_minutes": max(0,min(int(body.get("cooldown_minutes",30)),1440)), "max_symbol_trades_day": max(1,min(int(body.get("max_symbol_trades_day",3)),30)), "max_daily_loss_pct": max(0.0,min(float(body.get("max_daily_loss_pct",2.0)),20.0)), "min_rr": max(1.0,min(float(body.get("min_rr",1.5)),10.0)), "direction": str(body.get("direction") or "both").lower(), "dca_enabled": bool(body.get("dca_enabled", False)), "dca_gap_pct": max(0.1,min(float(body.get("dca_gap_pct",1.5)),20.0)), "dca_max_orders": max(1,min(int(body.get("dca_max_orders",3)),5)), "dca_multiplier": max(1.0,min(float(body.get("dca_multiplier",2.0)),3.0))})
+        if _bot_config["dca_range_max_pct"] and _bot_config["dca_range_max_pct"] < _bot_config["dca_range_min_pct"]:
+            return JSONResponse({"ok":False,"error":"DCA range maximum must be greater than minimum"},status_code=400)
+        if _bot_config["trade_style"] not in ("scalp","day","swing"): _bot_config["trade_style"] = "day"
         if _bot_config["min_quality"] not in ("B","A","A+"): _bot_config["min_quality"] = "A"
         if _bot_config["direction"] not in ("both","long","short"): _bot_config["direction"] = "both"
     except (TypeError,ValueError): return JSONResponse({"ok":False,"error":"Invalid Auto Trade settings"},status_code=400)
@@ -1023,9 +1357,26 @@ def analyze_one(symbol: str, style: str = Query("day")):
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
                 "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
     r["market_price"] = (r.get("mark_price") if selected_style == "hybrid" else None) or px or r["entry"]
-    daily_change_pct = _utc_daily_change_pct(data.get("1d"), px)
-    if daily_change_pct is not None:
-        r["daily_change_pct"] = daily_change_pct
+    r["timeframe_trends"] = _timeframe_trend_map(data)
+    r["price_precision"] = client.get_price_precision(sym)
+    if r["price_precision"] is not None:
+        _symbol_price_precision[sym] = r["price_precision"]
+    daily_context = client.get_daily_market_context(sym, px)
+    _daily_market_context_cache[_market_symbol_key(sym)] = daily_context
+    strategy_tf = {"scalp": "15m", "day": "1h", "swing": "4h", "hybrid": "1h"}[selected_style]
+    r.update(daily_context)
+    r.update(_nearest_support_resistance(data.get(strategy_tf), px or r.get("entry")))
+    r["market_structure"] = {**daily_context, **client.get_order_book_context(sym), **client.get_market_structure_context(sym), **client.get_derivatives_context(sym)}
+    r["market_structure"].update({k: r.get(k) for k in ("support", "resistance")})
+    r["market_structure"]["market_pressure"] = client.get_market_pressure_context(sym)
+    multi_exchange = get_multi_exchange_context(sym)
+    r["market_structure"]["market_pressure"]["multi_exchange"] = multi_exchange
+    r["market_structure"]["liquidations"] = get_liquidation_summary(sym)
+    _market_structure_cache[_market_symbol_key(sym)] = r["market_structure"]
+    # Match Binance USDⓈ-M rolling 24h ticker percentage, not the UTC 1d candle open.
+    change_24h_pct = client.get_24h_change_pct(sym)
+    if change_24h_pct is not None:
+        r["daily_change_pct"] = change_24h_pct
     r["max_leverage"] = lev
     r["liquidity"] = liq
     r["styles"] = [selected_style]
@@ -1105,15 +1456,23 @@ async def api_trades():
     _calc_equity()
     trades = [dict(trade) for trade in _trades.values()]
     for trade in trades:
+        symbol = _market_symbol_key(trade.get("symbol"))
+        trade["price_precision"] = _symbol_price_precision.get(symbol)
+        trade["market_structure"] = dict(_market_structure_cache.get(symbol) or {})
+        trade.update(_daily_market_context_cache.get(symbol) or {})
+        trade["market_structure"].update(_daily_market_context_cache.get(symbol) or {})
+        trade["market_structure"]["liquidations"] = get_liquidation_summary(symbol)
+        trade["opened_at"] = _trade_opened_at(trade)
+        trade["duration_seconds"] = _trade_duration_seconds(trade)
         if trade.get("status") != "OPEN":
             continue
-        symbol = str(trade.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
         cached = _daily_open_cache.get(symbol)
-        if cached:
-            daily_pct = _daily_change_from_open(cached.get("open"), trade.get("current_price"))
-            if daily_pct is not None:
-                trade["daily_change_pct"] = daily_pct
-    return {"trades": trades, "account": _account, "stats": _stats()}
+        if cached and cached.get("change") is not None:
+            trade["daily_change_pct"] = cached["change"]
+    return JSONResponse(
+        {"trades": trades, "account": _account, "stats": _stats()},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @app.get("/api/market-price/{symbol}")
@@ -1140,13 +1499,19 @@ def api_market_price(symbol: str):
 
 @app.post("/api/trade-preview")
 async def api_trade_preview(body: TradeCreate):
-    sym = body.symbol.upper().replace("/", "").replace(":USDT", "")
+    sym = body.symbol.upper().replace("/", "").split(":")[0].replace(":USDT", "")
     side = body.side.upper()
     if side not in ("LONG", "SHORT"):
         return JSONResponse({"ok": False, "error": "Choose LONG or SHORT"}, status_code=400)
     cached = _modal_price_cache.get(sym) or {}
     market = cached.get("price") or _cache.get("prices", {}).get(sym)
     entry = float((body.limit_price or body.entry) if body.order_type == "LIMIT" else (market or body.entry or 0))
+    if body.advanced_enabled and body.order_type == "LIMIT" and body.limit_offset_pct and market:
+        offset = min(float(body.limit_offset_pct), 20.0) / 100.0
+        entry = float(market) * (1-offset if side == "LONG" else 1+offset)
+    if body.advanced_enabled and body.sl_pct and body.sl_pct > 0:
+        p = min(float(body.sl_pct), 50.0) / 100.0
+        body.stop_loss = entry * (1-p if side == "LONG" else 1+p)
     if entry <= 0:
         return {"ok": False, "error": "Live price unavailable"}
     # Preview must be local and fast; verified leverage metadata is optional here.
@@ -1205,7 +1570,10 @@ async def api_alerts():
 
 @app.post("/api/trades")
 def create_trade(body: TradeCreate):
-    sym = body.symbol.upper().replace("/", "")
+    # Canonicalize symbols exactly like scanner/cache keys (e.g. BTC/USDT:USDT -> BTCUSDT).
+    sym = _market_symbol_key(body.symbol)
+    if not sym:
+        return JSONResponse({"ok": False, "error": "Invalid trade symbol"}, status_code=400)
     side = body.side.upper()
     order_type = (body.order_type or "MARKET").upper()
     if side not in ("LONG", "SHORT"): return JSONResponse({"ok": False, "error": "side must be LONG or SHORT"}, status_code=400)
@@ -1219,6 +1587,25 @@ def create_trade(body: TradeCreate):
         entry_price = (scale_low + scale_high) / 2
     else:
         entry_price = float((body.limit_price or body.entry) if order_type == "LIMIT" else body.entry)
+    modal_market = _modal_price_cache.get(sym) or {}
+    market_reference = float(modal_market.get("price") or _cache.get("prices", {}).get(sym) or body.entry or 0)
+    if body.advanced_enabled and order_type == "LIMIT" and body.limit_offset_pct and body.limit_offset_pct > 0 and market_reference > 0:
+        offset = min(float(body.limit_offset_pct), 20.0) / 100.0
+        entry_price = market_reference * (1 - offset if side == "LONG" else 1 + offset)
+    if body.advanced_enabled:
+        if body.sl_pct and body.sl_pct > 0:
+            p = min(float(body.sl_pct), 50.0) / 100.0
+            body.stop_loss = entry_price * (1 - p if side == "LONG" else 1 + p)
+        if body.tp1_pct and body.tp1_pct > 0:
+            p = min(float(body.tp1_pct), 99.0 if side == "SHORT" else 100.0) / 100.0
+            body.tp1 = entry_price * (1 + p if side == "LONG" else 1 - p)
+        if body.tp2_pct and body.tp2_pct > 0:
+            p = min(float(body.tp2_pct), 99.0 if side == "SHORT" else 200.0) / 100.0
+            body.tp2 = entry_price * (1 + p if side == "LONG" else 1 - p)
+    if body.advanced_enabled and body.dca_enabled:
+        lower, upper = float(body.dca_lower_price or 0), float(body.dca_upper_price or 0)
+        if lower and upper and upper <= lower:
+            return JSONResponse({"ok": False, "error": "DCA upper price must be greater than lower price"}, status_code=400)
     if entry_price <= 0: return JSONResponse({"ok": False, "error": "invalid entry price"}, status_code=400)
     # No Binance client/network I/O in the order-submit path.
     # The modal/scanner refreshes market prices in the background.
@@ -1283,10 +1670,26 @@ def create_trade(body: TradeCreate):
         "id": tid, "symbol": sym, "side": side, "position_mode": "HEDGE", "order_type": order_type, "order_price": entry_price if order_type == "LIMIT" else None, "limit_price": entry_price if order_type == "LIMIT" else None,
         "entry": entry_price, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
+        "trade_style": (str(body.trade_style).lower() if str(body.trade_style or "").lower() in ("scalp", "day", "swing") else "day"),
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
-        "trailing_pct": None, "callback_rate": None, "trailing_activation_price": None,
+        "trailing_pct": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "callback_rate": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "trailing_activation_price": None,
         "trailing_active": False, "peak_price": entry_price, "trough_price": entry_price,
+        "advanced_enabled": bool(body.advanced_enabled),
+        "dca_reference_entry": entry_price,
+        "advanced_dca_enabled": bool(body.advanced_enabled and body.dca_enabled),
+        "dca_gap_pct": max(0.1, min(float(body.dca_gap_pct or 1.5), 20.0)),
+        "dca_max_orders": max(1, min(int(body.dca_max_orders or 3), 5)),
+        "dca_multiplier": max(1.0, min(float(body.dca_multiplier or 1.5), 3.0)),
+        "dca_lower_price": float(body.dca_lower_price or 0) or None,
+        "dca_upper_price": float(body.dca_upper_price or 0) or None,
+        "auto_dca_base_usd": round(notional, 2),
+        "sl_pct_setting": min(50.0, float(body.sl_pct or 0)) if body.advanced_enabled else 0,
+        "tp1_pct_setting": min(99.0 if side == "SHORT" else 100.0, float(body.tp1_pct or 0)) if body.advanced_enabled else 0,
+        "tp2_pct_setting": min(99.0 if side == "SHORT" else 200.0, float(body.tp2_pct or 0)) if body.advanced_enabled else 0,
+        "profit_lock_enabled": bool(body.advanced_enabled and body.profit_lock_enabled),
+        "profit_activation_pct": max(0.1, min(float(body.profit_activation_pct or 0.8), 50.0)),
+        "profit_callback_pct": max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)),
         "scale_mode": scale_mode, "scale_orders": scale_orders,
         "dca_history": [{"price": entry_price, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()}],
         "note": body.note or "", "status": "OPEN", "hit": None, "needs_alert": False,
@@ -1364,6 +1767,21 @@ def create_trade(body: TradeCreate):
         existing_trade["margin"] = round(float(existing_trade.get("margin") or 0) + margin, 2)
         existing_trade["dca_count"] = int(existing_trade.get("dca_count") or 0) + 1
         existing_trade.setdefault("dca_history", []).append({"price": body.entry, "qty": round(qty, 8), "notional": round(notional, 2), "margin": round(margin, 2), "created_at": datetime.now(timezone.utc).isoformat()})
+        if body.advanced_enabled:
+            existing_trade.update({"advanced_enabled": True, "advanced_dca_enabled": bool(body.dca_enabled), "dca_gap_pct": max(0.1,min(float(body.dca_gap_pct or 1.5),20.0)), "dca_max_orders": max(1,min(int(body.dca_max_orders or 3),5)), "dca_multiplier": max(1.0,min(float(body.dca_multiplier or 1.5),3.0)), "dca_lower_price": float(body.dca_lower_price or 0) or None, "dca_upper_price": float(body.dca_upper_price or 0) or None, "auto_dca_base_usd": round(notional,2), "sl_pct_setting": min(50.0,float(body.sl_pct or 0)), "tp1_pct_setting": min(99.0 if side == "SHORT" else 100.0,float(body.tp1_pct or 0)), "tp2_pct_setting": min(99.0 if side == "SHORT" else 200.0,float(body.tp2_pct or 0)), "profit_lock_enabled": bool(body.profit_lock_enabled), "profit_activation_pct": float(body.profit_activation_pct or 0.8), "profit_callback_pct": float(body.profit_callback_pct or 0.5)})
+            if existing_trade["profit_lock_enabled"]:
+                existing_trade["callback_rate"] = existing_trade["profit_callback_pct"]
+                existing_trade["trailing_pct"] = existing_trade["profit_callback_pct"]
+                existing_trade["trailing_active"] = False
+                existing_trade["peak_price"] = float(existing_trade.get("current_price") or existing_trade.get("entry") or 0)
+                existing_trade["trough_price"] = existing_trade["peak_price"]
+            avg = float(existing_trade["entry"]); side_avg = str(existing_trade.get("side") or side).upper()
+            if existing_trade["sl_pct_setting"] > 0:
+                p = existing_trade["sl_pct_setting"]/100; existing_trade["stop_loss"] = avg*(1-p if side_avg=="LONG" else 1+p)
+            if existing_trade["tp1_pct_setting"] > 0:
+                p = existing_trade["tp1_pct_setting"]/100; existing_trade["tp1"] = avg*(1+p if side_avg=="LONG" else 1-p)
+            if existing_trade["tp2_pct_setting"] > 0:
+                p = existing_trade["tp2_pct_setting"]/100; existing_trade["tp2"] = avg*(1+p if side_avg=="LONG" else 1-p)
         current_mark = float(_cache.get("prices", {}).get(sym) or existing_trade.get("current_price") or entry_price)
         existing_trade["current_price"] = current_mark
         if side == "LONG":
@@ -1386,6 +1804,18 @@ def create_trade(body: TradeCreate):
     _calc_equity()
     db.save_trades_and_account([trade], _account)
     return {"ok": True, "trade": trade, "duplicate": False, "account": _account}
+
+
+@app.delete("/api/trades/pending")
+async def cancel_all_pending_trades():
+    canceled_at = datetime.now(timezone.utc).isoformat()
+    canceled = []
+    for trade in list(_trades.values()):
+        if trade.get("status") == "PENDING":
+            trade.update({"status": "CANCELED", "canceled_at": canceled_at})
+            db.save_trade(trade)
+            canceled.append(trade["id"])
+    return {"ok": True, "canceled": len(canceled), "ids": canceled}
 
 
 @app.delete("/api/trades/{tid}")
@@ -1467,6 +1897,15 @@ async def update_trade(tid: str, body: TradeUpdate):
         t["trough_price"] = float(t.get("current_price") or t.get("entry") or 0)
     if body.trailing_activation_price is not None:
         t["trailing_activation_price"] = max(0.0, float(body.trailing_activation_price)) or None
+    if body.profit_lock_enabled is not None:
+        t["profit_lock_enabled"] = bool(body.profit_lock_enabled)
+    if body.profit_activation_pct is not None:
+        t["profit_activation_pct"] = max(0.1, min(float(body.profit_activation_pct), 50.0))
+    if body.profit_callback_pct is not None:
+        t["profit_callback_pct"] = max(0.1, min(float(body.profit_callback_pct), 5.0))
+        t["callback_rate"] = t["profit_callback_pct"]
+        t["trailing_pct"] = t["profit_callback_pct"]
+        t["trailing_active"] = False
     _update_trade_liquidation_fields(t)
     db.save_trade(t)
     return {"ok": True, "trade": t}
@@ -1479,10 +1918,15 @@ async def close_trade(tid: str):
     t = _trades[tid]
     if t.get("status") != "OPEN":
         return {"ok": True, "trade": t}
+    symbol_key = str(t.get("symbol") or "").upper().replace("/", "").replace(":USDT", "")
+    daily_snapshot = _daily_open_cache.get(symbol_key) or {}
+    if daily_snapshot.get("change") is not None:
+        t["daily_change_pct"] = daily_snapshot["change"]
     pnl = t.get("unrealized_pnl") or 0.0
     _account["balance"] = round(_account["balance"] + pnl, 2)
     _account["realized_pnl"] = round(_account["realized_pnl"] + pnl, 2)
     total_realized = round(float(t.get("realized_pnl") or 0) + pnl, 2)
+    _freeze_trade_market_context(t)
     t.update({"status": "CLOSED", "needs_alert": False,
               "closed_at": datetime.now(timezone.utc).isoformat(),
               "close_price": float(t.get("current_price") or t.get("entry") or 0),
@@ -1513,7 +1957,15 @@ async def api_price_monitor():
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    return HTMLResponse(PAGE)
+    # Dashboard JavaScript is inline; prevent browsers/proxies serving stale UI.
+    return HTMLResponse(
+        PAGE,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 PAGE = r"""<!DOCTYPE html>
@@ -1549,6 +2001,12 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .filters button.on{color:var(--cyan);border-color:#164e63;background:#0b1c2e}
 .note{margin:0 12px 8px;padding:8px 10px;background:var(--card);border:1px solid var(--line);border-radius:9px;color:var(--mut);font-size:11px}
 .card{margin:0 10px 8px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;border-left:3px solid var(--line)}
+.trade-section{display:block;width:100%;margin:0 0 10px;padding:0;background:transparent;border:0;border-radius:0;box-sizing:border-box}
+.trade-section>summary{display:block;width:100%;box-sizing:border-box;cursor:pointer;list-style:none;margin:0 0 8px;padding:11px 12px;background:var(--card);border:1px solid var(--line);border-radius:10px;font-weight:800}
+.trade-section>summary::-webkit-details-marker{display:none}
+.trade-section>.card{display:block;width:100%;box-sizing:border-box;margin:0 0 8px}
+.trade-section>.history-trade{width:100%;box-sizing:border-box;margin:0;padding:12px 10px;border-bottom:1px solid var(--line)}
+.trade-section>.history-trade:last-child{border-bottom:0}
 .card.L{border-left-color:var(--gn)}.card.S{border-left-color:var(--rd)}.card.hit{border-left-color:var(--gd)}
 .head{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .side{font-size:11px;font-weight:800}.side.L{color:var(--gn)}.side.S{color:var(--rd)}
@@ -1558,6 +2016,12 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .tag.q{background:#0b3b2e;color:#6ee7b7}
 .tag.up{background:#064e3b;color:#6ee7b7}.tag.dn{background:#881337;color:#fecdd3}
 .sub{margin-top:5px;color:var(--mut);font-size:11px;line-height:1.4}
+.tf-strip{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:7px}
+.tf-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:#101a2b;font-size:10px;font-weight:800;white-space:nowrap}
+.tf-chip.up{color:var(--gn);border-color:#14543f;background:#09251e}.tf-chip.dn{color:var(--rd);border-color:#64263a;background:#2b101b}.tf-chip.side{color:var(--gd);border-color:#66501d;background:#251e0d}
+.market-summary{display:flex;flex-wrap:wrap;align-items:center;gap:5px 9px;margin-top:7px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:#080f1c;font-size:10px;line-height:1.5}
+.market-summary .ms-label{color:var(--mut);font-weight:800}.market-summary .open{color:var(--cyan);font-weight:800}.market-summary .high,.market-summary .support{color:var(--gn);font-weight:800}.market-summary .low,.market-summary .resistance{color:var(--rd);font-weight:800}.market-summary .up{color:var(--gn);font-weight:800}.market-summary .dn{color:var(--rd);font-weight:800}
+@media(max-width:360px){.market-summary{gap:4px 7px}}
 .vals{display:flex;flex-wrap:wrap;gap:12px 16px;margin-top:10px}
 .vals div em{display:block;font-style:normal;font-size:9px;color:var(--mut);text-transform:uppercase}
 .vals div strong{font-size:12px;font-weight:700}
@@ -1596,7 +2060,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 .modal .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .modal .btns{display:flex;gap:8px;margin-top:12px}
 .modal .btns .btn{flex:1;padding:12px}
- .hint{font-size:11px;color:var(--mut);margin-top:4px}.fund-tools{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.fund-tools label{display:block;color:var(--mut);font-size:11px;margin-bottom:6px}.fund-tools input{width:100%;padding:11px;border-radius:9px;background:#080e1a;border:1px solid var(--line);color:var(--text);font-size:14px}.fund-tools .actions{margin-top:8px}.share-bg{display:none;position:fixed;inset:0;background:#000b;z-index:120;align-items:center;justify-content:center;padding:14px}.share-modal{width:min(100%,480px);max-height:94vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.share-modal h3{font-size:15px;margin-bottom:10px}.share-preview{background:#070b14;border-radius:12px;padding:8px;text-align:center}.share-preview canvas{display:block;width:100%;height:auto;border-radius:8px}.share-modal .actions{display:flex;gap:7px;margin-top:10px}.share-modal .btn{flex:1}.history-trade{padding:12px 0;border-bottom:1px solid var(--line)}.history-trade:last-child{border-bottom:0}.history-trade .vals{margin-top:8px}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
+ .hint{font-size:11px;color:var(--mut);margin-top:4px}.fund-tools{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.fund-tools label{display:block;color:var(--mut);font-size:11px;margin-bottom:6px}.fund-tools input{width:100%;padding:11px;border-radius:9px;background:#080e1a;border:1px solid var(--line);color:var(--text);font-size:14px}.fund-tools .actions{margin-top:8px}.share-bg{display:none;position:fixed;inset:0;background:#000b;z-index:120;align-items:center;justify-content:center;padding:14px}.share-modal{width:min(100%,480px);max-height:94vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}.share-modal h3{font-size:15px;margin-bottom:10px}.share-preview{background:#070b14;border-radius:12px;padding:8px;text-align:center}.share-preview canvas{display:block;width:100%;height:auto;border-radius:8px}.share-modal .actions{display:flex;gap:7px;margin-top:10px}.share-modal .btn{flex:1}.history-trade{padding:12px 0;border-bottom:1px solid var(--line)}.history-trade:last-child{border-bottom:0}.history-trade .vals{margin-top:8px;column-gap:10px;row-gap:8px}.history-trade .vals .trade-time{min-width:0}.history-trade .vals .trade-time strong{font-size:12px;letter-spacing:0}.history-trade .vals>div:last-child{min-width:0;padding:0;border:0;border-radius:0;background:transparent}.history-trade .vals>div:last-child strong{color:var(--text)}.order-preview{margin-top:9px;padding:9px 10px;background:#080e1a;border:1px solid var(--line);border-radius:8px;color:var(--text);font-size:11px;font-weight:700;line-height:1.5;overflow-wrap:anywhere}.liq-preview{margin-top:6px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#080e1a;font-size:10px;line-height:1.4;color:var(--mut)}.scale-preview{margin-top:8px;border:1px solid var(--line);border-radius:9px;overflow:hidden}.scale-row{display:grid;grid-template-columns:30px repeat(4,minmax(0,1fr));gap:4px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:9px;overflow-wrap:anywhere}.scale-row:last-child{border:0}.scale-head{color:var(--cyan);font-weight:800;background:#101827}
 .sec{padding:10px 12px 4px;font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
 .mv{display:flex;gap:8px;overflow-x:auto;padding:0 12px 10px}
 .mv .i{min-width:108px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -1658,7 +2122,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="scalp"><span><b>Scalping</b><small>Short moves · 5m–15m</small></span></label>
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="day" checked><span><b>Day trade</b><small>Intraday · 15m–4h</small></span></label>
           <label class="bot-style"><input type="radio" name="botStyleChoice" value="swing"><span><b>Swing</b><small>Multi-session · 4h–1d</small></span></label>
-          <label class="bot-style"><input type="radio" name="botStyleChoice" value="hybrid"><span><b>Hybrid V5</b><small>Trend + intraday confirmation</small></span></label>
+          
         </div>
         <input type="hidden" id="botStyle" value="day">
         <div class="row2"><div><label>Trade direction</label><select id="botDirection"><option value="both">Long + Short</option><option value="long">Long only</option><option value="short">Short only</option></select></div><div><label>Minimum quality</label><select id="botQuality"><option>A+</option><option selected>A</option><option>B</option></select></div></div>
@@ -1669,10 +2133,19 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
         <label>Coin watchlist <small class="bot-help">Blank means all eligible coins</small></label><input id="botSymbols" placeholder="BTCUSDT, ETHUSDT, SOLUSDT">
       </div>
       <div class="bot-section">
-        <div class="bot-section-title"><span>03</span> DCA & Scaled Entry</div>
+        <div class="bot-section-title"><span>03</span> Advanced Option</div>
+        <label>Advanced settings <select id="botAdvanced"><option value="false">OFF</option><option value="true">ON</option></select></label>
+        <div id="botAdvancedFields" style="display:none">
+        <div class="row2"><div><label>SL % override (0 = signal)</label><input id="botAdvSL" type="number" min="0" max="50" step="0.1" value="0"></div><div><label>TP1 % override (0 = signal)</label><input id="botAdvTP1" type="number" min="0" max="100" step="0.1" value="0"></div></div>
+        <div class="row2"><div><label>TP2 % override (0 = signal)</label><input id="botAdvTP2" type="number" min="0" max="200" step="0.1" value="0"></div><div><label>Limit Entry Offset % (0 = market)</label><input id="botAdvOffset" type="number" min="0" max="20" step="0.1" value="0"></div></div>
+        <div class="row2"><div><label>Profit-lock activation %</label><input id="botAdvActivation" type="number" min="0.1" max="50" step="0.1" value="0.8"></div><div><label>Profit-lock callback %</label><input id="botAdvCallback" type="number" min="0.1" max="5" step="0.1" value="0.5"></div></div>
+        <label><input id="botAdvProfitLock" type="checkbox"> Enable profit-lock trailing</label>
+        <div class="bot-section-title" style="margin-top:14px">DCA & Scaled Entry</div>
         <div class="row2"><div><label>Auto DCA / Scale</label><select id="botDcaEnabled"><option value="false">OFF</option><option value="true">ON</option></select></div><div><label>Entry gap (%)</label><input id="botDcaGap" type="number" min="0.1" max="20" step="0.1" value="1.5"></div></div>
         <div class="row2"><div><label>Maximum add orders</label><input id="botDcaMax" type="number" min="1" max="5" value="3"></div><div><label>Next order multiplier</label><input id="botDcaMultiplier" type="number" min="1" max="3" step="0.1" value="2"></div></div>
+        <div class="row2"><div><label>DCA range from %</label><input id="botDcaMinPct" type="number" min="0" max="50" step="0.1" value="0"></div><div><label>DCA range up to % (0 = no cap)</label><input id="botDcaMaxPct" type="number" min="0" max="100" step="0.1" value="0"></div></div>
         <small class="bot-help">Adds to an existing bot position after each adverse price move by the configured gap. Adds are capped by order count and multiplier.</small>
+        </div>
       </div>
       <div class="bot-section">
         <div class="bot-section-title"><span>04</span> Position & limits</div>
@@ -1760,6 +2233,17 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><label>Upper Range Price</label><input type="number" id="m_scale_high" min="0" step="any" placeholder="Range high" oninput="updateOrderPreview()"></div>
     </div>
     </div>
+    <details class="trade-details" id="addAdvanced"><summary>Advanced Option</summary>
+      <label><input type="checkbox" id="m_adv_dca"> Enable DCA</label>
+      <div class="row2"><div><label>DCA gap %</label><input type="number" id="m_dca_gap" min="0.1" max="20" step="0.1" value="1.5"></div><div><label>Maximum DCA orders</label><input type="number" id="m_dca_max" min="1" max="5" value="3"></div></div>
+      <div class="row2"><div><label>DCA multiplier</label><input type="number" id="m_dca_mult" min="1" max="3" step="0.1" value="1.5"></div><div><label>Limit Entry Offset %</label><input type="number" id="m_limit_offset" min="0" max="20" step="0.1" placeholder="Optional"></div></div>
+      <div class="row2"><div><label>DCA lower price (optional)</label><input type="number" id="m_dca_low" min="0" step="any"></div><div><label>DCA upper price (optional)</label><input type="number" id="m_dca_high" min="0" step="any"></div></div>
+      <div class="row2"><div><label>SL % override</label><input type="number" id="m_sl_pct" min="0" max="50" step="0.1" placeholder="Optional"></div><div><label>TP1 % override</label><input type="number" id="m_tp1_pct" min="0" max="100" step="0.1" placeholder="Optional"></div></div>
+      <div class="row2"><div><label>TP2 % override</label><input type="number" id="m_tp2_pct" min="0" max="200" step="0.1" placeholder="Optional"></div><div><label>Profit-lock activation %</label><input type="number" id="m_profit_activation" min="0.1" max="50" step="0.1" value="0.8"></div></div>
+      <label>Profit-lock callback %</label><input type="number" id="m_profit_callback" min="0.1" max="5" step="0.1" value="0.5">
+      <label><input type="checkbox" id="m_profit_lock"> Enable profit-lock trailing</label>
+      <p class="hint">DCA adds exposure. Maximum orders and order size are capped; use conservative values.</p>
+    </details>
     <div id="order_preview" class="order-preview">Value 0 USDT · Margin 0 USDT · Qty 0.000000</div><div id="liq_preview" class="liq-preview" aria-live="polite">Add amount + SL for liquidation estimate.</div><div id="scale_preview" class="scale-preview" style="display:none"></div>
     
     <div class="btns">
@@ -1772,9 +2256,10 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
 
 <script>
 let soundOn=true, voiceOn=true, style='all', lastSig='', spokenAlerts=new Set(), pinManual=false, autoScan=true;
-async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score??75;botQuality.value=c.min_quality||'A';botStyle.value=c.trade_style||'day';document.querySelectorAll('input[name="botStyleChoice"]').forEach(x=>x.checked=x.value===botStyle.value);botDirection.value=c.direction||'both';botAmount.value=c.amount_usd??50;botMaxOpen.value=c.max_open??2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botDcaEnabled.value=String(!!c.dca_enabled);botDcaGap.value=c.dca_gap_pct??1.5;botDcaMax.value=c.dca_max_orders??3;botDcaMultiplier.value=c.dca_multiplier??2;botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';botState.style.color=c.enabled?'#53d5aa':'';}catch(e){}}
+async function loadBotSettings(){try{const d=await(await fetch('/api/auto-trade')).json(),c=d.config||{};botEnabled.value=String(!!c.enabled);botScore.value=c.min_score??75;botQuality.value=c.min_quality||'A';botStyle.value=['scalp','day','swing'].includes(c.trade_style)?c.trade_style:'day';document.querySelectorAll('input[name="botStyleChoice"]').forEach(x=>x.checked=x.value===botStyle.value);botDirection.value=c.direction||'both';botAmount.value=c.amount_usd??50;botMaxOpen.value=c.max_open??2;botTrail.value=c.trailing_pct??0.8;botMinRR.value=c.min_rr??1.5;botCooldown.value=c.cooldown_minutes??30;botMaxSymbolDay.value=c.max_symbol_trades_day??3;botDailyLoss.value=c.max_daily_loss_pct??2;botSymbols.value=c.symbols||'';botDcaEnabled.value=String(!!c.dca_enabled);botDcaGap.value=c.dca_gap_pct??1.5;botDcaMax.value=c.dca_max_orders??3;botDcaMultiplier.value=c.dca_multiplier??2;botDcaMinPct.value=c.dca_range_min_pct??0;botDcaMaxPct.value=c.dca_range_max_pct??0;botAdvanced.value=String(!!c.advanced_enabled);botAdvancedFields.style.display=c.advanced_enabled?'block':'none';botAdvSL.value=c.advanced_sl_pct??0;botAdvTP1.value=c.advanced_tp1_pct??0;botAdvTP2.value=c.advanced_tp2_pct??0;botAdvOffset.value=c.advanced_limit_offset_pct??0;botAdvActivation.value=c.advanced_profit_activation_pct??0.8;botAdvCallback.value=c.advanced_profit_callback_pct??0.5;botAdvProfitLock.checked=!!c.advanced_profit_lock;botOpposite.checked=c.exit_on_opposite!==false;botState.textContent=c.enabled?'ON':'OFF';botState.style.color=c.enabled?'#53d5aa':'';}catch(e){}}
 document.addEventListener('change',e=>{if(e.target.matches('input[name="botStyleChoice"]'))botStyle.value=e.target.value;});
-async function saveBotSettings(){const p={enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,trade_style:botStyle.value,direction:botDirection.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,min_rr:+botMinRR.value,cooldown_minutes:+botCooldown.value,max_symbol_trades_day:+botMaxSymbolDay.value,max_daily_loss_pct:+botDailyLoss.value,symbols:botSymbols.value,dca_enabled:botDcaEnabled.value==='true',dca_gap_pct:+botDcaGap.value,dca_max_orders:+botDcaMax.value,dca_multiplier:+botDcaMultiplier.value,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';botState.style.color=d.config.enabled?'#53d5aa':'';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
+document.getElementById('botAdvanced').addEventListener('change',()=>{botAdvancedFields.style.display=botAdvanced.value==='true'?'block':'none';});
+async function saveBotSettings(){const p={advanced_enabled:botAdvanced.value==='true',advanced_sl_pct:+botAdvSL.value,advanced_tp1_pct:+botAdvTP1.value,advanced_tp2_pct:+botAdvTP2.value,advanced_limit_offset_pct:+botAdvOffset.value,advanced_profit_lock:botAdvProfitLock.checked,advanced_profit_activation_pct:+botAdvActivation.value,advanced_profit_callback_pct:+botAdvCallback.value,enabled:botEnabled.value==='true',min_score:+botScore.value,min_quality:botQuality.value,trade_style:botStyle.value,direction:botDirection.value,amount_usd:+botAmount.value,max_open:+botMaxOpen.value,trailing_pct:+botTrail.value,min_rr:+botMinRR.value,cooldown_minutes:+botCooldown.value,max_symbol_trades_day:+botMaxSymbolDay.value,max_daily_loss_pct:+botDailyLoss.value,symbols:botSymbols.value,dca_enabled:botDcaEnabled.value==='true',dca_gap_pct:+botDcaGap.value,dca_max_orders:+botDcaMax.value,dca_multiplier:+botDcaMultiplier.value,dca_range_min_pct:+botDcaMinPct.value||0,dca_range_max_pct:+botDcaMaxPct.value||0,exit_on_opposite:botOpposite.checked};try{const r=await fetch('/api/auto-trade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Bot settings failed');return;}botState.textContent=d.config.enabled?'ON':'OFF';botState.style.color=d.config.enabled?'#53d5aa':'';toast(d.config.enabled?'Auto Trade enabled · paper mode':'Auto Trade settings saved');}catch(e){toast('Could not save Auto Trade settings');}}
 if('Notification'in window && Notification.permission==='default') Notification.requestPermission();
 
 function speak(text){if(!voiceOn||!('speechSynthesis'in window))return;try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.rate=1;u.lang='en-US';speechSynthesis.speak(u);}catch(e){}}
@@ -1785,7 +2270,43 @@ async function toggleAuto(){autoScan=!autoScan;await fetch('/api/auto-scan?enabl
 function showTab(n){['signals','trades','movers','account'].forEach(x=>{const el=document.getElementById('tab-'+x);if(el)el.style.display=x===n?'block':'none';});document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===n));if(n==='trades')loadTrades();if(n==='movers')loadMovers();if(n==='account')loadAccount();}
 function setStyle(s){style=s;pinManual=false;document.querySelectorAll('.filters button').forEach(b=>b.classList.toggle('on',b.dataset.s===s));loadSignals();}
 function fmt(n){return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
-function fmtPrice(n){const v=Number(n);if(!Number.isFinite(v))return '—';return v.toFixed(8).replace(/0+$/,'').replace(/\.$/,'');}
+function fmtPrice(n,precision){const v=Number(n);if(!Number.isFinite(v))return '—';const p=precision!=null&&Number.isInteger(Number(precision))?Math.max(0,Math.min(Number(precision),12)):8;return p===0?v.toFixed(0):v.toFixed(p).replace(/0+$/,'').replace(/\.$/,'');}
+function fmtSymbolPrice(symbol,n,precision){return fmtPrice(n,precision);}
+function durationShort(start,end,seconds){let s=Number.isFinite(Number(seconds))&&seconds!=null?Math.max(0,Math.floor(Number(seconds))):null;if(s===null){const a=Date.parse(start||''),b=Date.parse(end||'');if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)return '—';s=Math.floor((b-a)/1000);}const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);s%=3600;const m=Math.floor(s/60);s%=60;return [[d,'D'],[h,'H'],[m,'M'],[s,'S']].filter(x=>x[0]>0).map(x=>x[0]+x[1]).join(' ')||'0S';}
+function marketStructureHTML(m,p){
+ if(!m)return '';
+ const pressure=m.market_pressure||{},tfs=pressure.timeframes||{},multi=pressure.multi_exchange||{};
+ const localLiq=(m.liquidations||{}).timeframes||{},ml=multi.marketlight||{},remoteLiq=ml.liquidations||{};
+ const oiUsd=m.open_interest_usd??ml.open_interest_usd,oi24h=m.oi_change_24h_pct??ml.oi_change_24h_pct;
+ const labels=['5m','15m','1h','4h','1d'];
+ const fmt=(v,d=1)=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d);
+ const compact=v=>{if(v==null||!Number.isFinite(Number(v)))return '—';const n=Number(v),a=Math.abs(n);return a>=1e9?(n/1e9).toFixed(1)+'B':a>=1e6?(n/1e6).toFixed(1)+'M':a>=1e3?(n/1e3).toFixed(1)+'K':n.toFixed(0);};
+ const cell=tf=>{const x=tfs[tf]||{},buy=Number(x.buy_usdt),sell=Number(x.sell_usdt),long=x.long_pct,short=x.short_pct;const bc=Number.isFinite(buy)&&Number.isFinite(sell)?(buy>=sell?'var(--gn)':'var(--rd)'):'var(--text)',sc=Number.isFinite(buy)&&Number.isFinite(sell)?(sell>=buy?'var(--rd)':'var(--gn)'):'var(--text)';const flow=(v,pct)=>v==null||!Number.isFinite(Number(v))?'—':compact(v)+(pct!=null?' '+fmt(pct)+'%':'');return '<tr><td style="font-weight:800;text-align:left;padding:2px 1px">'+tf+'</td><td style="text-align:left;color:var(--gn);font-weight:800;padding:2px 0">'+(long==null?'—':fmt(long)+'%')+'</td><td style="text-align:left;color:var(--rd);font-weight:800;padding:2px 0">'+(short==null?'—':fmt(short)+'%')+'</td><td style="padding:2px 0;white-space:nowrap;font-size:9px"><div style="display:grid;grid-template-columns:1fr auto 1fr;text-align:center;gap:2px"><span style="color:'+bc+';font-weight:700">'+flow(x.buy_usdt,x.buy_pct)+'</span><span style="opacity:.5">/</span><span style="color:'+sc+';font-weight:700">'+flow(x.sell_usdt,x.sell_pct)+'</span></div></td><td style="text-align:right;font-weight:800;color:'+bc+';padding:2px 1px">'+compact(x.total_volume_usdt)+'</td></tr>';};
+ const hasRows=labels.some(tf=>tfs[tf]&&Object.values(tfs[tf]).some(v=>v!=null));
+ const liqRow=tf=>{const remote=remoteLiq[tf]||{},local=localLiq[tf]||{},hasRemote=remote.long_usdt!=null||remote.short_usdt!=null,localReady=!!(m.liquidations&&m.liquidations.connected&&m.liquidations.collected_since),x=hasRemote?remote:(localReady?local:{});return '<span style="white-space:nowrap"><b>'+tf.toUpperCase()+'</b> <span style="color:var(--gn)">L '+compact(x.long_usdt)+'</span> / <span style="color:var(--rd)">S '+compact(x.short_usdt)+'</span></span>';};
+ const box='margin-top:4px;padding:4px 4px;border:1px solid var(--bd,#263449);border-radius:7px;font-size:9px;line-height:1.25;min-width:0;width:100%;max-width:100%;box-sizing:border-box;overflow:hidden';
+ const oiColor='var(--cyan)';
+ const book=multi.book_imbalance_pct,bookColor=book==null?'var(--mut)':Number(book)>0?'var(--gn)':Number(book)<0?'var(--rd)':'var(--mut)';
+ return '<div class="market-pressure" style="'+box+'"><b style="font-size:10px;letter-spacing:.04em">MARKET STRUCTURE</b>'+
+ '<div style="width:100%;min-width:0;overflow:hidden"><table style="width:100%;min-width:0;table-layout:fixed;border-collapse:collapse;margin-top:2px;font-size:10px"><colgroup><col style="width:9%"><col style="width:15%"><col style="width:16%"><col style="width:40%"><col style="width:20%"></colgroup><thead><tr style="color:var(--mut);white-space:nowrap"><th style="text-align:left;padding:2px 1px;white-space:nowrap">TF</th><th style="text-align:left;padding:2px 0;white-space:nowrap">LONG %</th><th style="text-align:left;padding:2px 0;white-space:nowrap">SHORT %</th><th style="padding:2px 0;white-space:nowrap"><div style="display:grid;grid-template-columns:1fr auto 1fr;text-align:center;gap:2px"><b style="color:var(--gn)">BUY</b><span></span><b style="color:var(--rd)">SELL</b></div></th><th style="text-align:right;padding:2px 1px;white-space:nowrap">VOL</th></tr></thead><tbody>'+labels.map(cell).join('')+'</tbody></table></div>'+
+ '<div style="display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;margin-top:7px;padding-top:6px;border-top:1px solid var(--bd,#263449)"><b>LIQ</b>'+['1h','4h','1d'].map(liqRow).join('')+'</div>'+
+ '<div style="display:flex;gap:5px 12px;flex-wrap:wrap;margin-top:6px;padding-top:5px;border-top:1px solid var(--bd,#263449);font-size:10px"><span>OI <b style="color:var(--text)">'+compact(oiUsd)+' USDT</b></span><span>OI 24H <b style="color:'+oiColor+'">'+(oi24h==null?'—':(Number(oi24h)>0?'+':'')+fmt(oi24h)+'%')+'</b></span><span>Book <b style="color:'+bookColor+'">'+(book==null?'—':(Number(book)>0?'+':'')+fmt(book)+'%')+'</b></span></div>'+
+ (hasRows?'':'<div style="opacity:.7;margin-top:4px">No market data yet</div>')+
+ '</div>';
+}
+function timeframeHTML(s){
+ const trends=s.timeframe_trends||{},items=['15m','1h','4h','1d'].filter(tf=>trends[tf]).map(tf=>({label:tf.toUpperCase(),trend:trends[tf]}));
+ const bias=v=>{const x=String(v||'').toLowerCase();return x==='bull'?'Bull':x==='bear'?'Bear':x?x[0].toUpperCase()+x.slice(1):'—';};
+ const cls=v=>String(v||'').toLowerCase()==='bull'?'up':String(v||'').toLowerCase()==='bear'?'dn':'side';
+ const htf='<span class="tf-chip '+(String(s.bias_1d).toLowerCase()==='bear'?'dn':String(s.bias_1d).toLowerCase()==='bull'?'up':'side')+'">HTF '+bias(s.bias_1d)+'/'+bias(s.bias_4h)+'</span>';
+ const entry=s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||[s.style||'day'])[0]).toLowerCase()]||'15m');
+ return '<div class="tf-strip">'+(items.map(x=>'<span class="tf-chip '+(x.trend==='UP'?'up':x.trend==='DOWN'?'dn':'side')+'">'+x.label+' '+x.trend+'</span>').join('')||'<span class="tf-chip side">TF —</span>')+htf+'</div>';
+}
+function marketSummaryHTML(t){
+ const m=t.market_structure||t,price=(v)=>v==null?'—':fmtSymbolPrice(t.symbol,v,t.price_precision);
+ const pct=(v)=>'<span class="'+(Number(v)>=0?'up':'dn')+'">'+(v==null?'—':(Number(v)>0?'+':'')+fmt(v)+'%')+'</span>';
+ return '<div class="market-summary"><span class="ms-label">24H</span><span>O: <b class="open">'+price(t.daily_open)+'</b></span><span>H: <b class="high">'+price(t.daily_high)+'</b></span><span>L: <b class="low">'+price(t.daily_low)+'</b></span><span>7D '+pct(t.change_7d_pct)+'</span><span>30D '+pct(t.change_30d_pct)+'</span><span>1Y '+pct(t.change_1y_pct)+'</span><span>S: <b class="support">'+price(m.support)+'</b></span><span>R: <b class="resistance">'+price(m.resistance)+'</b></span></div>';
+}
 function setAcc(a){if(!a)return;sBal.textContent='$'+fmt(a.balance);sEq.textContent='$'+fmt(a.equity);sReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);sReal.className=a.realized_pnl>=0?'up':'dn';if(window.aStart){aStart.textContent='$'+fmt(a.start_balance);aBal.textContent='$'+fmt(a.balance);aEq.textContent='$'+fmt(a.equity);aReal.textContent=(a.realized_pnl>=0?'+':'')+'$'+fmt(a.realized_pnl);}}
 function renderStats(st,el){if(!st||!el)return;el.innerHTML=`
   <div class="metric"><label>Trades</label><b>${st.total_trades||0}</b></div>
@@ -1864,27 +2385,34 @@ function toggleChart(id,sym){
 }
 function cardHTML(s){
   const L=s.side==='LONG';const mp=s.market_price??s.entry;const lev=s.max_leverage;const cid='ch_'+s.symbol+'_'+(s.style||'day');
-  const btn=`<button class="btn good" onclick='openModal(${JSON.stringify(s)})'>Add Trade</button>`;
+  // Keep signal payload out of inline HTML/JS: reasons or setup text may contain apostrophes.
+  window._signalCache=window._signalCache||Object.create(null);
+  window._signalCache[String(s.symbol)+'|'+String(s.side)]=s;
+  const btn=`<button class="btn good" onclick="openSignalTrade('${String(s.symbol)}','${String(s.side)}')">Add Trade</button>`;
   const v5Details=s.v5_score_breakdown?'<div class="sub">V5 Score · '+Object.entries(s.v5_score_breakdown).map(([k,v])=>k.replaceAll('_',' ')+' '+v.points+'/'+v.weight).join(' · ')+'</div>':'';
   const v5Structure=s.v5_structure?`<div class="sub">Structure · ${s.v5_structure.bias||'neutral'} · BOS ${s.v5_structure.bullish_bos?'↑':s.v5_structure.bearish_bos?'↓':'—'} · Sweep ${s.v5_structure.bullish_sweep?'bullish':s.v5_structure.bearish_sweep?'bearish':'—'} · Swing ${s.v5_structure.higher_highs&&s.v5_structure.higher_lows?'HH/HL':s.v5_structure.lower_highs&&s.v5_structure.lower_lows?'LH/LL':'mixed'}</div>`:'';
   return `<article class="card ${L?'L':'S'}">
     <div class="head"><div><span class="side ${L?'L':'S'}">${s.side}</span><span class="sym">${s.symbol}</span>
-      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span><span class="tag ${(Number(s.daily_change_pct)||0)>=0?'up':'dn'}">${s.daily_change_pct==null?'—':(Number(s.daily_change_pct)>=0?'+':'')+Number(s.daily_change_pct).toFixed(2)+'% 1D'}</span></div>
+      <span class="tag q">${s.quality||'B'}</span><span class="tag">${lev?lev+'x max':'20x max'}</span><span class="tag ${(Number(s.daily_change_pct)||0)>=0?'up':'dn'}">${s.daily_change_pct==null?'—':(Number(s.daily_change_pct)>=0?'+':'')+Number(s.daily_change_pct).toFixed(2)+'% 24H'}</span></div>
       <div class="score">${s.score}</div></div>
-    <div class="sub">${s.setup||''} · ${(s.styles||[]).join('/')} · ${s.timeframe||''} · HTF ${s.bias_1d||'—'}/${s.bias_4h||'—'} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
+      <div class="sub">${s.setup||''} · ${(s.styles||[]).map(x=>({scalp:'Scalp',day:'Day',swing:'Swing',hybrid:'Hybrid'}[String(x).toLowerCase()]||String(x))).join('/')} · Entry ${s.entry_timeframe||({'scalp':'5m','day':'15m','swing':'1h','hybrid':'15m'}[String((s.styles||['day'])[0]).toLowerCase()]||'15m')} · ADX ${s.adx??'—'} · RSI ${s.rsi??'—'}</div>
+      ${timeframeHTML(s)}
+      ${marketSummaryHTML(s)}
     <div class="vals">
-      <div><em>Entry</em><strong>${s.entry}</strong></div>
-      <div><em>Market</em><strong>${mp}</strong></div>
-      <div><em>SL</em><strong>${s.stop_loss}</strong></div>
-      <div><em>TP1</em><strong>${s.tp1}</strong></div>
-      <div><em>TP2</em><strong>${s.tp2}</strong></div>
+      <div><em>Entry</em><strong>${fmtSymbolPrice(s.symbol,s.entry,s.price_precision)}</strong></div>
+      <div><em>Market</em><strong>${fmtSymbolPrice(s.symbol,mp,s.price_precision)}</strong></div>
+      <div><em>SL</em><strong>${fmtSymbolPrice(s.symbol,s.stop_loss,s.price_precision)}</strong></div>
+      <div><em>TP1</em><strong>${fmtSymbolPrice(s.symbol,s.tp1,s.price_precision)}</strong></div>
+      <div><em>TP2</em><strong>${fmtSymbolPrice(s.symbol,s.tp2,s.price_precision)}</strong></div>
       <div><em>TP1 RR</em><strong>1:${s.rr}</strong></div>
       <div><em>TP2 RR</em><strong>1:${(s.rr_tp2??'—')}</strong></div>
+      <div><em>SL %</em><strong>${s.risk_pct==null?'—':fmt(s.risk_pct)+'%'}</strong></div>
+      <div><em>TP1 %</em><strong>${s.tp1_pct==null?'—':fmt(s.tp1_pct)+'%'}</strong></div>
+      <div><em>TP2 %</em><strong>${s.tp2_pct==null?'—':fmt(s.tp2_pct)+'%'}</strong></div>
     </div>
-    <div class="sub" style="margin-top:8px">${s.summary||''}</div>
     ${v5Details}
     ${v5Structure}
-    <div class="sub">BTC ${s.market_regime||'—'} · OI 1h ${s.oi_change_1h_pct==null?'—':s.oi_change_1h_pct+'%'} · Book ${s.orderbook_imbalance_pct==null?'—':s.orderbook_imbalance_pct+'%'} · Spread ${s.spread_pct==null?'—':s.spread_pct+'%'}</div>
+    <div id="ms_${cid}">${marketStructureHTML(s.market_structure,s.price_precision)}</div>
     <div class="sub">${(s.reasons||[]).slice(0,4).join(' · ')}</div>
     <div class="actions">${btn}<button class="btn dim" onclick="toggleChart('${cid}','${s.symbol}')">Chart</button></div>
     <div class="chartbox" id="${cid}"></div></article>`;
@@ -1904,6 +2432,7 @@ async function loadSignals(){
     if(lastSig&&h!==lastSig){beep(2);const neu=d.signals.filter(s=>!lastSig.includes(s.symbol+s.side));if(neu.length)speak(neu.slice(0,3).map(s=>`${s.side} ${s.symbol.replace('USDT','')}`).join(', '));}
     lastSig=h;
     list.innerHTML=d.signals.map(cardHTML).join('');
+    refreshSignalMarketStructures(d.signals);
   }catch(e){status.textContent='Load failed';}
 }
 function runScan(){pinManual=false;toast('Scan started');fetch('/scan?top=26').then(()=>setTimeout(loadSignals,3000));}
@@ -1919,19 +2448,39 @@ async function analyzeManual(){
   list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
 }
+async function refreshSignalMarketStructures(signals){
+  for(const s of (signals||[]).slice(0,3)){
+    const cid='ch_'+s.symbol+'_'+(s.style||'day');
+    const target=document.getElementById('ms_'+cid);
+    if(!target)continue;
+    try{
+      const response=await fetch('/api/market-structure/'+encodeURIComponent(s.symbol));
+      if(!response.ok)continue;
+      const data=await response.json();
+      if(data.ok&&data.market_structure)target.innerHTML=marketStructureHTML(data.market_structure,s.price_precision);
+    }catch(e){}
+  }
+}
+function openSignalTrade(symbol,side){
+  const signal=window._signalCache&&window._signalCache[String(symbol)+'|'+String(side)];
+  if(!signal){toast('Signal details expired. Refresh signals and try again.',5000);return;}
+  openModal(signal);
+}
 function openModal(s){
+  window._selectedTradeStrategy=(style!=='all'?style:((s.styles||[]).find(x=>['scalp','day','swing'].includes(x))||'day'));
   mTitle.textContent=s.symbol;
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
   m_entry.value=s.market_price||s.entry; m_mkt.value=s.market_price||s.entry;
   m_sl.value=s.stop_loss; m_tp1.value=s.tp1; m_tp2.value=s.tp2||'';
-  m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';
+  m_scale_low.value='';m_scale_high.value='';document.getElementById('scaleRangeFields').style.display='none';document.getElementById('addAdvanced').open=false;['m_adv_dca','m_profit_lock'].forEach(id=>document.getElementById(id).checked=false);['m_dca_gap','m_dca_max','m_dca_mult','m_limit_offset','m_dca_low','m_dca_high','m_sl_pct','m_tp1_pct','m_tp2_pct'].forEach(id=>document.getElementById(id).value='');m_profit_activation.value='0.8';m_profit_callback.value='0.5';
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
 function closeModal(){modalBg.style.display='none';}
 async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
 async function submitTrade(){
-  const submitBtn=document.querySelector('#modalBg .btn.good');
+  const submitBtn=document.querySelector('#modalBg .btns .btn.good');
+  if(!submitBtn){toast('Open Trade button not found. Refresh the page and try again.',5000);return;}
   if(submitBtn.disabled)return;
   const mode=m_mode.value,typ=actualOrderType();
   let px=typ==='MARKET'?(+m_mkt.value||+m_entry.value):(+m_entry.value);
@@ -1942,7 +2491,10 @@ async function submitTrade(){
   if(!(size>0)){toast('Enter a valid order amount');return;}
   if(!(+m_sl.value>0)){toast('Enter a valid Stop Loss');return;}
   if(!(+m_tp1.value>0)){toast('Enter a valid TP1');return;}
-  const body={symbol:m_symbol.value,side:m_side.value,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null};
+  const adv=document.getElementById('addAdvanced').open,offset=adv?(+m_limit_offset.value||0):0;
+  if(offset>0&&typ!=='LIMIT'){toast('Choose Limit order to use Limit Entry Offset');return;}
+  if(offset>0&&m_scale.value){toast('Limit offset cannot be combined with scaled entry');return;}
+  const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null,advanced_enabled:adv,dca_enabled:adv&&m_adv_dca.checked,dca_gap_pct:+m_dca_gap.value||1.5,dca_max_orders:+m_dca_max.value||3,dca_multiplier:+m_dca_mult.value||1.5,dca_lower_price:+m_dca_low.value||null,dca_upper_price:+m_dca_high.value||null,limit_offset_pct:offset,sl_pct:adv?(+m_sl_pct.value||null):null,tp1_pct:adv?(+m_tp1_pct.value||null):null,tp2_pct:adv?(+m_tp2_pct.value||null):null,profit_lock_enabled:adv&&m_profit_lock.checked,profit_activation_pct:+m_profit_activation.value||0.8,profit_callback_pct:+m_profit_callback.value||0.5};
   if(mode==='amount')body.amount_usd=+m_amount.value;
   if(mode==='margin')body.margin_usd=+m_margin.value;
   if(mode==='risk')body.risk_pct=+m_risk.value||1;
@@ -1956,7 +2508,7 @@ async function submitTrade(){
   try{
     const response=await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await response.json();
-    if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Already open':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');setAcc(d.account);pinManual=false;showTab('trades');loadTrades();loadSignals();}
+    if(response.ok&&d.ok){closeModal();toast(d.pending?'Limit order placed':(d.auto_dca?'Auto DCA added':(d.duplicate?'Position updated':'Trade opened')));speak(m_symbol.value.replace('USDT','')+' opened');if(d.account)setAcc(d.account);pinManual=false;showTab('trades');await loadTrades();loadSignals();}
     else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed · HTTP '+response.status),5000);}
   }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
   finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
@@ -1965,7 +2517,7 @@ async function loadTrades(){
   if(window._loadingTrades)return;window._loadingTrades=true;
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),8000);
-  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
+  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;const openExpanded=document.getElementById('openTradesDetails')?.open??true;const closedExpanded=document.getElementById('closedTradesDetails')?.open??false;
   const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
   if(!response.ok)throw new Error('Trade list HTTP '+response.status);
   const d=await response.json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
@@ -1978,26 +2530,29 @@ async function loadTrades(){
   const pending=(d.trades||[]).filter(t=>t.status==='PENDING');
   const closed=(d.trades||[]).filter(t=>t.status==='CLOSED');
   let h='';
-  if(pending.length){h+='<details id="pendingOrdersDetails" class="card" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') · Total $'+fmt(pending.reduce((sum,t)=>sum+(Number(t.notional)||0),0))+' USDT</summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtPrice(t.limit_price)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
+  if(pending.length){h+='<details id="pendingOrdersDetails" class="trade-section" '+(pendingExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Pending Orders ('+pending.length+') <button class="btn bad" style="float:right" onclick="cancelAllPending(event)">Cancel All</button></summary>';h+=pending.map(t=>`<div class="list-row"><span><b class="side ${t.side==='LONG'?'L':'S'}">${t.side}</b> ${t.symbol} · LIMIT ${fmtSymbolPrice(t.symbol,t.limit_price,t.price_precision)} · ${fmt(t.notional)} · Qty ${t.qty} · ${t.leverage}x</span><button class="btn dim" onclick="cancelPending('${t.id}')">Cancel</button></div>`).join('');h+='</details>';}
   window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
-  if(open.length){h+='<div class="sec">Open</div>';h+=open.map(t=>{
+  if(open.length){h+='<details id="openTradesDetails" class="trade-section" '+(openExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Running Trades ('+open.length+')</summary>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
     return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
-        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span>
-        <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'% 1D'}</span>
+        <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span><span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span>
+        <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'% 24H'}</span>
         ${t.auto_trade?'<span class="tag" style="background:#164e3b;color:#6ee7b7">BOT</span>':''}
         ${t.hit?`<span class="tag" style="background:#fbbf24;color:#111">${t.hit}</span>`:''}
         ${(t.dca_count||0)?`<span class="tag">DCA ${t.dca_count}</span>`:''}</div>
         <div class="score" style="color:${up?'var(--gn)':'var(--rd)'}">${up?'+':''}$${fmt(t.unrealized_pnl||0)}</div></div>
+${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8px;margin:8px 0;border-radius:8px">⚠ '+t.analysis_alert+'</div>':''}
+      ${t.trailing_recommendation?'<div class="hint" style="border:1px solid #22d3ee;padding:8px;margin:8px 0;border-radius:8px">Suggested trailing: activate at +'+t.trailing_recommendation.activation_profit_pct+'% profit · callback '+t.trailing_recommendation.callback_pct+'% <button class="btn dim" onclick="applySuggestedTrail(\''+t.id+'\','+t.trailing_recommendation.activation_profit_pct+','+t.trailing_recommendation.callback_pct+')">Apply</button></div>':''}
+      ${marketSummaryHTML(t)}
       <div class="vals">
-        <div><em>Average Entry</em><strong>${fmtPrice(t.entry)}</strong></div>
-        <div><em>Mark Price</em><strong>${t.current_price??'—'}</strong></div>
+        <div><em>Average Entry</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div>
+        <div><em>Mark Price</em><strong>${t.current_price==null?'—':fmtSymbolPrice(t.symbol,t.current_price,t.price_precision)}</strong></div>
         <div><em>Position Value</em><strong>${fmt((t.current_price||t.entry)*(t.qty||0))}</strong></div>
-<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmt(t.liquidation_price):"—"}</strong></div>
-        <div><em>SL</em><strong>${t.stop_loss}</strong></div>
-        <div><em>TP1</em><strong>${t.tp1}</strong></div>
+<div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmtSymbolPrice(t.symbol,t.liquidation_price,t.price_precision):"—"}</strong></div>
+        <div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
+        <div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
                 <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
@@ -2005,7 +2560,9 @@ async function loadTrades(){
         <div><em>Liq. Distance</em><strong>${t.liquidation_distance_pct==null?"—":fmt(t.liquidation_distance_pct)+"%"}</strong></div>
 
         <div><em>Trail</em><strong>${trail}${t.trailing_active?" · ACTIVE":""}</strong></div>
+        <div class="trade-time"><em>Opened</em><strong>${(t.opened_at||t.filled_at||t.created_at)?new Date(t.opened_at||t.filled_at||t.created_at).toLocaleString():'—'}</strong></div>
       </div>
+      ${marketStructureHTML(t.market_structure,t.price_precision)}
       <div class="actions">
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
         <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
@@ -2013,18 +2570,22 @@ async function loadTrades(){
         <button class="btn dim" onclick="shareTrade('${t.id}')">Share</button>
         <button class="btn dim" onclick="toggleChart('ct_${t.id}','${t.symbol}')">Chart</button>
       </div>
-      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');}
-  if(closed.length){h+='<div class="sec">Closed</div><div class="card">';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
+      <div class="chartbox" id="ct_${t.id}"></div></article>`;}).join('');h+='</details>';}
+  if(closed.length){h+='<details id="closedTradesDetails" class="trade-section" '+(closedExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Closed Trade History ('+closed.length+')</summary>';h+=closed.slice().sort((a,b)=>String(b.closed_at||'').localeCompare(String(a.closed_at||''))).slice(0,50).map(t=>{
     const pnl=Number(t.realized_pnl)||0,exit=Number(t.close_price)||Number(t.current_price)||0;
-    const openedAt=t.created_at?new Date(t.created_at).toLocaleString():'—';
+    const openedStamp=t.opened_at||t.filled_at||t.created_at;const openedAt=openedStamp?new Date(openedStamp).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
-    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtPrice(t.entry)}</strong></div><div><em>Close Price</em><strong>${exit?fmtPrice(exit):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div><em>Opened</em><strong>${openedAt}</strong></div><div><em>Closed</em><strong>${closedAt}</strong></div></div><div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
-  }).join('');h+='</div>';}
+    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div class="trade-time"><em>Opened</em><strong>${openedAt}</strong></div><div class="trade-time"><em>Closed</em><strong>${closedAt}</strong></div><div class="trade-time"><em>Time</em><strong>${durationShort(openedStamp,t.closed_at,t.duration_seconds)}</strong></div><div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div></div>${marketSummaryHTML(t)}${marketStructureHTML(t.market_structure,t.price_precision)}<div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
+  }).join('');h+='</details>';}
+  // Keep the page anchored while refreshing trade data; rebuilding cards must not jump mobile scroll.
+  const tradeListHeight=tradeList.offsetHeight;
+  tradeList.style.minHeight=tradeListHeight+'px';
   tradeList.innerHTML=h||'<div class="empty">No trades</div>';
   // Defensive cleanup: never show TP2 as a field on an open My Trades card.
   tradeList.querySelectorAll('.card').forEach(card=>{if(card.querySelector('.actions button[onclick^="closeTrade("]'))card.querySelectorAll('.vals > div').forEach(row=>{const label=row.querySelector('em');if(label&&label.textContent.trim().toUpperCase()==='TP2')row.remove();});});
-  for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}window.scrollTo(0,scrollY);
+  for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}
+  requestAnimationFrame(()=>{window.scrollTo({left:0,top:scrollY,behavior:'instant'});requestAnimationFrame(()=>{tradeList.style.minHeight='';window.scrollTo({left:0,top:scrollY,behavior:'instant'});});});
   }catch(e){console.error('loadTrades',e);}finally{clearTimeout(timeout);window._loadingTrades=false;}
 }
 
@@ -2042,7 +2603,7 @@ function drawShareCard(t){
  rr(82,192,w-164,132,20,'#101d31');txt(t.symbol||'—',112,250,42,'#f2f6ff','800');
  const side=String(t.side||'').toUpperCase();rr(112,270,side==='LONG'?130:140,34,10,side==='LONG'?'#123b35':'#421c2b');txt(side,132,295,19,side==='LONG'?'#16c784':'#f6465d','800');
  const status=closed?'CLOSED':'RUNNING';txt(status,w-245,295,17,closed?'#a8b4c8':'#22d3ee','800');
-  const qty=Number(t.qty)||0;const leverage=Number(t.leverage)||1;const notional=Number(t.notional)||((Number(t.entry)||0)*qty);const margin=Number(t.margin)||(notional/leverage);const pnlPct=margin>0?(pnl/margin)*100:0;const rows=[['ENTRY PRICE',fmtPrice(t.entry)],[closed?'CLOSE PRICE':'MARK PRICE',fmtPrice(exit)],['TRADE AMOUNT','$'+fmt(notional)],['QUANTITY',fmt(qty)],['LEVERAGE',leverage+'x'],['MARGIN','$'+fmt(margin)+' USDT']];
+  const qty=Number(t.qty)||0;const leverage=Number(t.leverage)||1;const notional=Number(t.notional)||((Number(t.entry)||0)*qty);const margin=Number(t.margin)||(notional/leverage);const pnlPct=margin>0?(pnl/margin)*100:0;const rows=[['ENTRY PRICE',fmtSymbolPrice(t.symbol,t.entry,t.price_precision)],[closed?'CLOSE PRICE':'MARK PRICE',fmtSymbolPrice(t.symbol,exit,t.price_precision)],['TRADE AMOUNT','$'+fmt(notional)],['QUANTITY',fmt(qty)],['LEVERAGE',leverage+'x'],['MARGIN','$'+fmt(margin)+' USDT']];
   txt(closed?'REALIZED PNL':'TOTAL PNL',112,390,18,'#8798b5','700');txt((positive?'+':'-')+'$'+fmt(Math.abs(pnl)),112,475,66,positive?green:red,'800');
   ctx.textAlign='right';txt('PNL %',788,390,18,'#8798b5','700');txt((pnl>=0?'+':'')+fmt(pnlPct)+'%',788,475,42,positive?green:red,'800');ctx.textAlign='left';
     for(let i=0;i<rows.length;i++){const col=i%2,row=Math.floor(i/2),x=112+col*340,yy=565+row*94;txt(rows[i][0],x,yy,15,'#8191ad','700');txt(rows[i][1],x,yy+42,24,'#edf3ff','700');}
@@ -2057,14 +2618,16 @@ async function saveShareCard(){const blob=await shareCardBlob();if(!blob){toast(
 
 
 async function cancelPending(id){if(!confirm('Cancel pending limit order?'))return;const d=await(await fetch('/api/trades/'+id,{method:'DELETE'})).json();if(d.ok){toast('Limit order canceled');loadTrades();}else toast(d.error||'Cancel failed');}
+async function cancelAllPending(event){if(event){event.preventDefault();event.stopPropagation();}if(!confirm('Cancel ALL pending orders? Running positions will not be affected.'))return;try{const r=await fetch('/api/trades/pending',{method:'DELETE'}),d=await r.json();if(r.ok&&d.ok){toast(d.canceled+' pending orders canceled');loadTrades();}else toast(d.error||'Bulk cancel failed');}catch(e){toast('Bulk cancel failed: '+(e.message||'network error'));}}
 async function closeTrade(id){if(!confirm('Close trade?'))return;const d=await(await fetch('/api/trades/'+id+'/close',{method:'POST'})).json();if(d.ok){toast('Closed');speak('Trade closed');setAcc(d.account);alertBar.style.display='none';loadTrades();loadSignals();}}
+async function applySuggestedTrail(id,activationPct,callbackPct){const t=(window._tradeCache||{})[String(id)]||{};const entry=Number(t.entry)||0;if(!(entry>0))return;const act=entry*(String(t.side).toUpperCase()==='LONG'?1+activationPct/100:1-activationPct/100);try{const r=await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({callback_rate:callbackPct,trailing_activation_price:act,profit_lock_enabled:true,profit_activation_pct:activationPct,profit_callback_pct:callbackPct})}),d=await r.json();if(r.ok&&d.ok){toast('Suggested trailing protection applied');loadTrades();}else toast(d.error||'Could not apply trailing');}catch(e){toast('Could not apply trailing');}}
 function trailPrompt(id,cur,activation){manageTradeId.value=id;manageTitle.textContent='Trailing Stop';manageLevelsFields.style.display='none';manageTrailFields.style.display='block';manageTrailActivation.value=activation||'';manageTrailRate.value=cur||1;manageBg.style.display='flex';}
 function closeManage(){manageBg.style.display='none';}
 async function saveManage(){const id=manageTradeId.value;let body={};if(manageLevelsFields.style.display!=='none'){const sl=+manageSL.value,tp1=+manageTP1.value,tp2=manageTP2.value.trim()?+manageTP2.value:null,orig=window._manageOriginalLevels||{};if(!(sl>0&&tp1>0)){toast('Enter valid Stop Loss and Take Profit');return;}if(sl!==orig.sl)body.stop_loss=sl;if(tp1!==orig.tp1)body.tp1=tp1;if((tp2??0)!==(orig.tp2??0))body.tp2=tp2;if(!Object.keys(body).length){closeManage();toast('No protection changes');return;}}else{const rate=+manageTrailRate.value;if(!Number.isFinite(rate)||rate<0||rate>5||(rate>0&&rate<0.1)){toast('Callback must be 0 or 0.1–5%');return;}body={callback_rate:rate};if(manageTrailActivation.value.trim()){const p=+manageTrailActivation.value;if(!Number.isFinite(p)||p<=0){toast('Invalid activation price');return;}body.trailing_activation_price=p;}else{body.trailing_activation_price=0;}}try{const response=await fetch('/api/trades/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await response.json();if(response.ok&&d.ok){closeManage();toast('Position protection updated');loadTrades();}else toast(d.error||'Update failed');}catch(e){toast('Could not save protection: '+(e.message||'network error'),5000);}}
 async function editLevels(id,sl,tp1,tp2){const t=(window._tradeCache||{})[String(id)]||{};manageTradeId.value=id;manageTitle.textContent='Stop Loss / Take Profit';manageTrailFields.style.display='none';manageLevelsFields.style.display='block';window._manageEntry=Number(t.entry)||0;window._manageSide=String(t.side||'LONG').toUpperCase();manageSL.value=sl;manageTP1.value=tp1;manageTP2.value=tp2||'';syncLevelPct('sl','price');syncLevelPct('tp','price');syncLevelPct('tp2','price');window._manageOriginalLevels={sl:Number(sl),tp1:Number(tp1),tp2:Number(tp2)||0};manageBg.style.display='flex';}
 function syncLevelPct(kind,source){const isSL=kind==='sl',isTP2=kind==='tp2',priceEl=isSL?manageSL:(isTP2?manageTP2:manageTP1),pctEl=isSL?manageSLPct:(isTP2?manageTP2Pct:manageTP1Pct),entry=Number(window._manageEntry)||0,side=window._manageSide||'LONG';if(!(entry>0))return;if(source==='price'){const p=Number(priceEl.value);if(!(p>0))return;const pct=side==='LONG'?(isSL?(entry-p)/entry*100:(p-entry)/entry*100):(isSL?(p-entry)/entry*100:(entry-p)/entry*100);pctEl.value=Number.isFinite(pct)?Math.max(0,pct).toFixed(3):'';}else{const pct=Number(pctEl.value);if(!(pct>=0))return;const f=pct/100,p=side==='LONG'?(isSL?entry*(1-f):entry*(1+f)):(isSL?entry*(1+f):entry*(1-f));priceEl.value=p>0?Number(p.toPrecision(10)):'';}}
 async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
-function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace('USDT','')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
+function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace(/(USDT|USDC)$/,'')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
 async function adjustFunds(action){const input=document.getElementById('fundAmount'),amount=Number(input.value);if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}const label=action==='add'?'Add':'Remove';if(!confirm(label+' $'+fmt(amount)+' USDT '+(action==='add'?'to':'from')+' paper account?'))return;try{const r=await fetch('/api/account/funds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,amount})}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Balance adjustment failed');return;}setAcc(d.account);const account=await(await fetch('/api/account')).json();renderStats(account.stats,accStats);input.value='';toast(label+'ed $'+fmt(amount)+' USDT');loadTrades();}catch(e){toast('Balance adjustment failed: '+(e.message||'network error'));}}
 async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
@@ -2073,7 +2636,8 @@ loadSignals();
 setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
 setInterval(refreshModalMarket,1500);
-setInterval(()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
+// Refresh trade data in-place every 3 seconds; never reload the document.
+setInterval(()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();},3000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();});
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>

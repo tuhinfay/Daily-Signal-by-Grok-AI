@@ -1,6 +1,7 @@
 import unittest
 
 import api
+from scanner import liquidation_feed
 
 
 class LiquidationEstimateTests(unittest.TestCase):
@@ -45,6 +46,42 @@ class LiquidationEstimateTests(unittest.TestCase):
 
     def test_invalid_trade_has_no_liquidation_price(self):
         self.assertIsNone(api._estimate_liquidation_price({"side": "LONG", "qty": 0}))
+
+
+    def test_liquidation_summary_has_distinct_1h_4h_and_1d_windows(self):
+        now_ms = int(__import__("time").time() * 1000)
+        with liquidation_feed._lock:
+            original = dict(liquidation_feed._orders)
+            liquidation_feed._orders.clear()
+            liquidation_feed._orders["BTCUSDT:1"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "LONG",
+                "timestamp_ms": now_ms - 10_000, "notional_usdt": 125.0,
+            }
+            liquidation_feed._orders["BTCUSDT:2"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "SHORT",
+                "timestamp_ms": now_ms - 120_000, "notional_usdt": 75.0,
+            }
+            liquidation_feed._orders["BTCUSDT:3"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "LONG",
+                "timestamp_ms": now_ms - 7_200_000, "notional_usdt": 300.0,
+            }
+            liquidation_feed._orders["BTCUSDT:4"] = {
+                "symbol": "BTCUSDT", "liquidated_side": "SHORT",
+                "timestamp_ms": now_ms - 43_200_000, "notional_usdt": 500.0,
+            }
+        try:
+            result = liquidation_feed.get_liquidation_summary("BTCUSDT")
+            self.assertEqual(list(result["timeframes"]), ["1h", "4h", "1d"])
+            self.assertEqual(result["timeframes"]["1h"]["long_usdt"], 125.0)
+            self.assertEqual(result["timeframes"]["1h"]["short_usdt"], 75.0)
+            self.assertEqual(result["timeframes"]["4h"]["long_usdt"], 425.0)
+            self.assertEqual(result["timeframes"]["4h"]["short_usdt"], 75.0)
+            self.assertEqual(result["timeframes"]["1d"]["long_usdt"], 425.0)
+            self.assertEqual(result["timeframes"]["1d"]["short_usdt"], 575.0)
+        finally:
+            with liquidation_feed._lock:
+                liquidation_feed._orders.clear()
+                liquidation_feed._orders.update(original)
 
 
 if __name__ == "__main__":

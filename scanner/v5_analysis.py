@@ -48,6 +48,16 @@ def build_v5_evidence(data: Dict, side: str, bias_1d: str, bias_4h: str,
     four_h = _frame_row(data, "4h")
     one_h = _frame_row(data, "1h")
     fifteen = _frame_row(data, "15m")
+    one_h_frame = data.get("1h")
+    price_change_1h_pct = None
+    try:
+        if one_h_frame is not None and len(one_h_frame) >= 2:
+            previous_close = float(one_h_frame["close"].iloc[-2])
+            current_close = float(one_h_frame["close"].iloc[-1])
+            if previous_close > 0 and math.isfinite(previous_close) and math.isfinite(current_close):
+                price_change_1h_pct = (current_close / previous_close - 1.0) * 100.0
+    except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+        price_change_1h_pct = None
     direction = str(side).upper()
     regime = classify_regime(daily)
     aligned_1d = (direction == "LONG" and bias_1d == "bull") or (direction == "SHORT" and bias_1d == "bear")
@@ -91,6 +101,7 @@ def build_v5_evidence(data: Dict, side: str, bias_1d: str, bias_4h: str,
         "momentum": momentum_score,
         "volume_futures": volume_score,
         "entry_risk": entry_risk,
+        "price_change_1h_pct": price_change_1h_pct,
         "structure_detail": structure_data,
         "regime_detail": regime,
     }
@@ -105,13 +116,27 @@ def apply_futures_evidence(evidence: Dict[str, float], side: str,
     funding = _num(context, "funding_rate")
     oi_change = _num(context, "oi_change_pct")
     imbalance = _num(context, "book_imbalance_pct")
+    price_change = _num(context, "price_change_1h_pct", _num(evidence, "price_change_1h_pct"))
     direction = str(side).upper()
     if funding is not None:
-        observations.append(1.0 if ((direction == "LONG" and funding <= 0.0002) or
-                                    (direction == "SHORT" and funding >= -0.0002)) else 0.0)
-    if oi_change is not None:
-        # OI expansion signals participation, not direction by itself.
-        observations.append(0.5 if oi_change > 0 else 0.25)
+        # Penalize crowded positioning only when funding is meaningfully one-sided.
+        crowded = (direction == "LONG" and funding >= 0.0005) or (direction == "SHORT" and funding <= -0.0005)
+        observations.append(0.0 if crowded else 1.0)
+    if oi_change is not None and price_change is not None:
+        # Price + OI matrix: expanding OI with directional price confirms participation;
+        # falling OI during a move is treated as weaker/covering-driven continuation.
+        rising_price = price_change > 0.05
+        falling_price = price_change < -0.05
+        rising_oi = oi_change > 0.05
+        falling_oi = oi_change < -0.05
+        if direction == "LONG":
+            oi_score = 1.0 if rising_price and rising_oi else 0.0 if falling_price and rising_oi else 0.55 if rising_price and falling_oi else 0.20 if falling_price and falling_oi else 0.5
+        else:
+            oi_score = 1.0 if falling_price and rising_oi else 0.0 if rising_price and rising_oi else 0.55 if falling_price and falling_oi else 0.20 if rising_price and falling_oi else 0.5
+        observations.append(oi_score)
+    elif oi_change is not None:
+        # Without a price direction, OI alone cannot justify a directional score.
+        observations.append(0.5)
     if imbalance is not None:
         observations.append(1.0 if ((direction == "LONG" and imbalance > 0) or
                                     (direction == "SHORT" and imbalance < 0)) else 0.0)
@@ -192,6 +217,7 @@ def qualify_v5_signal(signal: Dict, derivatives: Optional[Dict] = None):
         {
             "funding_rate": derivatives.get("funding_rate", result.get("funding_rate")),
             "oi_change_pct": derivatives.get("oi_change_pct", result.get("oi_change_1h_pct")),
+            "price_change_1h_pct": raw_evidence.get("price_change_1h_pct"),
             "book_imbalance_pct": derivatives.get("book_imbalance_pct", result.get("orderbook_imbalance_pct")),
         },
     )

@@ -5,7 +5,7 @@ import os
 import re
 import time
 import pandas as pd
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Any
 
 from .data_validator import closed_candles
 
@@ -160,67 +160,86 @@ class BinanceClient:
             ("LINKUSDT", 4e7), ("SUIUSDT", 3e7), ("NEARUSDT", 2e7), ("AAVEUSDT", 2e7),
         ][:top_n]
 
-    def get_movers(self, top_n: int = 12, min_volume: float = 5_000_000) -> Dict[str, List[dict]]:
-        """Rank liquid USDT-M contracts from the current UTC daily candle (00:00 UTC = 06:00 Bangladesh)."""
+    def get_24h_change_pct(self, symbol: str) -> Optional[float]:
+        """Return Binance Futures rolling 24-hour ticker percentage, not a UTC daily candle."""
+        ticker = self._cached_ticker(symbol)
+        if ticker is None:
+            if self.rate_limited:
+                return None
+            try:
+                ticker = self.exchange.fetch_ticker(self._ccxt_symbol(symbol))
+            except Exception as e:
+                self._mark_rate_limit(e)
+                print(f"24h change {symbol}: {e}")
+                return None
+        value = ticker.get("percentage")
+        if value is None:
+            value = (ticker.get("info") or {}).get("priceChangePercent")
+        try:
+            number = float(value)
+            return round(number, 2) if number == number and abs(number) != float("inf") else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def get_movers(self, top_n: int = 12, min_volume: float = 0) -> Dict[str, List[dict]]:
+        """Match Binance USDⓈ-M Futures 24h Top Gainer/Loser ticker ranking.
+
+        Uses the official all-symbol /fapi/v1/ticker/24hr payload and ranks
+        active USDT- and USDC-margined perpetual contracts by priceChangePercent.
+        min_volume is retained for call compatibility but intentionally ignored:
+        Binance's ranking is not restricted by our local liquidity threshold.
+        """
         gainers, losers = [], []
         if self.rate_limited:
             return {"gainers": gainers, "losers": losers}
         try:
-            self._ensure_markets()
-            tickers = self._tickers_cache or self.exchange.fetch_tickers()
-            self._tickers_cache = tickers or {}
-            candidates = []
-            for symbol, data in tickers.items():
-                clean = self._clean_symbol(symbol)
-                if not clean.endswith("USDT"):
-                    continue
-                base = clean[:-4]
-                if any(x in base for x in ("UP", "DOWN", "BULL", "BEAR", "2L", "2S", "3L", "3S")):
-                    continue
-                qv = data.get("quoteVolume")
-                if qv is None:
-                    qv = (data.get("info") or {}).get("quoteVolume")
-                try:
-                    volume = float(qv or 0)
-                    last = float(data.get("last") or 0)
-                except Exception:
-                    continue
-                if volume >= min_volume and last > 0:
-                    candidates.append((clean, volume, last))
-            candidates.sort(key=lambda row: row[1], reverse=True)
-
-            # Check the top 40 contracts by quote volume using their current UTC daily candle (BD 06:00).
+            # Use Binance's authoritative USDⓈ-M exchangeInfo universe rather
+            # than CCXT's normalized markets_by_id, which can omit valid contracts.
+            exchange_info = self.exchange.fapiPublicGetExchangeInfo() or {}
+            contracts = {
+                str(item.get("symbol") or "").upper(): item
+                for item in (exchange_info.get("symbols") or [])
+            }
+            # The all-symbol ticker endpoint returns every USDⓈ-M contract.
+            tickers = self.exchange.fapiPublicGetTicker24hr()
             rows = []
-            for clean, volume, last in candidates[:40]:
-                if self.rate_limited:
-                    break
+            for ticker in tickers or []:
+                symbol = str(ticker.get("symbol") or "").upper()
+                contract = contracts.get(symbol)
+                if not contract:
+                    continue
+                quote_asset = str(contract.get("quoteAsset") or "").upper()
+                margin_asset = str(contract.get("marginAsset") or "").upper()
+                if (
+                    quote_asset not in ("USDT", "USDC")
+                    or margin_asset not in ("USDT", "USDC")
+                    or contract.get("contractType") != "PERPETUAL"
+                    or contract.get("status") != "TRADING"
+                ):
+                    continue
                 try:
-                    # USD-M Futures 1d klines use UTC 00:00 by default
-                    # (= Bangladesh 06:00); do not pass Spot-only timezone params.
-                    candles = self.exchange.fetch_ohlcv(
-                        self._ccxt_symbol(clean), timeframe="1d", limit=1
-                    )
-                    if not candles:
+                    change = float(ticker.get("priceChangePercent"))
+                    volume = float(ticker.get("quoteVolume") or 0)
+                    last = float(ticker.get("lastPrice") or 0)
+                    if not all(map(lambda value: value == value and abs(value) != float("inf"), (change, volume, last))):
                         continue
-                    daily_open = float(candles[-1][1])
-                    if daily_open <= 0:
+                    if last <= 0:
                         continue
-                    change = ((last - daily_open) / daily_open) * 100
-                    rows.append({
-                        "symbol": clean,
-                        "change": round(change, 4),
-                        "volume": volume,
-                        "price": last,
-                        "period": "UTC daily candle (BD 06:00)",
-                    })
-                except Exception as e:
-                    self._mark_rate_limit(e)
-                    print(f"mover daily candle {clean}: {e}")
-                    if self.rate_limited:
-                        break
-            rows.sort(key=lambda row: row["change"], reverse=True)
-            gainers = rows[:top_n]
-            losers = list(reversed(rows[-top_n:])) if rows else []
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                rows.append({
+                    "symbol": symbol,
+                    "change": change,
+                    "volume": volume,
+                    "price": last,
+                    "period": "rolling 24h",
+                })
+
+            # Gainers: highest percentage first. Losers: lowest percentage first.
+            rows.sort(key=lambda row: row["change"])
+            count = max(0, int(top_n))
+            losers = rows[:count]
+            gainers = list(reversed(rows[-count:])) if count else []
         except Exception as e:
             self._mark_rate_limit(e)
             print("movers", e)
@@ -308,7 +327,9 @@ class BinanceClient:
     def get_derivatives_context(self, symbol: str) -> Dict[str, Optional[float]]:
         """Fetch optional public Futures funding and open-interest context."""
         result: Dict[str, Optional[float]] = {
-            "funding_rate": None, "open_interest": None, "oi_change_pct": None, "mark_price": None,
+            "funding_rate": None, "open_interest": None, "open_interest_usd": None,
+            "oi_change_pct": None, "oi_change_24h_pct": None, "mark_price": None,
+            "oi_updated_at": None,
         }
         if self.rate_limited:
             return result
@@ -332,38 +353,161 @@ class BinanceClient:
                 value = oi.get("openInterestAmount") or oi.get("openInterest") or info.get("openInterest")
                 if value is not None:
                     result["open_interest"] = float(value)
+                value_usd = oi.get("openInterestValue") or info.get("openInterestValue") or info.get("sumOpenInterestValue")
+                if value_usd is not None and float(value_usd) > 0:
+                    result["open_interest_usd"] = float(value_usd)
+                elif result["open_interest"] is not None:
+                    mark = result.get("mark_price") or self.get_mark_price(symbol)
+                    if mark is not None and mark > 0:
+                        result["open_interest_usd"] = result["open_interest"] * mark
+                result["oi_updated_at"] = int(time.time() * 1000)
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"open interest {symbol}: {e}")
         try:
             if not self.rate_limited and self.exchange.has.get("fetchOpenInterestHistory"):
-                history = self.exchange.fetch_open_interest_history(market_symbol, timeframe="1h", limit=2) or []
-                values = []
+                history = self.exchange.fetch_open_interest_history(market_symbol, timeframe="1h", limit=25) or []
+                values_1h, values_24h = [], []
                 for row in history:
                     info = row.get("info") or {}
-                    value = row.get("openInterestAmount") or row.get("openInterest") or info.get("sumOpenInterest")
+                    value = (row.get("openInterestValue") or row.get("openInterestAmount")
+                             or row.get("openInterest") or info.get("sumOpenInterestValue")
+                             or info.get("sumOpenInterest"))
                     if value is not None and float(value) > 0:
-                        values.append(float(value))
-                if len(values) >= 2 and values[-2] > 0:
-                    result["oi_change_pct"] = (values[-1] / values[-2] - 1.0) * 100.0
+                        values_1h.append(float(value))
+                if len(values_1h) >= 2 and values_1h[-2] > 0:
+                    result["oi_change_pct"] = (values_1h[-1] / values_1h[-2] - 1.0) * 100.0
+                if len(values_1h) >= 25 and values_1h[0] > 0:
+                    result["oi_change_24h_pct"] = (values_1h[-1] / values_1h[0] - 1.0) * 100.0
         except Exception as e:
             self._mark_rate_limit(e)
             print(f"open interest history {symbol}: {e}")
         return result
 
+    def get_global_derivatives_context(self, symbol: str) -> Dict[str, Optional[float]]:
+        """Blend public Binance, Bybit and OKX derivatives signals when available.
+
+        OI percentage changes are compared within each venue, then median-aggregated;
+        raw contract quantities are deliberately not summed across exchanges.
+        """
+        base = self.get_derivatives_context(symbol)
+        changes, funding, sources = [], [], []
+        if base.get("oi_change_pct") is not None:
+            changes.append(float(base["oi_change_pct"]))
+            sources.append("Binance")
+        if base.get("funding_rate") is not None:
+            funding.append(float(base["funding_rate"]))
+        clean = self._clean_symbol(symbol)
+        if not clean.endswith("USDT"):
+            return {**base, "oi_sources": sources, "oi_coverage": len(sources)}
+        try:
+            import statistics
+            for exchange_id in ("bybit", "okx"):
+                try:
+                    exchange_class = getattr(ccxt, exchange_id, None)
+                    if exchange_class is None:
+                        continue
+                    venue = exchange_class({"enableRateLimit": True, "timeout": 5000, "options": {"defaultType": "swap"}})
+                    market_symbol = self._ccxt_symbol(clean)
+                    if not venue.has.get("fetchOpenInterestHistory"):
+                        continue
+                    history = venue.fetch_open_interest_history(market_symbol, timeframe="1h", limit=2) or []
+                    values = []
+                    for row in history:
+                        info = row.get("info") or {}
+                        value = (row.get("openInterestValue") or row.get("openInterestAmount")
+                                 or info.get("sumOpenInterestValue") or info.get("sumOpenInterest")
+                                 or info.get("openInterest"))
+                        if value is not None and float(value) > 0:
+                            values.append(float(value))
+                    if len(values) >= 2 and values[-2] > 0:
+                        changes.append((values[-1] / values[-2] - 1.0) * 100.0)
+                        sources.append(exchange_id.title())
+                    if venue.has.get("fetchFundingRate"):
+                        rate = venue.fetch_funding_rate(market_symbol) or {}
+                        if rate.get("fundingRate") is not None:
+                            funding.append(float(rate["fundingRate"]))
+                except Exception as exc:
+                    print(f"[global-derivatives] {exchange_id} {clean}: {exc}")
+        except Exception as exc:
+            print(f"[global-derivatives] setup {clean}: {exc}")
+        result = dict(base)
+        result["oi_change_pct"] = round(statistics.median(changes), 2) if changes else None
+        result["funding_rate"] = statistics.median(funding) if funding else None
+        result["oi_sources"] = sources
+        result["oi_coverage"] = len(sources)
+        return result
+
+
+    def get_daily_market_context(self, symbol: str, current_price: Optional[float] = None) -> Dict[str, Optional[float]]:
+        """Binance USD-M active UTC daily candle plus 7D/30D/1Y close-to-close returns."""
+        result: Dict[str, Optional[float]] = {
+            "daily_open": None, "daily_high": None, "daily_low": None,
+            "change_7d_pct": None, "change_30d_pct": None, "change_1y_pct": None,
+        }
+        df = self.fetch_ohlcv(symbol, timeframe="1d", limit=370)
+        if df is None or len(df) < 31:
+            return result
+        try:
+            last = df.iloc[-1]
+            price = float(current_price or last["close"])
+            for key, col in (("daily_open", "open"), ("daily_high", "high"), ("daily_low", "low")):
+                value = float(last[col])
+                result[key] = value if value > 0 else None
+            for days, key in ((7, "change_7d_pct"), (30, "change_30d_pct"), (365, "change_1y_pct")):
+                if len(df) > days:
+                    base = float(df["close"].iloc[-(days + 1)])
+                    if base > 0 and price > 0:
+                        result[key] = round((price / base - 1.0) * 100.0, 2)
+        except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+            pass
+        return result
+
+    def get_price_precision(self, symbol: str) -> Optional[int]:
+        """Return Binance's displayed price decimal places from PRICE_FILTER tickSize."""
+        try:
+            self._ensure_markets()
+            market = self.exchange.market(self._ccxt_symbol(symbol))
+            info = market.get("info") or {}
+            for rule in info.get("filters") or []:
+                if rule.get("filterType") == "PRICE_FILTER":
+                    tick = str(rule.get("tickSize") or "").rstrip("0")
+                    if "." in tick:
+                        return max(0, len(tick.split(".", 1)[1]))
+            precision = (market.get("precision") or {}).get("price")
+            if precision is not None:
+                if getattr(self.exchange, "precisionMode", None) == getattr(ccxt, "TICK_SIZE", object()):
+                    tick = f"{float(precision):.16f}".rstrip("0")
+                    return max(0, len(tick.split(".", 1)[1])) if "." in tick else 0
+                return max(0, int(precision))
+        except Exception as e:
+            print(f"price precision {symbol}: {e}")
+        return None
+
     def get_order_book_context(self, symbol: str, limit: int = 20) -> Dict[str, Optional[float]]:
-        """Return top-of-book spread and depth imbalance; never infer hidden liquidity."""
-        result: Dict[str, Optional[float]] = {"book_imbalance_pct": None, "spread_pct": None}
+        """Return visible order-book depth only; not hidden liquidity or liquidation data."""
+        result: Dict[str, Optional[float]] = {
+            "book_imbalance_pct": None, "spread_pct": None,
+            "bid_depth_usdt": None, "ask_depth_usdt": None,
+            "bid_wall_price": None, "ask_wall_price": None,
+        }
         if self.rate_limited:
             return result
         try:
             book = self.exchange.fetch_order_book(self._ccxt_symbol(symbol), limit=limit) or {}
             bids, asks = book.get("bids") or [], book.get("asks") or []
-            bid_qty = sum(float(level[0]) * float(level[1]) for level in bids if len(level) >= 2 and float(level[0]) > 0 and float(level[1]) > 0)
-            ask_qty = sum(float(level[0]) * float(level[1]) for level in asks if len(level) >= 2 and float(level[0]) > 0 and float(level[1]) > 0)
+            bid_rows = [(float(x[0]), float(x[1]), float(x[0])*float(x[1])) for x in bids if len(x)>=2 and float(x[0])>0 and float(x[1])>0]
+            ask_rows = [(float(x[0]), float(x[1]), float(x[0])*float(x[1])) for x in asks if len(x)>=2 and float(x[0])>0 and float(x[1])>0]
+            bid_qty = sum(x[2] for x in bid_rows); ask_qty = sum(x[2] for x in ask_rows)
             total = bid_qty + ask_qty
+            result["bid_depth_usdt"] = bid_qty
+            result["ask_depth_usdt"] = ask_qty
             if total > 0:
                 result["book_imbalance_pct"] = (bid_qty - ask_qty) / total * 100.0
+            if bid_rows:
+                result["bid_wall_price"] = max(bid_rows, key=lambda x:x[2])[0]
+            if ask_rows:
+                result["ask_wall_price"] = max(ask_rows, key=lambda x:x[2])[0]
             if bids and asks:
                 bid, ask = float(bids[0][0]), float(asks[0][0])
                 mid = (bid + ask) / 2.0
@@ -374,10 +518,93 @@ class BinanceClient:
             print(f"order book {symbol}: {e}")
         return result
 
+    def get_market_pressure_context(self, symbol: str) -> Dict[str, Any]:
+        """Return Binance USD-M public crowd, taker-flow and quote-volume snapshots by timeframe."""
+        result = {"timeframes": {}, "source": "Binance USD-M Futures"}
+        if self.rate_limited:
+            return result
+        clean = self._clean_symbol(symbol)
+        periods = ("5m", "15m", "1h", "4h", "1d")
+        for period in periods:
+            row = {"long_pct": None, "short_pct": None, "long_short_ratio": None,
+                   "buy_usdt": None, "sell_usdt": None, "total_volume_usdt": None,
+                   "buy_pct": None, "sell_pct": None, "timestamp": None}
+            try:
+                ratio_method = getattr(self.exchange, "fapiDataGetGlobalLongShortAccountRatio", None)
+                rows = ratio_method({"symbol": clean, "period": period, "limit": 1}) if callable(ratio_method) else []
+                if rows:
+                    item = rows[-1]
+                    if item.get("longAccount") is not None:
+                        row["long_pct"] = round(float(item["longAccount"]) * 100, 2)
+                    if item.get("shortAccount") is not None:
+                        row["short_pct"] = round(float(item["shortAccount"]) * 100, 2)
+                    if item.get("longShortRatio") is not None:
+                        row["long_short_ratio"] = round(float(item["longShortRatio"]), 3)
+                    row["timestamp"] = item.get("timestamp")
+            except Exception as exc:
+                self._mark_rate_limit(exc)
+                print(f"[market-pressure] long/short {clean} {period}: {exc}")
+            try:
+                # Kline fields 7 and 10 are quote turnover and taker-buy quote turnover.
+                kline_method = getattr(self.exchange, "fapiPublicGetKlines", None)
+                candles = kline_method({"symbol": clean, "interval": period, "limit": 1}) if callable(kline_method) and not self.rate_limited else []
+                if candles:
+                    candle = candles[-1]
+                    total = float(candle[7])
+                    buy = float(candle[10])
+                    sell = max(0.0, total - buy)
+                    if total >= 0 and buy >= 0:
+                        row["total_volume_usdt"] = round(total, 2)
+                        row["buy_usdt"] = round(buy, 2)
+                        row["sell_usdt"] = round(sell, 2)
+                        if total > 0:
+                            row["buy_pct"] = round(buy / total * 100, 2)
+                            row["sell_pct"] = round(sell / total * 100, 2)
+                        row["volume_timestamp"] = candle[0]
+            except Exception as exc:
+                self._mark_rate_limit(exc)
+                print(f"[market-pressure] volume {clean} {period}: {exc}")
+            result["timeframes"][period] = row
+            if self.rate_limited:
+                break
+        return result
+
+    def get_market_structure_context(self, symbol: str) -> Dict[str, Optional[float]]:
+        """Fetch Binance public crowd positioning and taker flow where available."""
+        result: Dict[str, Optional[float]] = {
+            "long_short_ratio": None, "taker_buy_sell_ratio": None,
+            "long_account_pct": None, "short_account_pct": None,
+        }
+        if self.rate_limited:
+            return result
+        clean = self._clean_symbol(symbol)
+        for method_name, key in (
+            ("fapiDataGetGlobalLongShortAccountRatio", "long_short_ratio"),
+            ("fapiDataGetTakerlongshortRatio", "taker_buy_sell_ratio"),
+        ):
+            try:
+                method = getattr(self.exchange, method_name, None)
+                if not callable(method):
+                    continue
+                rows = method({"symbol": clean, "period": "5m", "limit": 1}) or []
+                if rows:
+                    row = rows[-1]
+                    value = row.get("longShortRatio") if key == "long_short_ratio" else row.get("buySellRatio")
+                    if value is not None:
+                        result[key] = float(value)
+                    if key == "long_short_ratio":
+                        if row.get("longAccount") is not None:
+                            result["long_account_pct"] = float(row["longAccount"]) * 100.0
+                        if row.get("shortAccount") is not None:
+                            result["short_account_pct"] = float(row["shortAccount"]) * 100.0
+            except Exception as e:
+                self._mark_rate_limit(e)
+                print(f"market structure {key} {symbol}: {e}")
+        return result
 
     def get_order_constraints(self, symbol: str) -> Dict[str, Optional[float]]:
         """Return public market lot/notional limits without placing or signing an order."""
-        result = {"qty_step": None, "min_qty": None, "max_qty": None, "min_notional": None}
+        result = {"qty_step": None, "min_qty": None, "max_qty": None, "min_notional": None, "price_tick": None}
         try:
             self._ensure_markets()
             market = self.exchange.market(self._ccxt_symbol(symbol))
@@ -408,6 +635,10 @@ class BinanceClient:
                         result["min_qty"] = float(rule["minQty"])
                     if rule.get("maxQty") is not None:
                         result["max_qty"] = float(rule["maxQty"])
+                if kind == "PRICE_FILTER":
+                    tick = float(rule.get("tickSize") or 0)
+                    if tick > 0:
+                        result["price_tick"] = tick
                 if kind in ("MIN_NOTIONAL", "NOTIONAL"):
                     value = rule.get("minNotional") or rule.get("notional")
                     if value is not None:

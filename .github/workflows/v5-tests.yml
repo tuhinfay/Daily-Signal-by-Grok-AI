@@ -2,9 +2,9 @@ name: V5 tests
 
 on:
   push:
-    branches: [v5-development]
+    branches: [v5-development, v5-enhancement]
   pull_request:
-    branches: [main]
+    branches: [v5-development]
 
 jobs:
   unit-tests:
@@ -21,5 +21,9 @@ jobs:
           pip install -r requirements.txt
       - name: Compile application and scanner modules
         run: python -m compileall -q api.py scanner tests scripts
+      - name: Check embedded dashboard JavaScript syntax
+        run: |
+          python -c 'import re; from api import PAGE; open("/tmp/daily-signal-dashboard.js", "w").write(re.findall(r"<script>(.*?)</script>", PAGE, re.S)[-1])'
+          node --check /tmp/daily-signal-dashboard.js
       - name: Run V5 unit tests
         run: python -m unittest discover -s tests -v
