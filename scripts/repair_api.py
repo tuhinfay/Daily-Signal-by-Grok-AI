@@ -1,69 +1,67 @@
-"""Restore api.py from the project's canonical GitHub branch if local syntax is broken.
+"""Offline, narrowly-scoped repair for the known api.py startup corruption.
 
-This is invoked by start.bat only after the local Python syntax check fails.
-The existing file is backed up before replacement.
+No network access is used. Only the exact stray JavaScript fragment reported
+by the startup diagnostic is removed; unknown syntax errors are left untouched.
 """
 from __future__ import annotations
 
 import datetime
-import os
 import pathlib
+import re
 import sys
-import tempfile
-import urllib.request
 
-REPOSITORY_URL = (
-    "https://raw.githubusercontent.com/tuhinfay/"
-    "Daily-Signal-by-Grok-AI/fix/trades-live-stability-auth-dca/api.py"
+
+# The known accidental JavaScript tail was appended to the uvicorn.run line.
+KNOWN_JS = re.compile(
+    r"(?m)^(?P<python>\s*uvicorn\.run\([^\n]*\))\+?\s*\r?\n"
+    r"(?P<javascript>\s*mt\(pnl\);score\.style\.color=positive\?"
+    r"'var\(--gn\)':'var\(--rd\)';\}\s*)$"
 )
 
 
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parent.parent
     target = root / "api.py"
-    print("[AUTO-REPAIR] Local api.py has a syntax error.")
-    print("[AUTO-REPAIR] Downloading the verified project copy from GitHub...")
+    if not target.is_file():
+        print("[AUTO-REPAIR] api.py was not found; nothing changed.")
+        return 1
 
+    original = target.read_bytes()
     try:
-        request = urllib.request.Request(
-            REPOSITORY_URL,
-            headers={"User-Agent": "Daily-Signal-Startup-Repair"},
-        )
-        with urllib.request.urlopen(request, timeout=25) as response:
-            source_bytes = response.read()
-        source = source_bytes.decode("utf-8-sig")
+        source = original.decode("utf-8-sig")
         compile(source, str(target), "exec")
-    except Exception as exc:
-        print(f"[AUTO-REPAIR] Could not retrieve/validate the repair file: {exc}")
-        print("[AUTO-REPAIR] Check your internet connection; original api.py was not changed.")
+        print("[AUTO-REPAIR] api.py syntax is already valid; no repair needed.")
+        return 0
+    except SyntaxError as exc:
+        print(f"[AUTO-REPAIR] Syntax error at line {exc.lineno}: {exc.msg}")
+
+    repaired, count = KNOWN_JS.subn(r"\g<python>", source, count=1)
+    if count != 1:
+        print("[AUTO-REPAIR] This is not the known appended-JavaScript error.")
+        print("[AUTO-REPAIR] No files were changed; inspect the reported syntax error.")
         return 1
 
-    if target.exists():
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = target.with_name(f"api.py.backup-{stamp}")
-        try:
-            backup.write_bytes(target.read_bytes())
-            print(f"[AUTO-REPAIR] Original file backed up to: {backup.name}")
-        except OSError as exc:
-            print(f"[AUTO-REPAIR] Could not back up original api.py: {exc}")
-            return 1
-
-    temp_name = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb", suffix=".py", prefix="api-repair-", dir=root, delete=False
-        ) as temp:
-            temp.write(source_bytes)
-            temp_name = temp.name
-        os.replace(temp_name, target)
-        compile(target.read_text(encoding="utf-8-sig"), str(target), "exec")
-    except Exception as exc:
-        if temp_name and os.path.exists(temp_name):
-            os.unlink(temp_name)
-        print(f"[AUTO-REPAIR] Could not install repaired api.py: {exc}")
+        compile(repaired, str(target), "exec")
+    except SyntaxError as exc:
+        print(f"[AUTO-REPAIR] Candidate repair still has a syntax error at line {exc.lineno}: {exc.msg}")
+        print("[AUTO-REPAIR] Original api.py was not changed.")
         return 1
 
-    print("[AUTO-REPAIR] api.py restored and Python syntax validated.")
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = target.with_name(f"api.py.backup-{stamp}")
+    try:
+        backup.write_bytes(original)
+        target.write_text(repaired, encoding="utf-8", newline="")
+    except OSError as exc:
+        print(f"[AUTO-REPAIR] Could not safely write repaired file: {exc}")
+        if backup.exists():
+            target.write_bytes(original)
+        return 1
+
+    print(f"[AUTO-REPAIR] Removed the recognized stray JavaScript fragment.")
+    print(f"[AUTO-REPAIR] Original file backed up as {backup.name}")
+    print("[AUTO-REPAIR] Repaired api.py passed Python syntax validation.")
     return 0
 
 
