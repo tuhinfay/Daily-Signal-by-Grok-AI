@@ -2600,22 +2600,26 @@ async function submitTrade(){
   finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
 }
 async function loadTrades(){
-  if(window._loadingTrades)return;window._loadingTrades=true;
+  if(window._loadingTrades)return;
+  window._loadingTrades=true;
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),8000);
-  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;const openExpanded=document.getElementById('openTradesDetails')?.open??true;const closedExpanded=document.getElementById('closedTradesDetails')?.open??false;
-  const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
-  if(!response.ok)throw new Error('Trade list HTTP '+response.status);
-  const d=await response.json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
-function patchLiveTradeCards(trades){
-  const byId=new Map((trades||[]).filter(t=>t.status==='OPEN').map(t=>[String(t.id),t]));
-  document.querySelectorAll('#tradeList [data-trade-id]').forEach(card=>{
-    const t=byId.get(card.dataset.tradeId);if(!t)return;
-    const pnl=Number(t.unrealized_pnl)||0,positive=pnl>=0;
-    const score=card.querySelector('.head .score');
-    if(score){
-      score.textContent=(positive?'+':'')+'
-  if(selection&&!selection.isCollapsed){window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));return;}
+  try{
+    const scrollY=window.scrollY;
+    const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];
+    const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
+    const openExpanded=document.getElementById('openTradesDetails')?.open??true;
+    const closedExpanded=document.getElementById('closedTradesDetails')?.open??false;
+    const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
+    if(!response.ok)throw new Error('Trade list HTTP '+response.status);
+    const d=await response.json();
+    setAcc(d.account);
+    renderStats(d.stats,tradeStats);
+    sOpen.textContent=(d.stats&&d.stats.open)||0;
+    window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
+    // Do not replace interactive controls while the user is selecting text.
+    const selection=window.getSelection();
+    if(selection&&!selection.isCollapsed)return;
   const chartIsOpen=!!document.querySelector('#tradeList .chartbox[style*="display: block"]');
   const manageIsOpen=document.getElementById('manageBg')?.style.display==='flex';
   if(chartIsOpen||manageIsOpen)return;
