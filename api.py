@@ -244,6 +244,11 @@ class TradeCreate(BaseModel):
     profit_lock_enabled: bool = False
     profit_activation_pct: Optional[float] = None
     profit_callback_pct: Optional[float] = None
+    signal_adx: Optional[float] = None
+    signal_rsi: Optional[float] = None
+    timeframe_trends: Optional[Dict[str, str]] = None
+    bias_1d: Optional[str] = None
+    bias_4h: Optional[str] = None
 
 
 class TradeUpdate(BaseModel):
@@ -1712,6 +1717,8 @@ def create_trade(body: TradeCreate):
         "entry": entry_price, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
         "trade_style": (str(body.trade_style).lower() if str(body.trade_style or "").lower() in ("scalp", "day", "swing") else "day"),
+        "signal_adx": body.signal_adx, "signal_rsi": body.signal_rsi,
+        "timeframe_trends": dict(body.timeframe_trends or {}), "bias_1d": body.bias_1d, "bias_4h": body.bias_4h,
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
         "trailing_pct": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "callback_rate": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "trailing_activation_price": None,
@@ -2508,6 +2515,7 @@ function openSignalTrade(symbol,side){
   openModal(signal);
 }
 function openModal(s){
+  window._selectedSignal=s;
   window._selectedTradeStrategy=(style!=='all'?style:((s.styles||[]).find(x=>['scalp','day','swing'].includes(x))||'day'));
   mTitle.textContent=s.symbol;
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
@@ -2535,7 +2543,8 @@ async function submitTrade(){
   const adv=document.getElementById('addAdvanced').open,offset=adv?(+m_limit_offset.value||0):0;
   if(offset>0&&typ!=='LIMIT'){toast('Choose Limit order to use Limit Entry Offset');return;}
   if(offset>0&&m_scale.value){toast('Limit offset cannot be combined with scaled entry');return;}
-  const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null,advanced_enabled:adv,dca_enabled:adv&&m_adv_dca.checked,dca_gap_pct:+m_dca_gap.value||1.5,dca_max_orders:+m_dca_max.value||3,dca_multiplier:+m_dca_mult.value||1.5,dca_lower_price:+m_dca_low.value||null,dca_upper_price:+m_dca_high.value||null,limit_offset_pct:offset,sl_pct:adv?(+m_sl_pct.value||null):null,tp1_pct:adv?(+m_tp1_pct.value||null):null,tp2_pct:adv?(+m_tp2_pct.value||null):null,profit_lock_enabled:adv&&m_profit_lock.checked,profit_activation_pct:+m_profit_activation.value||0.8,profit_callback_pct:+m_profit_callback.value||0.5};
+  const signalMeta=window._selectedSignal||{};
+  const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',signal_adx:signalMeta.adx??null,signal_rsi:signalMeta.rsi??null,timeframe_trends:signalMeta.timeframe_trends||{},bias_1d:signalMeta.bias_1d||null,bias_4h:signalMeta.bias_4h||null,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null,advanced_enabled:adv,dca_enabled:adv&&m_adv_dca.checked,dca_gap_pct:+m_dca_gap.value||1.5,dca_max_orders:+m_dca_max.value||3,dca_multiplier:+m_dca_mult.value||1.5,dca_lower_price:+m_dca_low.value||null,dca_upper_price:+m_dca_high.value||null,limit_offset_pct:offset,sl_pct:adv?(+m_sl_pct.value||null):null,tp1_pct:adv?(+m_tp1_pct.value||null):null,tp2_pct:adv?(+m_tp2_pct.value||null):null,profit_lock_enabled:adv&&m_profit_lock.checked,profit_activation_pct:+m_profit_activation.value||0.8,profit_callback_pct:+m_profit_callback.value||0.5};
   if(mode==='amount')body.amount_usd=+m_amount.value;
   if(mode==='margin')body.margin_usd=+m_margin.value;
   if(mode==='risk')body.risk_pct=+m_risk.value||1;
@@ -2589,6 +2598,7 @@ async function loadTrades(){
 ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8px;margin:8px 0;border-radius:8px">⚠ '+t.analysis_alert+'</div>':''}
       ${t.trailing_recommendation?'<div class="hint" style="border:1px solid #22d3ee;padding:8px;margin:8px 0;border-radius:8px">Suggested trailing: activate at +'+t.trailing_recommendation.activation_profit_pct+'% profit · callback '+t.trailing_recommendation.callback_pct+'% <button class="btn dim" onclick="applySuggestedTrail(\''+t.id+'\','+t.trailing_recommendation.activation_profit_pct+','+t.trailing_recommendation.callback_pct+')">Apply</button></div>':''}
       ${marketSummaryHTML(t)}
+      <div class="sub">ADX ${t.signal_adx??"—"} · RSI ${t.signal_rsi??"—"} · 15M ${(t.timeframe_trends||{})["15m"]||"—"} · 1H ${(t.timeframe_trends||{})["1h"]||"—"} · 4H ${(t.timeframe_trends||{})["4h"]||"—"} · 1D ${(t.timeframe_trends||{})["1d"]||"—"} · HTF ${t.bias_1d||"—"}/${t.bias_4h||"—"}</div>
       <div class="vals">
         <div><em>Average Entry</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div>
         <div><em>Mark Price</em><strong>${t.current_price==null?'—':fmtSymbolPrice(t.symbol,t.current_price,t.price_precision)}</strong></div>
@@ -2607,6 +2617,7 @@ ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8p
       </div>
       ${marketStructureHTML(t.market_structure,t.price_precision)}
       <div class="actions">
+        <button class="btn good" onclick="addDcaTrade('${t.id}')">Add Trade / DCA</button>
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
         <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
         <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
