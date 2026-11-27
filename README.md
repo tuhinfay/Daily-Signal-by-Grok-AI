@@ -957,3 +957,15 @@ Daily Signal by Grok AI is an educational market-analysis and simulated paper-tr
 - In Market Structure, Long % is green and Short % is red. Buy/Sell notionals are colored according to which side has the larger value; total volume follows the dominant Buy/Sell side for quick reading. Liquidated Long (L) is green and Short (S) is red.
 - Market Structure table columns use fixed widths and right-aligned numeric cells to keep percentages and USDT amounts visually aligned on narrow screens.
 - In My Trades, Support and Resistance are shown on their own line below the daily-price summary: S in green, R in red. Closed-trade Opened/Closed/Time values retain the regular 12px text size while the gaps are kept compact.
+
+
+## Dashboard password and account reset
+
+The dashboard is protected by backend HTTP Basic authentication. On first open, the browser asks for a username and password:
+
+- Username: `admin` (default)
+- Password: `4980` (default, as requested)
+
+The password is checked by the Python backend; it is not embedded in the dashboard HTML or JavaScript. For any internet-facing deployment, set a unique `APP_PASSWORD` environment variable (and optionally `APP_USERNAME`) in the hosting provider and serve the app over HTTPS. Do not rely on the default password for a public production deployment.
+
+The Account tab includes **Clear All Trade & Account Data**. It asks for the password again, then permanently deletes open, pending and closed paper trades and resets the simulated account to the configured demo starting balance. This action cannot be undone.
