@@ -1388,8 +1388,15 @@ def analyze_one(symbol: str, style: str = Query("day")):
     _scan_max_leverage[sym] = lev
     liq = ("VERY HIGH" if volume_24h >= 1e8 else "HIGH" if volume_24h >= 4e7 else "MED" if volume_24h >= 1.2e7 else "LOW" if volume_24h > 0 else "UNKNOWN")
     if not r:
+        entry_tf = {"scalp": "5m", "day": "15m", "swing": "1h", "hybrid": "15m"}[selected_style]
+        latest = get_latest(add_indicators(data[entry_tf]))
+        indicators = {"adx": round(float(latest.get("adx") or 0), 1), "rsi": round(float(latest.get("rsi") or 0), 1)}
+        trends = _timeframe_trend_map(data)
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
-                "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
+                "max_leverage": lev, "liquidity": liq, "indicators": indicators,
+                "timeframe_trends": trends, "bias_1d": trends.get("1d", "SIDE"),
+                "bias_4h": trends.get("4h", "SIDE"),
+                "message": f"NO TRADE — no {selected_style} confluence now"}
     r["market_price"] = (r.get("mark_price") if selected_style == "hybrid" else None) or px or r["entry"]
     r["timeframe_trends"] = _timeframe_trend_map(data)
     r["price_precision"] = client.get_price_precision(sym)
@@ -2491,7 +2498,7 @@ async function analyzeManual(){
   const d=await(await fetch('/api/analyze/'+s+'?style='+(style==='all'?'day':style))).json();
   const list=document.getElementById('signalList');
   if(!d.ok){list.innerHTML=`<div class="empty">${d.error||'Failed'}</div>`;return;}
-  if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'—'} · max ${d.max_leverage||'—'}x</div><div class="empty">${d.message||'No signal'}</div>
+  if(!d.signal){const tr=d.timeframe_trends||{},ind=d.indicators||{};list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'—'} · max ${d.max_leverage||'—'}x</div><div class="sub">ADX ${ind.adx??'—'} · RSI ${ind.rsi??'—'}</div><div class="sub">15M ${tr['15m']||'—'} · 1H ${tr['1h']||'—'} · 4H ${tr['4h']||'—'} · 1D ${tr['1d']||'—'} · HTF ${d.bias_1d||'—'}/${d.bias_4h||'—'}</div><div class="empty">${d.message||'NO TRADE — wait for confirmation'}</div>
     <div class="actions"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
   list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
