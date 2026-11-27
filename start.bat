@@ -35,21 +35,23 @@ echo [2/3] Checking Python syntax...
 "%PYTHON%" -m py_compile api.py
 if errorlevel 1 (
   echo.
-  echo [AUTO-FIX] api.py syntax problem detected. Trying automatic repair...
+  echo [AUTO-FIX] api.py syntax problem detected. Trying offline repair...
   if not exist scripts\repair_api.py (
-    echo ERROR: Automatic repair helper is missing. Download the latest repository ZIP.
+    echo ERROR: Offline repair helper is missing from this downloaded folder.
+    echo Please extract the complete repository ZIP again.
     pause
     exit /b 1
   )
   "%PYTHON%" scripts\repair_api.py
   if errorlevel 1 (
-    echo ERROR: Automatic repair failed. Original api.py has been preserved.
+    echo ERROR: This syntax issue cannot be safely auto-repaired.
+    echo Original api.py has been preserved. See the error above.
     pause
     exit /b 1
   )
   "%PYTHON%" -m py_compile api.py
   if errorlevel 1 (
-    echo ERROR: api.py is still invalid after automatic repair.
+    echo ERROR: api.py is still invalid after offline repair.
     pause
     exit /b 1
   )
