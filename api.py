@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Daily Signal by Tuhinfay — auto-scan, SQLite, live trades"""
 
-from fastapi import FastAPI, Query, BackgroundTasks
+from fastapi import FastAPI, Query, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Dict, Any, List
@@ -69,7 +69,6 @@ async def dashboard_login(request: Request, body: Dict[str, Any]):
     password = str(body.get("password") or "")
     if not (secrets.compare_digest(username, _APP_USERNAME) and secrets.compare_digest(password, _APP_PASSWORD)):
         return JSONResponse({"ok":False,"error":"Incorrect username or password"}, status_code=401)
-    from fastapi.responses import JSONResponse
     response = JSONResponse({"ok":True})
     # Secure cookies on HTTPS deployments, including reverse proxies.
     secure_cookie = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
