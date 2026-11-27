@@ -23,30 +23,59 @@ import config
 app = FastAPI(title="Daily Signal by Tuhinfay", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Backend-only HTTP Basic authentication. Set APP_PASSWORD in the deployment environment.
+# Backend-only password authentication with an HttpOnly session cookie.
+# Override APP_PASSWORD / APP_USERNAME in the hosting environment.
+import hmac, hashlib
 _APP_PASSWORD = os.environ.get("APP_PASSWORD", "4980")
 _APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
+_SESSION_COOKIE = "daily_signal_session"
+_SESSION_TTL = 12 * 60 * 60
+
+LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Daily Signal · Login</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#060a12;color:#eef3ff;font:15px system-ui,sans-serif}.panel{width:min(360px,calc(100% - 40px));padding:28px;border:1px solid #25334a;border-radius:16px;background:#0c1322;box-shadow:0 18px 60px #0008}h1{font-size:21px;margin:0 0 8px}p{color:#93a4bf;margin:0 0 22px}.field{width:100%;padding:13px;margin:7px 0 14px;border:1px solid #34435d;border-radius:9px;background:#060a12;color:#fff;font-size:16px}.btn{width:100%;padding:13px;border:0;border-radius:9px;background:#0891b2;color:white;font-weight:800;font-size:15px}.err{color:#fb7185;min-height:20px;margin-top:12px}
+</style></head><body><form class="panel" id="login"><h1>Daily Signal</h1><p>Sign in to open your trading dashboard</p><label>Username<input class="field" name="username" value="admin" autocomplete="username" required></label><label>Password<input class="field" name="password" type="password" autocomplete="current-password" autofocus required></label><button class="btn" id="submit">Login</button><div class="err" id="error"></div></form><script>
+document.getElementById('login').addEventListener('submit',async e=>{e.preventDefault();const b=document.getElementById('submit'),err=document.getElementById('error');b.disabled=true;b.textContent='Checking…';err.textContent='';try{const f=new FormData(e.target),r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:f.get('username'),password:f.get('password')})});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Login failed');window.location.replace('/');}catch(x){err.textContent=x.message||'Could not sign in';b.disabled=false;b.textContent='Login';}});
+</script></body></html>"""
+
+def _make_session_token():
+    expires = str(int(time_mod.time()) + _SESSION_TTL)
+    sig = hmac.new(_APP_PASSWORD.encode(), expires.encode(), hashlib.sha256).hexdigest()
+    return expires + "." + sig
+
+def _valid_session(token):
+    try:
+        expires, supplied = token.split(".", 1)
+        if int(expires) < int(time_mod.time()) or int(expires) > int(time_mod.time()) + _SESSION_TTL + 60:
+            return False
+        expected = hmac.new(_APP_PASSWORD.encode(), expires.encode(), hashlib.sha256).hexdigest()
+        return secrets.compare_digest(supplied, expected)
+    except Exception:
+        return False
 
 @app.middleware("http")
 async def require_dashboard_password(request, call_next):
-    if request.method == "OPTIONS":
+    if request.method == "OPTIONS" or request.url.path in ("/api/login", "/health"):
         return await call_next(request)
-    from fastapi.responses import Response
-    from starlette.status import HTTP_401_UNAUTHORIZED
-    supplied_user = supplied_password = ""
-    auth = request.headers.get("authorization", "")
-    if auth.startswith("Basic "):
-        import base64
-        try:
-            decoded = base64.b64decode(auth[6:], validate=True).decode("utf-8")
-            supplied_user, supplied_password = decoded.split(":", 1)
-        except Exception:
-            pass
-    valid = secrets.compare_digest(supplied_user, _APP_USERNAME) and secrets.compare_digest(supplied_password, _APP_PASSWORD)
-    if not valid:
-        return Response("Authentication required", status_code=HTTP_401_UNAUTHORIZED,
-            headers={"WWW-Authenticate": 'Basic realm="Daily Signal", charset="UTF-8"'})
-    return await call_next(request)
+    if _valid_session(request.cookies.get(_SESSION_COOKIE, "")):
+        return await call_next(request)
+    from fastapi.responses import HTMLResponse, JSONResponse
+    if request.url.path == "/":
+        return HTMLResponse(LOGIN_PAGE, headers={"Cache-Control":"no-store"})
+    return JSONResponse({"ok":False,"error":"Session expired. Please log in again."}, status_code=401)
+
+@app.post("/api/login")
+async def dashboard_login(request: Request, body: Dict[str, Any]):
+    username = str(body.get("username") or "")
+    password = str(body.get("password") or "")
+    if not (secrets.compare_digest(username, _APP_USERNAME) and secrets.compare_digest(password, _APP_PASSWORD)):
+        return JSONResponse({"ok":False,"error":"Incorrect username or password"}, status_code=401)
+    from fastapi.responses import JSONResponse
+    response = JSONResponse({"ok":True})
+    # Secure cookies on HTTPS deployments, including reverse proxies.
+    secure_cookie = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
+    response.set_cookie(_SESSION_COOKIE, _make_session_token(), max_age=_SESSION_TTL,
+        httponly=True, secure=secure_cookie, samesite="lax", path="/")
+    return response
 
 
 @app.middleware("http")
