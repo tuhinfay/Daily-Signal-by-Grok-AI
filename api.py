@@ -2562,6 +2562,8 @@ async function loadTrades(){
   const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
   if(!response.ok)throw new Error('Trade list HTTP '+response.status);
   const d=await response.json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
+  window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
+  if(Date.now()-(window._lastTradeScrollAt||0)<1500)return;
   const selection=window.getSelection();
   if(selection&&!selection.isCollapsed){window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));return;}
   const chartIsOpen=!!document.querySelector('#tradeList .chartbox[style*="display: block"]');
@@ -2630,6 +2632,19 @@ ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8p
   }catch(e){console.error('loadTrades',e);}finally{clearTimeout(timeout);window._loadingTrades=false;}
 }
 
+async function addDcaTrade(id){
+  const raw=prompt('Additional position size in USDT notional (market price will be used):');
+  if(raw===null)return;
+  const amount=Number(raw);
+  if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}
+  if(!confirm('Add '+fmt(amount)+' USDT to this running paper trade? Average entry and size will change. Existing SL is not automatically widened.'))return;
+  try{
+    const response=await fetch('/api/trades/'+encodeURIComponent(id)+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:amount})});
+    const data=await response.json();
+    if(!response.ok||!data.ok){toast(data.error||'DCA failed');return;}
+    toast('Additional paper entry added');loadTrades();
+  }catch(e){toast('DCA failed: '+(e.message||'network error'));}
+}
 function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id)];if(!t){toast('Trade details unavailable');return;}window._sharingTrade=t;shareBg.style.display='flex';drawShareCard(t);}
 function closeShare(){shareBg.style.display='none';}
 function drawShareCard(t){
@@ -2678,7 +2693,8 @@ setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
 setInterval(refreshModalMarket,1500);
 // Refresh trade data in-place every 3 seconds; never reload the document.
-setInterval(()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();},3000);
+window.addEventListener('scroll',()=>{window._lastTradeScrollAt=Date.now();},{passive:true});
+setInterval(()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();});
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
