@@ -8,7 +8,6 @@ from __future__ import annotations
 import datetime
 import pathlib
 import re
-import sys
 
 
 # The known accidental JavaScript tail was appended to the uvicorn.run line.
@@ -52,7 +51,7 @@ def main() -> int:
     backup = target.with_name(f"api.py.backup-{stamp}")
     try:
         backup.write_bytes(original)
-        target.write_text(repaired, encoding="utf-8", newline="")
+        target.write_text(repaired, encoding="utf-8")
     except OSError as exc:
         print(f"[AUTO-REPAIR] Could not safely write repaired file: {exc}")
         if backup.exists():
