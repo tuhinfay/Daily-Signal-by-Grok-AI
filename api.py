@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
-import uvicorn, os, json, traceback, uuid, threading, time as time_mod
+import uvicorn, os, json, traceback, uuid, threading, time as time_mod, secrets
 
 from scanner.binance_client import BinanceClient
 from scanner.liquidation_feed import start_liquidation_feed, get_liquidation_summary
@@ -22,6 +22,31 @@ import config
 
 app = FastAPI(title="Daily Signal by Tuhinfay", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Backend-only HTTP Basic authentication. Set APP_PASSWORD in the deployment environment.
+_APP_PASSWORD = os.environ.get("APP_PASSWORD", "4980")
+_APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
+
+@app.middleware("http")
+async def require_dashboard_password(request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    from fastapi.responses import Response
+    from starlette.status import HTTP_401_UNAUTHORIZED
+    supplied_user = supplied_password = ""
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Basic "):
+        import base64
+        try:
+            decoded = base64.b64decode(auth[6:], validate=True).decode("utf-8")
+            supplied_user, supplied_password = decoded.split(":", 1)
+        except Exception:
+            pass
+    valid = secrets.compare_digest(supplied_user, _APP_USERNAME) and secrets.compare_digest(supplied_password, _APP_PASSWORD)
+    if not valid:
+        return Response("Authentication required", status_code=HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": 'Basic realm="Daily Signal", charset="UTF-8"'})
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -243,6 +268,10 @@ class DcaBody(BaseModel):
 class FundsAdjustment(BaseModel):
     action: str
     amount: float
+
+
+class ResetDataBody(BaseModel):
+    password: str
 
 
 def _persist():
@@ -1446,6 +1475,18 @@ async def clear_trade_history():
     _calc_equity()
     db.save_account(_account)
     return {"ok": True, "deleted": len(removed), "account": _account}
+
+
+@app.delete("/api/account/data")
+async def clear_all_account_data(body: ResetDataBody):
+    if not secrets.compare_digest(str(body.password or ""), _APP_PASSWORD):
+        return JSONResponse({"ok": False, "error": "Incorrect password"}, status_code=403)
+    _trades.clear()
+    db.save_all_trades({})
+    start = float(getattr(config, "DEMO_BALANCE", 10000.0))
+    _account.update({"balance": start, "equity": start, "realized_pnl": 0.0, "start_balance": start})
+    db.save_account(_account)
+    return {"ok": True, "deleted": True, "account": _account}
 
 
 @app.get("/api/trades")
