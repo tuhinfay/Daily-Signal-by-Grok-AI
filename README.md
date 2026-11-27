@@ -961,7 +961,7 @@ Daily Signal by Grok AI is an educational market-analysis and simulated paper-tr
 
 ## Dashboard password and account reset
 
-The dashboard is protected by backend HTTP Basic authentication. On first open, the browser asks for a username and password:
+The dashboard is protected by a backend login page (not a browser-native authentication popup). Sign in once to receive an HttpOnly session cookie; normal live polling uses API requests and does not reload the page. The session expires after 12 hours.
 
 - Username: `admin` (default)
 - Password: `4980` (default, as requested)
