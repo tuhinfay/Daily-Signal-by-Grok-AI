@@ -32,9 +32,31 @@ if errorlevel 1 (
 )
 
 echo [2/3] Checking Python syntax...
-"%PYTHON%" -m compileall -q api.py scanner
+"%PYTHON%" -m py_compile api.py
 if errorlevel 1 (
-  echo ERROR: Python syntax check failed. See the error above.
+  echo.
+  echo [AUTO-FIX] api.py syntax problem detected. Trying automatic repair...
+  if not exist scripts\repair_api.py (
+    echo ERROR: Automatic repair helper is missing. Download the latest repository ZIP.
+    pause
+    exit /b 1
+  )
+  "%PYTHON%" scripts\repair_api.py
+  if errorlevel 1 (
+    echo ERROR: Automatic repair failed. Original api.py has been preserved.
+    pause
+    exit /b 1
+  )
+  "%PYTHON%" -m py_compile api.py
+  if errorlevel 1 (
+    echo ERROR: api.py is still invalid after automatic repair.
+    pause
+    exit /b 1
+  )
+)
+"%PYTHON%" -m compileall -q scanner
+if errorlevel 1 (
+  echo ERROR: A Python syntax problem was found under scanner.
   pause
   exit /b 1
 )
