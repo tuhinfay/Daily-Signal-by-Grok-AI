@@ -2561,7 +2561,7 @@ function openModal(s){
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
-function closeModal(){modalBg.style.display='none';}
+function closeModal(){modalBg.style.display='none';window._dcaParentTradeId=null;}
 async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
 async function submitTrade(){
   const submitBtn=document.querySelector('#modalBg .btns .btn.good');
@@ -2598,6 +2598,57 @@ async function submitTrade(){
     else{const detail=Array.isArray(d.detail)?d.detail.map(x=>x.msg||x.loc?.join('.')).join(', '):d.detail;toast(d.error||detail||('Order failed · HTTP '+response.status),5000);}
   }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
   finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
+}
+function tradeNodeKey(node){
+  if(!node||node.nodeType!==1)return null;
+  return node.id||node.getAttribute('data-trade-id')||node.getAttribute('data-key')||null;
+}
+function patchTradeNode(current,fresh){
+  if(current.nodeType!==fresh.nodeType)return fresh.cloneNode(true);
+  if(current.nodeType===3||current.nodeType===8){
+    if(current.nodeValue!==fresh.nodeValue)current.nodeValue=fresh.nodeValue;
+    return current;
+  }
+  if(current.nodeType!==1)return current;
+  if(current.tagName!==fresh.tagName)return fresh.cloneNode(true);
+  for(const attr of [...current.attributes])if(!fresh.hasAttribute(attr.name))current.removeAttribute(attr.name);
+  for(const attr of [...fresh.attributes])if(current.getAttribute(attr.name)!==attr.value)current.setAttribute(attr.name,attr.value);
+  const oldChildren=[...current.childNodes],used=new Set();
+  let cursor=current.firstChild;
+  for(const freshChild of [...fresh.childNodes]){
+    const key=tradeNodeKey(freshChild);
+    let match=null;
+    if(key)match=oldChildren.find(node=>!used.has(node)&&tradeNodeKey(node)===key)||null;
+    if(!match&&cursor&&!used.has(cursor)&&cursor.nodeType===freshChild.nodeType&&(cursor.nodeType!==1||cursor.tagName===freshChild.tagName))match=cursor;
+    if(!match)match=oldChildren.find(node=>!used.has(node)&&node.nodeType===freshChild.nodeType&&(node.nodeType!==1||node.tagName===freshChild.tagName))||null;
+    if(match){
+      used.add(match);
+      const patched=patchTradeNode(match,freshChild);
+      if(patched!==match)current.replaceChild(patched,match);
+      if(patched!==cursor)current.insertBefore(patched,cursor);
+      cursor=patched.nextSibling;
+    }else{
+      const added=freshChild.cloneNode(true);
+      current.insertBefore(added,cursor);
+      cursor=added.nextSibling;
+    }
+  }
+  for(const child of oldChildren)if(!used.has(child)&&child.parentNode===current)current.removeChild(child);
+  return current;
+}
+function patchTradeList(html){
+  const anchor=[...tradeList.querySelectorAll('[data-trade-id]')].find(node=>{
+    const r=node.getBoundingClientRect();return r.bottom>0&&r.top<window.innerHeight;
+  });
+  const anchorId=anchor&&anchor.getAttribute('data-trade-id');
+  const anchorTop=anchor?anchor.getBoundingClientRect().top:null;
+  const template=document.createElement('template');
+  template.innerHTML=html;
+  patchTradeNode(tradeList,template.content);
+  if(anchorId&&anchorTop!==null){
+    const next=[...tradeList.querySelectorAll('[data-trade-id]')].find(node=>node.getAttribute('data-trade-id')===anchorId);
+    if(next){const delta=next.getBoundingClientRect().top-anchorTop;if(Math.abs(delta)>0.5)window.scrollBy(0,delta);}
+  }
 }
 async function loadTrades(){
   if(window._loadingTrades)return;
@@ -2651,6 +2702,7 @@ ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8p
 <div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmtSymbolPrice(t.symbol,t.liquidation_price,t.price_precision):"—"}</strong></div>
         <div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
         <div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
+        <div><em>TP2 %</em><strong>${t.tp2?fmtSymbolPrice(t.symbol,t.tp2,t.price_precision)+' · '+(Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))/Number(t.entry)*100).toFixed(2):'—')+'%':'—'}</strong></div>
                 <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
@@ -2675,31 +2727,36 @@ ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8p
     const openedStamp=t.opened_at||t.filled_at||t.created_at;const openedAt=openedStamp?new Date(openedStamp).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
-    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div class="trade-time"><em>Opened</em><strong>${openedAt}</strong></div><div class="trade-time"><em>Closed</em><strong>${closedAt}</strong></div><div class="trade-time"><em>Time</em><strong>${durationShort(openedStamp,t.closed_at,t.duration_seconds)}</strong></div><div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div></div>${marketSummaryHTML(t)}${marketStructureHTML(t.market_structure,t.price_precision)}<div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
+    return `<div class="history-trade" data-trade-id="${t.id}"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div class="trade-time"><em>Opened</em><strong>${openedAt}</strong></div><div class="trade-time"><em>Closed</em><strong>${closedAt}</strong></div><div class="trade-time"><em>Time</em><strong>${durationShort(openedStamp,t.closed_at,t.duration_seconds)}</strong></div><div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP2 %</em><strong>${t.tp2?fmtSymbolPrice(t.symbol,t.tp2,t.price_precision)+' · '+(Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))/Number(t.entry)*100).toFixed(2):'—')+'%':'—'}</strong></div></div>${marketSummaryHTML(t)}${marketStructureHTML(t.market_structure,t.price_precision)}<div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
   }).join('');h+='</details>';}
-  // Keep the page anchored while refreshing trade data; rebuilding cards must not jump mobile scroll.
-  const tradeListHeight=tradeList.offsetHeight;
-  tradeList.style.minHeight=tradeListHeight+'px';
-  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
-  // Defensive cleanup: never show TP2 as a field on an open My Trades card.
-  tradeList.querySelectorAll('.card').forEach(card=>{if(card.querySelector('.actions button[onclick^="closeTrade("]'))card.querySelectorAll('.vals > div').forEach(row=>{const label=row.querySelector('em');if(label&&label.textContent.trim().toUpperCase()==='TP2')row.remove();});});
+  patchTradeList(h||'<div class="empty">No trades</div>');
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}
-  requestAnimationFrame(()=>{window.scrollTo({left:0,top:scrollY,behavior:'instant'});requestAnimationFrame(()=>{tradeList.style.minHeight='';window.scrollTo({left:0,top:scrollY,behavior:'instant'});});});
   }catch(e){console.error('loadTrades',e);}finally{clearTimeout(timeout);window._loadingTrades=false;}
 }
 
-async function addDcaTrade(id){
-  const raw=prompt('Additional position size in USDT notional (market price will be used):');
-  if(raw===null)return;
-  const amount=Number(raw);
-  if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}
-  if(!confirm('Add '+fmt(amount)+' USDT to this running paper trade? Average entry and size will change. Existing SL is not automatically widened.'))return;
-  try{
-    const response=await fetch('/api/trades/'+encodeURIComponent(id)+'/dca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount_usd:amount})});
-    const data=await response.json();
-    if(!response.ok||!data.ok){toast(data.error||'DCA failed');return;}
-    toast('Additional paper entry added');loadTrades();
-  }catch(e){toast('DCA failed: '+(e.message||'network error'));}
+function addDcaTrade(id){
+  const t=(window._tradeCache||{})[String(id)];
+  if(!t||t.status!=='OPEN'){toast('Running trade details are unavailable');return;}
+  const market=Number(t.current_price)||Number(t.entry)||0;
+  const signal={
+    symbol:t.symbol,side:t.side,market_price:market,entry:market,
+    stop_loss:t.stop_loss,tp1:t.tp1,tp2:t.tp2||null,
+    max_leverage:Number(t.max_leverage)||Number(t.leverage)||20,
+    styles:[t.trade_style||'day'],adx:t.signal_adx,rsi:t.signal_rsi,
+    timeframe_trends:t.timeframe_trends||{},bias_1d:t.bias_1d,bias_4h:t.bias_4h
+  };
+  window._dcaParentTradeId=String(id);
+  openModal(signal);
+  mTitle.textContent='Add Trade / DCA · '+t.symbol;
+  m_mm.value=t.margin_mode||'CROSS';
+  m_lev.value=Number(t.leverage)||20;
+  m_lev.max=Math.max(Number(t.max_leverage)||20,Number(t.leverage)||20);
+  m_sl.value=t.stop_loss||'';
+  m_tp1.value=t.tp1||'';
+  m_tp2.value=t.tp2||'';
+  m_mode.value='amount';m_amount.value='';m_margin.value='';m_qty.value='';
+  m_order_type.value='MARKET';toggleOrderType();syncSizeMode();
+  updateOrderPreview();
 }
 function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id)];if(!t){toast('Trade details unavailable');return;}window._sharingTrade=t;shareBg.style.display='flex';drawShareCard(t);}
 function closeShare(){shareBg.style.display='none';}
