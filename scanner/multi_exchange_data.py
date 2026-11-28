@@ -26,7 +26,7 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_pre
 # a time avoids concurrent use of shared CCXT clients; venue requests still fan out.
 _refresh_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="multi-refresh")
 _refreshing = set()
-_MAX_QUEUED_REFRESHES = 8
+_MAX_QUEUED_REFRESHES = 20
 
 
 def _clean(symbol: str) -> str:
