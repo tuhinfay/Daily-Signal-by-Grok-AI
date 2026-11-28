@@ -1311,6 +1311,8 @@ async def api_signals(style: str = Query("all")):
         s2["already_added"] = (s["symbol"], s["side"]) in open_keys
         s2["market_structure"] = dict(_market_structure_cache.get(_market_symbol_key(s2.get("symbol"))) or s2.get("market_structure") or {})
         s2["market_structure"]["liquidations"] = get_liquidation_summary(s2.get("symbol"))
+        pressure = s2["market_structure"].setdefault("market_pressure", {})
+        pressure["multi_exchange"] = get_multi_exchange_context(s2.get("symbol"))
         s2["price_precision"] = _symbol_price_precision.get(str(s2.get("symbol") or ""))
         if s2["symbol"] in _cache.get("prices", {}):
             s2["market_price"] = _cache["prices"][s2["symbol"]]
@@ -1543,6 +1545,9 @@ async def api_trades():
         trade.update(_daily_market_context_cache.get(symbol) or {})
         trade["market_structure"].update(_daily_market_context_cache.get(symbol) or {})
         trade["market_structure"]["liquidations"] = get_liquidation_summary(symbol)
+        if trade.get("status") == "OPEN":
+            pressure = trade["market_structure"].setdefault("market_pressure", {})
+            pressure["multi_exchange"] = get_multi_exchange_context(symbol)
         trade["opened_at"] = _trade_opened_at(trade)
         trade["duration_seconds"] = _trade_duration_seconds(trade)
         if trade.get("status") != "OPEN":
