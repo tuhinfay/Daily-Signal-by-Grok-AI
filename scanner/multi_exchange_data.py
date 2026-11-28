@@ -22,6 +22,11 @@ _clients: Dict[str, Any] = {}
 _cache: Dict[str, Dict[str, Any]] = {}
 _marketlight_cache: Dict[str, Dict[str, Any]] = {}
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="multi-market")
+# Keep multi-venue collection off the scanner/request path. One symbol refresh at
+# a time avoids concurrent use of shared CCXT clients; venue requests still fan out.
+_refresh_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="multi-refresh")
+_refreshing = set()
+_MAX_QUEUED_REFRESHES = 8
 
 
 def _clean(symbol: str) -> str:
@@ -186,62 +191,89 @@ def _marketlight(base: str):
     return result
 
 
+def _refresh_multi_exchange_context(base: str) -> None:
+    try:
+        futures = {exchange_id: _executor.submit(_venue_snapshot, exchange_id, base)
+                   for exchange_id in _EXCHANGE_IDS}
+        venues_by_id = {}
+        future_to_id = {future: exchange_id for exchange_id, future in futures.items()}
+        try:
+            for future in concurrent.futures.as_completed(future_to_id, timeout=5.0):
+                exchange_id = future_to_id[future]
+                try:
+                    venues_by_id[exchange_id] = future.result()
+                except Exception as exc:
+                    venues_by_id[exchange_id] = {"exchange": exchange_id, "status": "unavailable", "error": str(exc)[:180]}
+        except concurrent.futures.TimeoutError:
+            pass
+        for exchange_id, future in futures.items():
+            if exchange_id not in venues_by_id:
+                future.cancel()
+                venues_by_id[exchange_id] = {"exchange": exchange_id, "status": "unavailable", "error": "Snapshot timed out"}
+        venues = [venues_by_id[exchange_id] for exchange_id in _EXCHANGE_IDS]
+        valid = [venue for venue in venues if venue.get("status") == "ok"]
+        periods = ("5m", "15m", "1h", "4h", "1d")
+        aggregated = {}
+        for tf in periods:
+            buy = sum(float((v.get("timeframes") or {}).get(tf, {}).get("buy_usdt") or 0) for v in valid)
+            sell = sum(float((v.get("timeframes") or {}).get(tf, {}).get("sell_usdt") or 0) for v in valid)
+            total = buy + sell
+            count = sum(1 for v in valid if (v.get("timeframes") or {}).get(tf, {}).get("trades_count", 0) > 0)
+            aggregated[tf] = {
+                "buy_usdt": round(buy, 2) if total else None,
+                "sell_usdt": round(sell, 2) if total else None,
+                "total_volume_usdt": round(total, 2) if total else None,
+                "buy_pct": round(buy / total * 100, 2) if total else None,
+                "sell_pct": round(sell / total * 100, 2) if total else None,
+                "exchange_count": count, "sampled_trades": True,
+            }
+        bid = sum(float(v.get("bid_usdt") or 0) for v in valid)
+        ask = sum(float(v.get("ask_usdt") or 0) for v in valid)
+        depth_total = bid + ask
+        ml = _marketlight(base)
+        output = {
+            "source": "CCXT public exchange APIs + Marketlight (CC BY 4.0)",
+            "base": base, "updated_at": int(time.time() * 1000),
+            "exchange_count": len(valid), "exchange_total": len(_EXCHANGE_IDS),
+            "exchanges": venues, "timeframes": aggregated,
+            "bid_usdt": round(bid, 2) if depth_total else None,
+            "ask_usdt": round(ask, 2) if depth_total else None,
+            "book_imbalance_pct": round((bid - ask) / depth_total * 100, 2) if depth_total else None,
+            "marketlight": ml, "_cached_at": time.time(),
+        }
+        with _lock:
+            _cache[base] = output
+    except Exception as exc:
+        print(f"[multi-market] refresh {base} failed: {exc}")
+    finally:
+        with _lock:
+            _refreshing.discard(base)
+
+
 def get_multi_exchange_context(symbol: str) -> Dict[str, Any]:
-    """Return multi-venue sampled taker flow, order-book depth and public derivatives."""
+    """Return cached multi-venue data immediately and refresh stale symbols in background."""
     base = _base(symbol)
     now = time.time()
     with _lock:
         cached = _cache.get(base)
         if cached and now - cached.get("_cached_at", 0) < _CACHE_TTL:
             return cached
-    futures = {exchange_id: _executor.submit(_venue_snapshot, exchange_id, base)
-               for exchange_id in _EXCHANGE_IDS}
-    venues_by_id = {}
-    future_to_id = {future: exchange_id for exchange_id, future in futures.items()}
-    try:
-        for future in concurrent.futures.as_completed(future_to_id, timeout=9.0):
-            exchange_id = future_to_id[future]
+        if base not in _refreshing and len(_refreshing) < _MAX_QUEUED_REFRESHES:
+            _refreshing.add(base)
             try:
-                venues_by_id[exchange_id] = future.result()
-            except Exception as exc:
-                venues_by_id[exchange_id] = {"exchange": exchange_id, "status": "unavailable", "error": str(exc)[:180]}
-    except concurrent.futures.TimeoutError:
-        pass
-    for exchange_id, future in futures.items():
-        if exchange_id not in venues_by_id:
-            future.cancel()
-            venues_by_id[exchange_id] = {"exchange": exchange_id, "status": "unavailable", "error": "Snapshot timed out"}
-    venues = [venues_by_id[exchange_id] for exchange_id in _EXCHANGE_IDS]
-    valid = [venue for venue in venues if venue.get("status") == "ok"]
-    periods = ("5m", "15m", "1h", "4h", "1d")
-    aggregated = {}
-    for tf in periods:
-        buy = sum(float((v.get("timeframes") or {}).get(tf, {}).get("buy_usdt") or 0) for v in valid)
-        sell = sum(float((v.get("timeframes") or {}).get(tf, {}).get("sell_usdt") or 0) for v in valid)
-        total = buy + sell
-        count = sum(1 for v in valid if (v.get("timeframes") or {}).get(tf, {}).get("trades_count", 0) > 0)
-        aggregated[tf] = {
-            "buy_usdt": round(buy, 2) if total else None,
-            "sell_usdt": round(sell, 2) if total else None,
-            "total_volume_usdt": round(total, 2) if total else None,
-            "buy_pct": round(buy / total * 100, 2) if total else None,
-            "sell_pct": round(sell / total * 100, 2) if total else None,
-            "exchange_count": count, "sampled_trades": True,
-        }
-    bid = sum(float(v.get("bid_usdt") or 0) for v in valid)
-    ask = sum(float(v.get("ask_usdt") or 0) for v in valid)
-    depth_total = bid + ask
-    ml = _marketlight(base)
-    output = {
+                _refresh_executor.submit(_refresh_multi_exchange_context, base)
+            except Exception:
+                _refreshing.discard(base)
+        if cached:
+            stale = dict(cached)
+            stale["stale"] = True
+            stale["refreshing"] = base in _refreshing
+            return stale
+    return {
         "source": "CCXT public exchange APIs + Marketlight (CC BY 4.0)",
-        "base": base, "updated_at": int(time.time() * 1000),
-        "exchange_count": len(valid), "exchange_total": len(_EXCHANGE_IDS),
-        "exchanges": venues, "timeframes": aggregated,
-        "bid_usdt": round(bid, 2) if depth_total else None,
-        "ask_usdt": round(ask, 2) if depth_total else None,
-        "book_imbalance_pct": round((bid - ask) / depth_total * 100, 2) if depth_total else None,
-        "marketlight": ml, "_cached_at": time.time(),
+        "base": base, "updated_at": None, "exchange_count": 0,
+        "exchange_total": len(_EXCHANGE_IDS), "exchanges": [],
+        "timeframes": {}, "bid_usdt": None, "ask_usdt": None,
+        "book_imbalance_pct": None, "marketlight": {"status": "refreshing", "liquidations": {}},
+        "refreshing": base in _refreshing,
     }
-    with _lock:
-        _cache[base] = output
-    return output
