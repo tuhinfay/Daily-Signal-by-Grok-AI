@@ -2642,9 +2642,9 @@ function patchTradeList(html){
   });
   const anchorId=anchor&&anchor.getAttribute('data-trade-id');
   const anchorTop=anchor?anchor.getBoundingClientRect().top:null;
-  const template=document.createElement('template');
-  template.innerHTML=html;
-  patchTradeNode(tradeList,template.content);
+  const holder=document.createElement('div');
+  holder.innerHTML=html;
+  patchTradeNode(tradeList,holder);
   if(anchorId&&anchorTop!==null){
     const next=[...tradeList.querySelectorAll('[data-trade-id]')].find(node=>node.getAttribute('data-trade-id')===anchorId);
     if(next){const delta=next.getBoundingClientRect().top-anchorTop;if(Math.abs(delta)>0.5)window.scrollBy(0,delta);}
