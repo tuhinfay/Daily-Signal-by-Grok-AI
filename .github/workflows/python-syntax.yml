@@ -1,0 +1,39 @@
+name: Application syntax checks
+
+on:
+  push:
+    branches:
+      - fix/trades-live-stability-auth-dca
+  pull_request:
+    branches:
+      - v5-enhancement
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Compile Python files
+        run: python -m compileall -q .
+      - name: Extract and validate dashboard JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("api.py").read_text(encoding="utf-8")
+          page_start = source.index('PAGE = r"""') + len('PAGE = r"""')
+          page_end = source.index('\n"""', page_start)
+          page = source[page_start:page_end]
+          script_start = page.index("<script>") + len("<script>")
+          script_end = page.index("</script>", script_start)
+          Path("dashboard-check.js").write_text(page[script_start:script_end], encoding="utf-8")
+          PY
+          node --check dashboard-check.js

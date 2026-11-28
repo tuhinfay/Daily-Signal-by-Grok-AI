@@ -32,9 +32,33 @@ if errorlevel 1 (
 )
 
 echo [2/3] Checking Python syntax...
-"%PYTHON%" -m compileall -q api.py scanner
+"%PYTHON%" -m py_compile api.py
 if errorlevel 1 (
-  echo ERROR: Python syntax check failed. See the error above.
+  echo.
+  echo [AUTO-FIX] api.py syntax problem detected. Trying offline repair...
+  if not exist scripts\repair_api.py (
+    echo ERROR: Offline repair helper is missing from this downloaded folder.
+    echo Please extract the complete repository ZIP again.
+    pause
+    exit /b 1
+  )
+  "%PYTHON%" scripts\repair_api.py
+  if errorlevel 1 (
+    echo ERROR: This syntax issue cannot be safely auto-repaired.
+    echo Original api.py has been preserved. See the error above.
+    pause
+    exit /b 1
+  )
+  "%PYTHON%" -m py_compile api.py
+  if errorlevel 1 (
+    echo ERROR: api.py is still invalid after offline repair.
+    pause
+    exit /b 1
+  )
+)
+"%PYTHON%" -m compileall -q scanner
+if errorlevel 1 (
+  echo ERROR: A Python syntax problem was found under scanner.
   pause
   exit /b 1
 )

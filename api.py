@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Daily Signal by Tuhinfay — auto-scan, SQLite, live trades"""
 
-from fastapi import FastAPI, Query, BackgroundTasks
+from fastapi import FastAPI, Query, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
-import uvicorn, os, json, traceback, uuid, threading, time as time_mod
+import uvicorn, os, json, traceback, uuid, threading, time as time_mod, secrets
 
 from scanner.binance_client import BinanceClient
 from scanner.liquidation_feed import start_liquidation_feed, get_liquidation_summary
@@ -22,6 +22,59 @@ import config
 
 app = FastAPI(title="Daily Signal by Tuhinfay", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Backend-only password authentication with an HttpOnly session cookie.
+# Override APP_PASSWORD / APP_USERNAME in the hosting environment.
+import hmac, hashlib
+_APP_PASSWORD = os.environ.get("APP_PASSWORD", "4980")
+_APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
+_SESSION_COOKIE = "daily_signal_session"
+_SESSION_TTL = 12 * 60 * 60
+
+LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Daily Signal · Login</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#060a12;color:#eef3ff;font:15px system-ui,sans-serif}.panel{width:min(360px,calc(100% - 40px));padding:28px;border:1px solid #25334a;border-radius:16px;background:#0c1322;box-shadow:0 18px 60px #0008}h1{font-size:21px;margin:0 0 8px}p{color:#93a4bf;margin:0 0 22px}.field{width:100%;padding:13px;margin:7px 0 14px;border:1px solid #34435d;border-radius:9px;background:#060a12;color:#fff;font-size:16px}.btn{width:100%;padding:13px;border:0;border-radius:9px;background:#0891b2;color:white;font-weight:800;font-size:15px}.err{color:#fb7185;min-height:20px;margin-top:12px}
+</style></head><body><form class="panel" id="login"><h1>Daily Signal</h1><p>Sign in to open your trading dashboard</p><label>Username<input class="field" name="username" value="admin" autocomplete="username" required></label><label>Password<input class="field" name="password" type="password" autocomplete="current-password" autofocus required></label><button class="btn" id="submit">Login</button><div class="err" id="error"></div></form><script>
+document.getElementById('login').addEventListener('submit',async e=>{e.preventDefault();const b=document.getElementById('submit'),err=document.getElementById('error');b.disabled=true;b.textContent='Checking…';err.textContent='';try{const f=new FormData(e.target),r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:f.get('username'),password:f.get('password')})});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Login failed');window.location.replace('/');}catch(x){err.textContent=x.message||'Could not sign in';b.disabled=false;b.textContent='Login';}});
+</script></body></html>"""
+
+def _make_session_token():
+    expires = str(int(time_mod.time()) + _SESSION_TTL)
+    sig = hmac.new(_APP_PASSWORD.encode(), expires.encode(), hashlib.sha256).hexdigest()
+    return expires + "." + sig
+
+def _valid_session(token):
+    try:
+        expires, supplied = token.split(".", 1)
+        if int(expires) < int(time_mod.time()) or int(expires) > int(time_mod.time()) + _SESSION_TTL + 60:
+            return False
+        expected = hmac.new(_APP_PASSWORD.encode(), expires.encode(), hashlib.sha256).hexdigest()
+        return secrets.compare_digest(supplied, expected)
+    except Exception:
+        return False
+
+@app.middleware("http")
+async def require_dashboard_password(request, call_next):
+    if request.method == "OPTIONS" or request.url.path in ("/api/login", "/health"):
+        return await call_next(request)
+    if _valid_session(request.cookies.get(_SESSION_COOKIE, "")):
+        return await call_next(request)
+    from fastapi.responses import HTMLResponse, JSONResponse
+    if request.url.path == "/":
+        return HTMLResponse(LOGIN_PAGE, headers={"Cache-Control":"no-store"})
+    return JSONResponse({"ok":False,"error":"Session expired. Please log in again."}, status_code=401)
+
+@app.post("/api/login")
+async def dashboard_login(request: Request, body: Dict[str, Any]):
+    username = str(body.get("username") or "")
+    password = str(body.get("password") or "")
+    if not (secrets.compare_digest(username, _APP_USERNAME) and secrets.compare_digest(password, _APP_PASSWORD)):
+        return JSONResponse({"ok":False,"error":"Incorrect username or password"}, status_code=401)
+    response = JSONResponse({"ok":True})
+    # Secure cookies on HTTPS deployments, including reverse proxies.
+    secure_cookie = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
+    response.set_cookie(_SESSION_COOKIE, _make_session_token(), max_age=_SESSION_TTL,
+        httponly=True, secure=secure_cookie, samesite="lax", path="/")
+    return response
 
 
 @app.middleware("http")
@@ -219,6 +272,11 @@ class TradeCreate(BaseModel):
     profit_lock_enabled: bool = False
     profit_activation_pct: Optional[float] = None
     profit_callback_pct: Optional[float] = None
+    signal_adx: Optional[float] = None
+    signal_rsi: Optional[float] = None
+    timeframe_trends: Optional[Dict[str, str]] = None
+    bias_1d: Optional[str] = None
+    bias_4h: Optional[str] = None
 
 
 class TradeUpdate(BaseModel):
@@ -243,6 +301,10 @@ class DcaBody(BaseModel):
 class FundsAdjustment(BaseModel):
     action: str
     amount: float
+
+
+class ResetDataBody(BaseModel):
+    password: str
 
 
 def _persist():
@@ -1249,6 +1311,8 @@ async def api_signals(style: str = Query("all")):
         s2["already_added"] = (s["symbol"], s["side"]) in open_keys
         s2["market_structure"] = dict(_market_structure_cache.get(_market_symbol_key(s2.get("symbol"))) or s2.get("market_structure") or {})
         s2["market_structure"]["liquidations"] = get_liquidation_summary(s2.get("symbol"))
+        pressure = s2["market_structure"].setdefault("market_pressure", {})
+        pressure["multi_exchange"] = get_multi_exchange_context(s2.get("symbol"))
         s2["price_precision"] = _symbol_price_precision.get(str(s2.get("symbol") or ""))
         if s2["symbol"] in _cache.get("prices", {}):
             s2["market_price"] = _cache["prices"][s2["symbol"]]
@@ -1354,8 +1418,15 @@ def analyze_one(symbol: str, style: str = Query("day")):
     _scan_max_leverage[sym] = lev
     liq = ("VERY HIGH" if volume_24h >= 1e8 else "HIGH" if volume_24h >= 4e7 else "MED" if volume_24h >= 1.2e7 else "LOW" if volume_24h > 0 else "UNKNOWN")
     if not r:
+        entry_tf = {"scalp": "5m", "day": "15m", "swing": "1h", "hybrid": "15m"}[selected_style]
+        latest = get_latest(add_indicators(data[entry_tf]))
+        indicators = {"adx": round(float(latest.get("adx") or 0), 1), "rsi": round(float(latest.get("rsi") or 0), 1)}
+        trends = _timeframe_trend_map(data)
         return {"ok": True, "signal": None, "symbol": sym, "market_price": px,
-                "max_leverage": lev, "liquidity": liq, "message": f"No {selected_style} confluence signal now"}
+                "max_leverage": lev, "liquidity": liq, "indicators": indicators,
+                "timeframe_trends": trends, "bias_1d": trends.get("1d", "SIDE"),
+                "bias_4h": trends.get("4h", "SIDE"),
+                "message": f"NO TRADE — no {selected_style} confluence now"}
     r["market_price"] = (r.get("mark_price") if selected_style == "hybrid" else None) or px or r["entry"]
     r["timeframe_trends"] = _timeframe_trend_map(data)
     r["price_precision"] = client.get_price_precision(sym)
@@ -1448,6 +1519,18 @@ async def clear_trade_history():
     return {"ok": True, "deleted": len(removed), "account": _account}
 
 
+@app.delete("/api/account/data")
+async def clear_all_account_data(body: ResetDataBody):
+    if not secrets.compare_digest(str(body.password or ""), _APP_PASSWORD):
+        return JSONResponse({"ok": False, "error": "Incorrect password"}, status_code=403)
+    _trades.clear()
+    db.save_all_trades({})
+    start = float(getattr(config, "DEMO_BALANCE", 10000.0))
+    _account.update({"balance": start, "equity": start, "realized_pnl": 0.0, "start_balance": start})
+    db.save_account(_account)
+    return {"ok": True, "deleted": True, "account": _account}
+
+
 @app.get("/api/trades")
 async def api_trades():
     # This endpoint must remain local/fast: never make Binance network calls while
@@ -1462,6 +1545,9 @@ async def api_trades():
         trade.update(_daily_market_context_cache.get(symbol) or {})
         trade["market_structure"].update(_daily_market_context_cache.get(symbol) or {})
         trade["market_structure"]["liquidations"] = get_liquidation_summary(symbol)
+        if trade.get("status") == "OPEN":
+            pressure = trade["market_structure"].setdefault("market_pressure", {})
+            pressure["multi_exchange"] = get_multi_exchange_context(symbol)
         trade["opened_at"] = _trade_opened_at(trade)
         trade["duration_seconds"] = _trade_duration_seconds(trade)
         if trade.get("status") != "OPEN":
@@ -1671,6 +1757,8 @@ def create_trade(body: TradeCreate):
         "entry": entry_price, "stop_loss": body.stop_loss, "tp1": body.tp1, "tp2": body.tp2,
         "leverage": lev, "max_leverage": max_lev, "leverage_verified": max_lev is not None, "margin_mode": margin_mode,
         "trade_style": (str(body.trade_style).lower() if str(body.trade_style or "").lower() in ("scalp", "day", "swing") else "day"),
+        "signal_adx": body.signal_adx, "signal_rsi": body.signal_rsi,
+        "timeframe_trends": dict(body.timeframe_trends or {}), "bias_1d": body.bias_1d, "bias_4h": body.bias_4h,
         "qty": round(qty, 6), "margin": round(margin, 2), "notional": round(notional, 2),
         "risk_usd": round(risk_usd, 2), "liquidity": liq,
         "trailing_pct": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "callback_rate": (max(0.1, min(float(body.profit_callback_pct or 0.5), 5.0)) if body.advanced_enabled and body.profit_lock_enabled else None), "trailing_activation_price": None,
@@ -2180,6 +2268,7 @@ body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--tex
       <div><em>Equity</em><strong id="aEq">—</strong></div>
       <div><em>Realized</em><strong id="aReal">—</strong></div>
     </div>
+    <div class="actions"><button class="btn bad" onclick="clearAllAccountData()">Clear All Trade & Account Data</button></div>
     <div class="fund-tools">
       <input id="fundAmount" type="number" min="0.01" step="any" placeholder="Enter USDT amount">
       <div class="actions"><button class="btn good" onclick="adjustFunds('add')">＋ Add Funds</button><button class="btn bad" onclick="adjustFunds('remove')">− Remove Funds</button></div>
@@ -2443,7 +2532,7 @@ async function analyzeManual(){
   const d=await(await fetch('/api/analyze/'+s+'?style='+(style==='all'?'day':style))).json();
   const list=document.getElementById('signalList');
   if(!d.ok){list.innerHTML=`<div class="empty">${d.error||'Failed'}</div>`;return;}
-  if(!d.signal){list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'—'} · max ${d.max_leverage||'—'}x</div><div class="empty">${d.message||'No signal'}</div>
+  if(!d.signal){const tr=d.timeframe_trends||{},ind=d.indicators||{};list.innerHTML=`<div class="card"><div class="sym">${d.symbol}</div><div class="sub">Market ${d.market_price??'—'} · max ${d.max_leverage||'—'}x</div><div class="sub">ADX ${ind.adx??'—'} · RSI ${ind.rsi??'—'}</div><div class="sub">15M ${tr['15m']||'—'} · 1H ${tr['1h']||'—'} · 4H ${tr['4h']||'—'} · 1D ${tr['1d']||'—'} · HTF ${d.bias_1d||'—'}/${d.bias_4h||'—'}</div><div class="empty">${d.message||'NO TRADE — wait for confirmation'}</div>
     <div class="actions"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button><button class="btn dim" onclick="toggleChart('chm','${d.symbol}')">Chart</button></div><div class="chartbox" id="chm"></div></div>`;return;}
   list.innerHTML=cardHTML(d.signal)+`<div class="actions" style="padding:0 10px"><button class="btn dim" onclick="pinManual=false;loadSignals()">Back to list</button></div>`;
   speak(`${d.signal.side} ${d.signal.symbol.replace('USDT','')}`);
@@ -2467,6 +2556,7 @@ function openSignalTrade(symbol,side){
   openModal(signal);
 }
 function openModal(s){
+  window._selectedSignal=s;
   window._selectedTradeStrategy=(style!=='all'?style:((s.styles||[]).find(x=>['scalp','day','swing'].includes(x))||'day'));
   mTitle.textContent=s.symbol;
   m_symbol.value=s.symbol; m_side.value=s.side; m_mm.value='CROSS'; m_order_type.value='MARKET';
@@ -2476,7 +2566,7 @@ function openModal(s){
   const ml=s.max_leverage||20; m_lev.value=ml; m_lev.max=ml; m_mode.value='amount'; m_amount.value=''; m_margin.value=''; m_qty.value=''; m_scale.value=''; m_scale_n.value=''; toggleOrderType(); syncSizeMode();
   modalBg.style.display='flex'; updateOrderPreview();
 }
-function closeModal(){modalBg.style.display='none';}
+function closeModal(){modalBg.style.display='none';window._dcaParentTradeId=null;}
 async function refreshModalMarket(){if(modalBg.style.display!=='flex'||!m_symbol.value)return;try{const d=await(await fetch('/api/market-price/'+encodeURIComponent(m_symbol.value))).json();if(d.price>0){m_mkt.value=d.price;if(m_order_type.value==='MARKET')m_entry.value=d.price;updateOrderPreview();}}catch(e){}}
 async function submitTrade(){
   const submitBtn=document.querySelector('#modalBg .btns .btn.good');
@@ -2494,7 +2584,8 @@ async function submitTrade(){
   const adv=document.getElementById('addAdvanced').open,offset=adv?(+m_limit_offset.value||0):0;
   if(offset>0&&typ!=='LIMIT'){toast('Choose Limit order to use Limit Entry Offset');return;}
   if(offset>0&&m_scale.value){toast('Limit offset cannot be combined with scaled entry');return;}
-  const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null,advanced_enabled:adv,dca_enabled:adv&&m_adv_dca.checked,dca_gap_pct:+m_dca_gap.value||1.5,dca_max_orders:+m_dca_max.value||3,dca_multiplier:+m_dca_mult.value||1.5,dca_lower_price:+m_dca_low.value||null,dca_upper_price:+m_dca_high.value||null,limit_offset_pct:offset,sl_pct:adv?(+m_sl_pct.value||null):null,tp1_pct:adv?(+m_tp1_pct.value||null):null,tp2_pct:adv?(+m_tp2_pct.value||null):null,profit_lock_enabled:adv&&m_profit_lock.checked,profit_activation_pct:+m_profit_activation.value||0.8,profit_callback_pct:+m_profit_callback.value||0.5};
+  const signalMeta=window._selectedSignal||{};
+  const body={symbol:m_symbol.value,side:m_side.value,trade_style:window._selectedTradeStrategy||'day',signal_adx:signalMeta.adx??null,signal_rsi:signalMeta.rsi??null,timeframe_trends:signalMeta.timeframe_trends||{},bias_1d:signalMeta.bias_1d||null,bias_4h:signalMeta.bias_4h||null,order_type:typ,entry:px,limit_price:typ==='LIMIT'?px:null,stop_loss:+m_sl.value,tp1:+m_tp1.value,tp2:+m_tp2.value||null,leverage:+m_lev.value||20,margin_mode:m_mm.value,scale_mode:m_scale.value||null,scale_orders:+m_scale_n.value||0,scale_lower_price:rangeLow||null,scale_upper_price:rangeHigh||null,advanced_enabled:adv,dca_enabled:adv&&m_adv_dca.checked,dca_gap_pct:+m_dca_gap.value||1.5,dca_max_orders:+m_dca_max.value||3,dca_multiplier:+m_dca_mult.value||1.5,dca_lower_price:+m_dca_low.value||null,dca_upper_price:+m_dca_high.value||null,limit_offset_pct:offset,sl_pct:adv?(+m_sl_pct.value||null):null,tp1_pct:adv?(+m_tp1_pct.value||null):null,tp2_pct:adv?(+m_tp2_pct.value||null):null,profit_lock_enabled:adv&&m_profit_lock.checked,profit_activation_pct:+m_profit_activation.value||0.8,profit_callback_pct:+m_profit_callback.value||0.5};
   if(mode==='amount')body.amount_usd=+m_amount.value;
   if(mode==='margin')body.margin_usd=+m_margin.value;
   if(mode==='risk')body.risk_pct=+m_risk.value||1;
@@ -2513,16 +2604,78 @@ async function submitTrade(){
   }catch(e){console.error('submitTrade',e);toast('Order request failed: '+(e.message||'network error'),5000);}
   finally{submitBtn.disabled=false;submitBtn.textContent='Open Trade';}
 }
+function tradeNodeKey(node){
+  if(!node||node.nodeType!==1)return null;
+  return node.id||node.getAttribute('data-trade-id')||node.getAttribute('data-key')||null;
+}
+function patchTradeNode(current,fresh){
+  if(current.nodeType!==fresh.nodeType)return fresh.cloneNode(true);
+  if(current.nodeType===3||current.nodeType===8){
+    if(current.nodeValue!==fresh.nodeValue)current.nodeValue=fresh.nodeValue;
+    return current;
+  }
+  if(current.nodeType!==1)return current;
+  if(current.tagName!==fresh.tagName)return fresh.cloneNode(true);
+  for(const attr of [...current.attributes])if(!fresh.hasAttribute(attr.name))current.removeAttribute(attr.name);
+  for(const attr of [...fresh.attributes])if(current.getAttribute(attr.name)!==attr.value)current.setAttribute(attr.name,attr.value);
+  const oldChildren=[...current.childNodes],used=new Set();
+  let cursor=current.firstChild;
+  for(const freshChild of [...fresh.childNodes]){
+    const key=tradeNodeKey(freshChild);
+    let match=null;
+    if(key)match=oldChildren.find(node=>!used.has(node)&&tradeNodeKey(node)===key)||null;
+    if(!match&&cursor&&!used.has(cursor)&&cursor.nodeType===freshChild.nodeType&&(cursor.nodeType!==1||cursor.tagName===freshChild.tagName))match=cursor;
+    if(!match)match=oldChildren.find(node=>!used.has(node)&&node.nodeType===freshChild.nodeType&&(node.nodeType!==1||node.tagName===freshChild.tagName))||null;
+    if(match){
+      used.add(match);
+      const patched=patchTradeNode(match,freshChild);
+      if(patched!==match)current.replaceChild(patched,match);
+      if(patched!==cursor)current.insertBefore(patched,cursor);
+      cursor=patched.nextSibling;
+    }else{
+      const added=freshChild.cloneNode(true);
+      current.insertBefore(added,cursor);
+      cursor=added.nextSibling;
+    }
+  }
+  for(const child of oldChildren)if(!used.has(child)&&child.parentNode===current)current.removeChild(child);
+  return current;
+}
+function patchTradeList(html){
+  const anchor=[...tradeList.querySelectorAll('[data-trade-id]')].find(node=>{
+    const r=node.getBoundingClientRect();return r.bottom>0&&r.top<window.innerHeight;
+  });
+  const anchorId=anchor&&anchor.getAttribute('data-trade-id');
+  const anchorTop=anchor?anchor.getBoundingClientRect().top:null;
+  const holder=tradeList.cloneNode(false);
+  holder.innerHTML=html;
+  patchTradeNode(tradeList,holder);
+  if(anchorId&&anchorTop!==null){
+    const next=[...tradeList.querySelectorAll('[data-trade-id]')].find(node=>node.getAttribute('data-trade-id')===anchorId);
+    if(next){const delta=next.getBoundingClientRect().top-anchorTop;if(Math.abs(delta)>0.5)window.scrollBy(0,delta);}
+  }
+}
 async function loadTrades(){
-  if(window._loadingTrades)return;window._loadingTrades=true;
+  if(window._loadingTrades)return;
+  window._loadingTrades=true;
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),8000);
-  try{const scrollY=window.scrollY;const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;const openExpanded=document.getElementById('openTradesDetails')?.open??true;const closedExpanded=document.getElementById('closedTradesDetails')?.open??false;
-  const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
-  if(!response.ok)throw new Error('Trade list HTTP '+response.status);
-  const d=await response.json(); setAcc(d.account); renderStats(d.stats,tradeStats); sOpen.textContent=(d.stats&&d.stats.open)||0;
-  const selection=window.getSelection();
-  if(selection&&!selection.isCollapsed){window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));return;}
+  try{
+    const scrollY=window.scrollY;
+    const openCharts=[...document.querySelectorAll('#tradeList .chartbox[style*="display: block"]')];
+    const pendingExpanded=document.getElementById('pendingOrdersDetails')?.open||false;
+    const openExpanded=document.getElementById('openTradesDetails')?.open??true;
+    const closedExpanded=document.getElementById('closedTradesDetails')?.open??false;
+    const response=await fetch('/api/trades',{cache:'no-store',signal:controller.signal});
+    if(!response.ok)throw new Error('Trade list HTTP '+response.status);
+    const d=await response.json();
+    setAcc(d.account);
+    renderStats(d.stats,tradeStats);
+    sOpen.textContent=(d.stats&&d.stats.open)||0;
+    window._tradeCache=Object.fromEntries((d.trades||[]).map(t=>[String(t.id),t]));
+    // Do not replace interactive controls while the user is selecting text.
+    const selection=window.getSelection();
+    if(selection&&!selection.isCollapsed)return;
   const chartIsOpen=!!document.querySelector('#tradeList .chartbox[style*="display: block"]');
   const manageIsOpen=document.getElementById('manageBg')?.style.display==='flex';
   if(chartIsOpen||manageIsOpen)return;
@@ -2535,7 +2688,7 @@ async function loadTrades(){
   if(open.length){h+='<details id="openTradesDetails" class="trade-section" '+(openExpanded?'open':'')+'><summary class="sec" style="cursor:pointer">Running Trades ('+open.length+')</summary>';h+=open.map(t=>{
     const L=t.side==='LONG';const up=(t.unrealized_pnl||0)>=0;
     const trail=t.callback_rate?(t.callback_rate+'%'):((t.trailing_pct||0)?(t.trailing_pct+'%'):'—');
-    return `<article class="card ${L?'L':'S'}${t.hit?' hit':''}">
+    return `<article data-trade-id="${t.id}" class="card ${L?'L':'S'}${t.hit?' hit':''}">
       <div class="head"><div><span class="side ${L?'L':'S'}">${t.side}</span><span class="sym">${t.symbol}</span>
         <span class="tag">${t.leverage}x</span><span class="tag">${t.margin_mode||'CROSS'}</span><span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span>
         <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'% 24H'}</span>
@@ -2546,6 +2699,7 @@ async function loadTrades(){
 ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8px;margin:8px 0;border-radius:8px">⚠ '+t.analysis_alert+'</div>':''}
       ${t.trailing_recommendation?'<div class="hint" style="border:1px solid #22d3ee;padding:8px;margin:8px 0;border-radius:8px">Suggested trailing: activate at +'+t.trailing_recommendation.activation_profit_pct+'% profit · callback '+t.trailing_recommendation.callback_pct+'% <button class="btn dim" onclick="applySuggestedTrail(\''+t.id+'\','+t.trailing_recommendation.activation_profit_pct+','+t.trailing_recommendation.callback_pct+')">Apply</button></div>':''}
       ${marketSummaryHTML(t)}
+      <div class="sub">ADX ${t.signal_adx??"—"} · RSI ${t.signal_rsi??"—"} · 15M ${(t.timeframe_trends||{})["15m"]||"—"} · 1H ${(t.timeframe_trends||{})["1h"]||"—"} · 4H ${(t.timeframe_trends||{})["4h"]||"—"} · 1D ${(t.timeframe_trends||{})["1d"]||"—"} · HTF ${t.bias_1d||"—"}/${t.bias_4h||"—"}</div>
       <div class="vals">
         <div><em>Average Entry</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div>
         <div><em>Mark Price</em><strong>${t.current_price==null?'—':fmtSymbolPrice(t.symbol,t.current_price,t.price_precision)}</strong></div>
@@ -2553,6 +2707,7 @@ ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8p
 <div><em>Liquidation Price</em><strong>${t.liquidation_price?(t.liquidation_risk==="LOW"?"✓ Safe · ":"⚠ ")+fmtSymbolPrice(t.symbol,t.liquidation_price,t.price_precision):"—"}</strong></div>
         <div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
         <div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div>
+        <div><em>TP2 %</em><strong>${t.tp2?fmtSymbolPrice(t.symbol,t.tp2,t.price_precision)+' · '+(Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))/Number(t.entry)*100).toFixed(2):'—')+'%':'—'}</strong></div>
                 <div><em>Margin</em><strong>${fmt(t.margin)}</strong></div>
         <div><em>Qty</em><strong>${t.qty}</strong></div>
         <div><em>Trade Amount</em><strong>${fmt(t.notional||((Number(t.entry)||0)*(Number(t.qty)||0)))}</strong></div>
@@ -2564,6 +2719,7 @@ ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8p
       </div>
       ${marketStructureHTML(t.market_structure,t.price_precision)}
       <div class="actions">
+        <button class="btn good" onclick="addDcaTrade('${t.id}')">Add Trade / DCA</button>
         <button class="btn bad" onclick="closeTrade('${t.id}')">Close</button>
         <button class="btn dim" onclick="trailPrompt('${t.id}',${t.callback_rate||t.trailing_pct||0},${t.trailing_activation_price||0})">Trailing Stop</button>
         <button class="btn dim" onclick="editLevels('${t.id}',${t.stop_loss},${t.tp1},${t.tp2||0})">SL/TP</button>
@@ -2576,19 +2732,37 @@ ${t.analysis_alert?'<div class="hint" style="border:1px solid #d9a441;padding:8p
     const openedStamp=t.opened_at||t.filled_at||t.created_at;const openedAt=openedStamp?new Date(openedStamp).toLocaleString():'—';
     const closedAt=t.closed_at?new Date(t.closed_at).toLocaleString():'—';
     const tradeAmount=Array.isArray(t.dca_history)&&t.dca_history.length?t.dca_history.reduce((sum,x)=>sum+(Number(x.notional)||0),0):(Number(t.notional)||((Number(t.entry)||0)*(Number(t.qty)||0)));
-    return `<div class="history-trade"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div class="trade-time"><em>Opened</em><strong>${openedAt}</strong></div><div class="trade-time"><em>Closed</em><strong>${closedAt}</strong></div><div class="trade-time"><em>Time</em><strong>${durationShort(openedStamp,t.closed_at,t.duration_seconds)}</strong></div><div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div></div>${marketSummaryHTML(t)}${marketStructureHTML(t.market_structure,t.price_precision)}<div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
+    return `<div class="history-trade" data-trade-id="${t.id}"><div class="head"><span><b class="side ${t.side==="LONG"?"L":"S"}">${t.side}</b> <b>${t.symbol}</b> <span class="tag">${t.leverage||'—'}x</span> <span class="tag">${t.margin_mode||'CROSS'}</span> <span class="tag ${t.daily_change_pct==null?'':(Number(t.daily_change_pct)>=0?'up':'dn')}">${t.daily_change_pct==null?'—':(Number(t.daily_change_pct)>=0?'+':'')+Number(t.daily_change_pct).toFixed(2)+'%'} 24H</span> <span class="tag">${({scalp:'Scalp',day:'Day',swing:'Swing'}[String(t.trade_style||'day').toLowerCase()]||'Day')}</span> ${t.auto_trade?'<span class="tag">BOT</span>':''} · ${t.hit||"CLOSED"}</span><b style="color:${pnl>=0?'var(--gn)':'var(--rd)'}">${pnl>=0?'+':''}${fmt(pnl)}</b></div><div class="vals"><div><em>Entry Price</em><strong>${fmtSymbolPrice(t.symbol,t.entry,t.price_precision)}</strong></div><div><em>Close Price</em><strong>${exit?fmtSymbolPrice(t.symbol,exit,t.price_precision):'—'}</strong></div><div><em>Quantity</em><strong>${fmt(t.qty)}</strong></div><div><em>Trade Amount</em><strong>${fmt(tradeAmount)} USDT</strong></div><div class="trade-time"><em>Opened</em><strong>${openedAt}</strong></div><div class="trade-time"><em>Closed</em><strong>${closedAt}</strong></div><div class="trade-time"><em>Time</em><strong>${durationShort(openedStamp,t.closed_at,t.duration_seconds)}</strong></div><div><em>SL %</em><strong>${fmtSymbolPrice(t.symbol,t.stop_loss,t.price_precision)} · ${Number(t.entry)>0?Math.abs((Number(t.stop_loss)-Number(t.entry))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP1 %</em><strong>${fmtSymbolPrice(t.symbol,t.tp1,t.price_precision)} · ${Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp1)-Number(t.entry)):(Number(t.entry)-Number(t.tp1)))/Number(t.entry)*100).toFixed(2):'—'}%</strong></div><div><em>TP2 %</em><strong>${t.tp2?fmtSymbolPrice(t.symbol,t.tp2,t.price_precision)+' · '+(Number(t.entry)>0?((t.side==='LONG'?(Number(t.tp2)-Number(t.entry)):(Number(t.entry)-Number(t.tp2)))/Number(t.entry)*100).toFixed(2):'—')+'%':'—'}</strong></div></div>${marketSummaryHTML(t)}${marketStructureHTML(t.market_structure,t.price_precision)}<div class="actions"><button class="btn dim" onclick="shareTrade('${t.id}')">Share</button></div></div>`;
   }).join('');h+='</details>';}
-  // Keep the page anchored while refreshing trade data; rebuilding cards must not jump mobile scroll.
-  const tradeListHeight=tradeList.offsetHeight;
-  tradeList.style.minHeight=tradeListHeight+'px';
-  tradeList.innerHTML=h||'<div class="empty">No trades</div>';
-  // Defensive cleanup: never show TP2 as a field on an open My Trades card.
-  tradeList.querySelectorAll('.card').forEach(card=>{if(card.querySelector('.actions button[onclick^="closeTrade("]'))card.querySelectorAll('.vals > div').forEach(row=>{const label=row.querySelector('em');if(label&&label.textContent.trim().toUpperCase()==='TP2')row.remove();});});
+  patchTradeList(h||'<div class="empty">No trades</div>');
   for(const oldNode of openCharts){const fresh=document.getElementById(oldNode.id);if(fresh)fresh.replaceWith(oldNode);}
-  requestAnimationFrame(()=>{window.scrollTo({left:0,top:scrollY,behavior:'instant'});requestAnimationFrame(()=>{tradeList.style.minHeight='';window.scrollTo({left:0,top:scrollY,behavior:'instant'});});});
   }catch(e){console.error('loadTrades',e);}finally{clearTimeout(timeout);window._loadingTrades=false;}
 }
 
+function addDcaTrade(id){
+  const t=(window._tradeCache||{})[String(id)];
+  if(!t||t.status!=='OPEN'){toast('Running trade details are unavailable');return;}
+  const market=Number(t.current_price)||Number(t.entry)||0;
+  const signal={
+    symbol:t.symbol,side:t.side,market_price:market,entry:market,
+    stop_loss:t.stop_loss,tp1:t.tp1,tp2:t.tp2||null,
+    max_leverage:Number(t.max_leverage)||Number(t.leverage)||20,
+    styles:[t.trade_style||'day'],adx:t.signal_adx,rsi:t.signal_rsi,
+    timeframe_trends:t.timeframe_trends||{},bias_1d:t.bias_1d,bias_4h:t.bias_4h
+  };
+  window._dcaParentTradeId=String(id);
+  openModal(signal);
+  mTitle.textContent='Add Trade / DCA · '+t.symbol;
+  m_mm.value=t.margin_mode||'CROSS';
+  m_lev.value=Number(t.leverage)||20;
+  m_lev.max=Math.max(Number(t.max_leverage)||20,Number(t.leverage)||20);
+  m_sl.value=t.stop_loss||'';
+  m_tp1.value=t.tp1||'';
+  m_tp2.value=t.tp2||'';
+  m_mode.value='amount';m_amount.value='';m_margin.value='';m_qty.value='';
+  m_order_type.value='MARKET';toggleOrderType();syncSizeMode();
+  updateOrderPreview();
+}
 function shareTrade(id){const t=window._tradeCache&&window._tradeCache[String(id)];if(!t){toast('Trade details unavailable');return;}window._sharingTrade=t;shareBg.style.display='flex';drawShareCard(t);}
 function closeShare(){shareBg.style.display='none';}
 function drawShareCard(t){
@@ -2628,6 +2802,17 @@ async function editLevels(id,sl,tp1,tp2){const t=(window._tradeCache||{})[String
 function syncLevelPct(kind,source){const isSL=kind==='sl',isTP2=kind==='tp2',priceEl=isSL?manageSL:(isTP2?manageTP2:manageTP1),pctEl=isSL?manageSLPct:(isTP2?manageTP2Pct:manageTP1Pct),entry=Number(window._manageEntry)||0,side=window._manageSide||'LONG';if(!(entry>0))return;if(source==='price'){const p=Number(priceEl.value);if(!(p>0))return;const pct=side==='LONG'?(isSL?(entry-p)/entry*100:(p-entry)/entry*100):(isSL?(p-entry)/entry*100:(entry-p)/entry*100);pctEl.value=Number.isFinite(pct)?Math.max(0,pct).toFixed(3):'';}else{const pct=Number(pctEl.value);if(!(pct>=0))return;const f=pct/100,p=side==='LONG'?(isSL?entry*(1-f):entry*(1+f)):(isSL?entry*(1+f):entry*(1-f));priceEl.value=p>0?Number(p.toPrecision(10)):'';}}
 async function clearTradeHistory(){if(!confirm('Delete closed/canceled trade history? Open positions will remain.'))return;const d=await(await fetch('/api/trades/history',{method:'DELETE'})).json();if(d.ok){toast(d.deleted+' history records cleared');loadTrades();}}
 function loadMovers(){const m=window._movers||{gainers:[],losers:[]};const mk=(arr,up)=>arr.map(x=>`<div class="i" onclick="symIn.value='${x.symbol}';showTab('signals');analyzeManual()"><b>${x.symbol.replace(/(USDT|USDC)$/,'')}</b><span class="${up?'up':'dn'}">${x.change>=0?'+':''}${Number(x.change).toFixed(2)}%</span></div>`).join('')||'<div class="empty">Waiting for scan…</div>';gainers.innerHTML=mk(m.gainers||[],1);losers.innerHTML=mk(m.losers||[],0);}
+async function clearAllAccountData(){
+  const password=prompt('Enter account password to clear all trade history and reset the paper account:');
+  if(password===null)return;
+  if(!confirm('Permanently delete all OPEN, PENDING and CLOSED paper trades and reset account balance?'))return;
+  try{
+    const response=await fetch('/api/account/data',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});
+    const data=await response.json();
+    if(!response.ok||!data.ok){toast(data.error||'Clear failed');return;}
+    toast('All paper-trade data cleared');loadAccount();loadTrades();
+  }catch(e){toast('Clear failed: '+(e.message||'network error'));}
+}
 async function loadAccount(){const a=await(await fetch('/api/account')).json();setAcc(a);renderStats(a.stats,accStats);sOpen.textContent=a.open_trades||0;}
 async function adjustFunds(action){const input=document.getElementById('fundAmount'),amount=Number(input.value);if(!(Number.isFinite(amount)&&amount>0)){toast('Enter a valid USDT amount');return;}const label=action==='add'?'Add':'Remove';if(!confirm(label+' $'+fmt(amount)+' USDT '+(action==='add'?'to':'from')+' paper account?'))return;try{const r=await fetch('/api/account/funds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,amount})}),d=await r.json();if(!r.ok||!d.ok){toast(d.error||'Balance adjustment failed');return;}setAcc(d.account);const account=await(await fetch('/api/account')).json();renderStats(account.stats,accStats);input.value='';toast(label+'ed $'+fmt(amount)+' USDT');loadTrades();}catch(e){toast('Balance adjustment failed: '+(e.message||'network error'));}}
 async function checkAlerts(){try{const d=await(await fetch('/api/alerts')).json();if(d.count>0){const msg=d.alerts.map(t=>`${t.hit} ${t.symbol} ${t.pnl_pct||0}%`).join(' · ');alertBar.textContent='ALERT · '+msg;alertBar.style.display='block';d.alerts.forEach(t=>{const key=t.id+t.hit;if(!spokenAlerts.has(key)){spokenAlerts.add(key);speak(`${t.symbol.replace('USDT','')} ${t.hit} hit. PnL ${t.pnl_pct} percent`);beep(4);}});}else alertBar.style.display='none';}catch(e){}}
@@ -2637,7 +2822,8 @@ setInterval(()=>{if(!pinManual)loadSignals();},20000);
 setInterval(checkAlerts,10000);
 setInterval(refreshModalMarket,1500);
 // Refresh trade data in-place every 3 seconds; never reload the document.
-setInterval(()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();},3000);
+window.addEventListener('scroll',()=>{window._lastTradeScrollAt=Date.now();},{passive:true});
+setInterval(()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();},2000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&document.getElementById('tab-trades').style.display!=='none')loadTrades();});
 setInterval(async()=>{const a=await(await fetch('/api/account')).json();setAcc(a);sOpen.textContent=a.open_trades||0;},8000);
 </script>
