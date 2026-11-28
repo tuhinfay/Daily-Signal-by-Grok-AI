@@ -2647,7 +2647,7 @@ function patchTradeList(html){
   });
   const anchorId=anchor&&anchor.getAttribute('data-trade-id');
   const anchorTop=anchor?anchor.getBoundingClientRect().top:null;
-  const holder=document.createElement('div');
+  const holder=tradeList.cloneNode(false);
   holder.innerHTML=html;
   patchTradeNode(tradeList,holder);
   if(anchorId&&anchorTop!==null){
